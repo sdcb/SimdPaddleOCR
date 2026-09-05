@@ -58,8 +58,9 @@ sealed class Run
         "noavx512" => 1,
         "noavx2" => 2,
         "noavx" => 3,
-        "scalar" or "nohw" => 4,
-        _ => 5,
+        "ns2" => 4,
+        "scalar" or "nohw" => 5,
+        _ => 6,
     };
 
     public int ModelRank => Model switch
@@ -170,11 +171,24 @@ sealed class Run
     private static string SimdLabel(JsonObject? meta)
     {
         if (meta is null) return "";
+        if (IsNetStandard20(meta["libraryTfm"])) return "ns2";
         if (IsOff(meta["hwintrinsic"])) return "scalar";
         if (IsOff(meta["avx"])) return "noavx";
         if (IsOff(meta["avx2"])) return "noavx2";
         if (IsOff(meta["avx512"])) return "noavx512";
         return "";
+    }
+
+    private static bool IsNetStandard20(JsonNode? node)
+    {
+        if (node is null) return false;
+        try
+        {
+            string? value = node.GetValue<string>();
+            return value is not null &&
+                value.Contains("NETStandard", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     private static bool IsOff(JsonNode? node)

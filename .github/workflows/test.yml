@@ -14,8 +14,10 @@ jobs:
       - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
-      - name: Unit tests
+      - name: Unit tests (net10 library)
         run: dotnet test test/Sdcb.PaddleOCR.UnitTests -c Release --nologo
+      - name: Unit tests (ns2.0 library)
+        run: dotnet test test/Sdcb.PaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true
 
   generate:
     runs-on: windows-2025
@@ -140,6 +142,12 @@ jobs:
             workers: 4
             model: tiny
             env: DOTNET_EnableHWIntrinsic=0
+          - name: linux-x64-tiny-4w-ns2
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: tiny
+            props: -p:UseNs20Library=true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -159,7 +167,8 @@ jobs:
         run: echo "${{ matrix.env }}" >> "$GITHUB_ENV"
       - name: Run test
         run: >
-          dotnet run --project test/Sdcb.PaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained --
+          dotnet run --project test/Sdcb.PaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained
+          ${{ matrix.props }} --
           --engine ${{ matrix.engine || 'sharp' }} --workers ${{ matrix.workers }} --model ${{ matrix.model }}
           --input dataset --out ${{ matrix.name }}.json
       - uses: actions/upload-artifact@v7

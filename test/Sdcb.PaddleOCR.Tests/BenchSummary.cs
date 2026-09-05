@@ -336,11 +336,24 @@ static class BenchSummary
 
     public static string SimdSuffix(JsonObject meta)
     {
+        if (IsNetStandard20(meta["libraryTfm"])) return " ns2";
         if (IsOff(meta["hwintrinsic"])) return " scalar";
         if (IsOff(meta["avx"])) return " noavx";
         if (IsOff(meta["avx2"])) return " noavx2";
         if (IsOff(meta["avx512"])) return " noavx512";
         return "";
+    }
+
+    private static bool IsNetStandard20(JsonNode? node)
+    {
+        if (node is null) return false;
+        try
+        {
+            string? value = node.GetValue<string>();
+            return value is not null &&
+                value.Contains("NETStandard", StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
     }
 
     private static bool IsOff(JsonNode? node)
