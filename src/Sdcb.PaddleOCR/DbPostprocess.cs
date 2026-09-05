@@ -137,7 +137,7 @@ internal static class DbPostprocess
         int seedLeft = seedX, seedRight = seedX;
         while (seedLeft > 0 && bitmap[seedRow + seedLeft - 1] != 0 && visited[seedRow + seedLeft - 1] == 0) seedLeft--;
         while (seedRight + 1 < mapWidth && bitmap[seedRow + seedRight + 1] != 0 && visited[seedRow + seedRight + 1] == 0) seedRight++;
-        Array.Fill(visited, (byte)1, seedRow + seedLeft, seedRight - seedLeft + 1);
+        ArrayCompat.Fill(visited, (byte)1, seedRow + seedLeft, seedRight - seedLeft + 1);
         stack[top++] = seedY; stack[top++] = seedLeft; stack[top++] = seedRight;
         while (top > 0)
         {
@@ -158,7 +158,7 @@ internal static class DbPostprocess
                         int runLeft = x, runRight = x;
                         while (runLeft > 0 && bitmap[row + runLeft - 1] != 0 && visited[row + runLeft - 1] == 0) runLeft--;
                         while (runRight + 1 < mapWidth && bitmap[row + runRight + 1] != 0 && visited[row + runRight + 1] == 0) runRight++;
-                        Array.Fill(visited, (byte)1, row + runLeft, runRight - runLeft + 1);
+                        ArrayCompat.Fill(visited, (byte)1, row + runLeft, runRight - runLeft + 1);
                         stack[top++] = neighborY; stack[top++] = runLeft; stack[top++] = runRight;
                         x = runRight + 2;
                     }
@@ -184,7 +184,7 @@ internal static class DbPostprocess
         int seedLeft = seedX, seedRight = seedX;
         while (seedLeft > 0 && bitmap[seedRow + seedLeft - 1] == 0 && visited[seedRow + seedLeft - 1] == 0) seedLeft--;
         while (seedRight + 1 < mapWidth && bitmap[seedRow + seedRight + 1] == 0 && visited[seedRow + seedRight + 1] == 0) seedRight++;
-        Array.Fill(visited, (byte)1, seedRow + seedLeft, seedRight - seedLeft + 1);
+        ArrayCompat.Fill(visited, (byte)1, seedRow + seedLeft, seedRight - seedLeft + 1);
         stack[top++] = seedY; stack[top++] = seedLeft; stack[top++] = seedRight;
         while (top > 0)
         {
@@ -215,7 +215,7 @@ internal static class DbPostprocess
                         int runLeft = x, runRight = x;
                         while (runLeft > 0 && bitmap[row + runLeft - 1] == 0 && visited[row + runLeft - 1] == 0) runLeft--;
                         while (runRight + 1 < mapWidth && bitmap[row + runRight + 1] == 0 && visited[row + runRight + 1] == 0) runRight++;
-                        Array.Fill(visited, (byte)1, row + runLeft, runRight - runLeft + 1);
+                        ArrayCompat.Fill(visited, (byte)1, row + runLeft, runRight - runLeft + 1);
                         stack[top++] = neighborY; stack[top++] = runLeft; stack[top++] = runRight;
                         x = runRight + 1;
                     }
@@ -238,7 +238,7 @@ internal static class DbPostprocess
         float shortestSide = MathF.Min(rectangle.MaxU - rectangle.MinU, rectangle.MaxV - rectangle.MinV);
         if (shortestSide < 3) return false;
         float score = PolygonScore(prediction, mapWidth, mapHeight, miniBoxScratch);
-        if (!float.IsFinite(score) || score < options.BoxThreshold) return false;
+        if (!MathCompat.IsFinite(score) || score < options.BoxThreshold) return false;
         Point[] unclipped = Unclip(miniBoxScratch, options.UnclipRatio);
         if (unclipped.Length < 3) return false;
         if (!TryMinimumRectangle(unclipped, unclipped.Length, hullScratch,
@@ -301,7 +301,7 @@ internal static class DbPostprocess
         double area = Math.Abs(SignedArea(box)), perimeter = 0;
         for (int i = 0; i < box.Length; i++) perimeter += Distance(box[i], box[(i + 1) % box.Length]);
         double distance = area * ratio / perimeter;
-        if (!double.IsFinite(distance) || distance <= 0) return [];
+        if (!MathCompat.IsFinite(distance) || distance <= 0) return [];
         List<IntPoint> path = [with(box.Length)];
         foreach (Point p in box) path.Add(new IntPoint((long)Math.Round(p.X), (long)Math.Round(p.Y)));
         List<List<IntPoint>> expanded = Clipper.OffsetPolygons([path], distance, JoinType.jtRound);
@@ -334,7 +334,7 @@ internal static class DbPostprocess
             float area = (maxU - minU) * (maxV - minV);
             if (area < bestArea) { bestArea = area; rectangle = new Rectangle { Ux = ux, Uy = uy, Vx = vx, Vy = vy, MinU = minU, MaxU = maxU, MinV = minV, MaxV = maxV }; }
         }
-        if (!float.IsFinite(bestArea) || bestArea <= 0) return false;
+        if (!MathCompat.IsFinite(bestArea) || bestArea <= 0) return false;
         if (corners.Length < 4) throw new ArgumentException("Corner buffer is too small.", nameof(corners));
         RectanglePoints(rectangle, 0, corners); OrderClockwise(corners); return true;
     }

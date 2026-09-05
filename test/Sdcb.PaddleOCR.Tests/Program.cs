@@ -1,5 +1,8 @@
 using System.Diagnostics;
+using System.Numerics;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -266,6 +269,11 @@ SetEnv(meta, "avx512", "DOTNET_EnableAVX512");
 SetEnv(meta, "avx2", "DOTNET_EnableAVX2");
 SetEnv(meta, "avx", "DOTNET_EnableAVX");
 SetEnv(meta, "hwintrinsic", "DOTNET_EnableHWIntrinsic");
+meta["vectorCount"] = Vector<float>.Count;
+meta["vectorHardwareAccelerated"] = Vector.IsHardwareAccelerated;
+meta["framework"] = RuntimeInformation.FrameworkDescription;
+meta["libraryTfm"] = typeof(PaddleOcrAll).Assembly
+    .GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName;
 
 JsonObject doc = BenchSummary.WrapWithMeta(rows, meta);
 BenchmarkAccuracy? accuracy = BenchSummary.ComputeAccuracy(

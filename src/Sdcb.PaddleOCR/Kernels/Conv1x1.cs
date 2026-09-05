@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -17,6 +19,7 @@ internal static partial class Conv1x1
     {
         // Zen 5: prefer 4-OC / 8-OC × Vector512 spatial-16. Avoid 16-OC ZMM
         // tiles (register spills). Prefer FourOutputs; use Eight when aligned.
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             int inputPerGroup = inputChannels / groups;
@@ -185,7 +188,9 @@ internal static partial class Conv1x1
             }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, bias, output, batch, inputChannels,
                 height, width, outputChannels, groups, intraOpThreads);
@@ -204,6 +209,9 @@ internal static partial class Conv1x1
         int batch, int inputChannels, int height, int width, int outputChannels,
         int intraOpThreads = 1)
     {
+#if NETSTANDARD2_0
+        return false;
+#else
         if (!Avx512F.IsSupported || (outputChannels & 15) != 0 || outputChannels < 16)
             return false;
         int plane = checked(height * width);
@@ -250,6 +258,7 @@ internal static partial class Conv1x1
         Conv1x1OcMajorAvx512Unsafe(input, packedOc16, bias, output, batch,
             inputChannels, height, width, outputChannels, coutPadded, 0);
         return true;
+#endif
     }
 
     /// <summary>Runs a 1x1 convolution from C's [block4, input, lane] packed weights.</summary>
@@ -258,6 +267,7 @@ internal static partial class Conv1x1
         int batch, int inputChannels, int height, int width, int outputChannels,
         int intraOpThreads = 1, PackedConv1x1Int8? packedInt8 = null)
     {
+        #if !NETSTANDARD2_0
         if (AvxVnni.IsSupported && packedInt8 is not null &&
             inputChannels >= 192 && (inputChannels & 3) == 0 && (outputChannels & 7) == 0 &&
             packedInt8.Weights.Length == checked(inputChannels * outputChannels) &&
@@ -267,8 +277,11 @@ internal static partial class Conv1x1
                 batch, inputChannels, height, width, outputChannels, intraOpThreads))
                 return true;
         }
+        #endif
+
 
         // Packed [block4, ic, lane]: 16-OC×ZMM spills on Zen 5; prefer 8-OC / 4-OC.
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported && outputChannels >= 4 && (outputChannels & 3) == 0)
         {
             int plane = checked(height * width), blocks = outputChannels / 4;
@@ -370,7 +383,9 @@ internal static partial class Conv1x1
                 height, width, outputChannels);
             return true;
         }
-        else if (Vector.IsHardwareAccelerated && outputChannels >= 4 && (outputChannels & 3) == 0)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated && outputChannels >= 4 && (outputChannels & 3) == 0)
         {
             return TryPackedVector(input, packedWeights, bias, output, batch, inputChannels,
                 height, width, outputChannels, intraOpThreads);

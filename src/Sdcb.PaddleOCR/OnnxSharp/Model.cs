@@ -115,16 +115,16 @@ public sealed class Model : IDisposable
             for (int ci = 0; ci < inputChannels; ci++)
             {
                 float value = row[ci];
-                if (!float.IsFinite(value)) return null;
+                if (!MathCompat.IsFinite(value)) return null;
                 absMax = MathF.Max(absMax, MathF.Abs(value));
             }
-            if (!(absMax > 0f) || !float.IsFinite(absMax)) return null;
+            if (!(absMax > 0f) || !MathCompat.IsFinite(absMax)) return null;
             float scale = absMax / 127f;
             scales[co] = scale;
             int block = co / 8, lane = co & 7;
             for (int ci = 0; ci < inputChannels; ci++)
             {
-                int quantized = Math.Clamp((int)MathF.Round(row[ci] / scale), -127, 127);
+                int quantized = MathCompat.Clamp((int)MathF.Round(row[ci] / scale), -127, 127);
                 packed[((block * groups + ci / 4) * 8 + lane) * 4 + (ci & 3)] =
                     unchecked((byte)(sbyte)quantized);
                 sums[co] += quantized;
@@ -274,7 +274,7 @@ public sealed class Model : IDisposable
         BuildOnnxRecords(graph, opset, out TensorRecord[] tensors, out NodeRecord[] nodes,
             out uint[] inputs, out uint[] outputs, out byte[][] tensorData, out byte[][] nodeParameters);
         ulong weightSize = checked((ulong)tensorData.Sum(static x => x.LongLength));
-        ModelInfo info = new(checked((ushort)Math.Clamp(parsed.IrVersion, 0, ushort.MaxValue)), 0,
+        ModelInfo info = new(checked((ushort)MathCompat.Clamp(parsed.IrVersion, 0, ushort.MaxValue)), 0,
             checked((uint)tensors.Length), checked((uint)nodes.Length),
             checked((uint)inputs.Length), checked((uint)outputs.Length), parsed.SourceLength, weightSize, parsed.ContentChecksum);
         return new Model(info, inputs, outputs, tensors, nodes, tensorData, nodeParameters);
@@ -538,7 +538,7 @@ public sealed class Model : IDisposable
             foreach (string input in node.Inputs) if (input.Length != 0) consumers[input] = consumers.GetValueOrDefault(input) + 1;
         }
         Dictionary<int, int> folded = [];
-        HashSet<string> graphOutputs = graph.Outputs.Select(static x => x.Name).ToHashSet(StringComparer.Ordinal);
+        HashSet<string> graphOutputs = new(graph.Outputs.Select(static x => x.Name), StringComparer.Ordinal);
         for (int bnIndex = 0; bnIndex < nodes.Count; bnIndex++)
         {
             OnnxNodeData bn = nodes[bnIndex];
@@ -559,7 +559,7 @@ public sealed class Model : IDisposable
                 gamma.Length != variance.Length || weights.Length != weightElements)
                 continue;
             float epsilon = bn.Attributes.FirstOrDefault(a => a.Name == "epsilon")?.Float ?? 1e-5f;
-            if (!float.IsFinite(epsilon) || epsilon < 0 || variance.Any(v => !float.IsFinite(v) || v < 0) ||
+            if (!MathCompat.IsFinite(epsilon) || epsilon < 0 || variance.Any(v => !MathCompat.IsFinite(v) || v < 0) ||
                 gamma.Any(float.IsNaN) || beta.Any(float.IsNaN) || mean.Any(float.IsNaN)) continue;
             int outputChannels = checked((int)weightTensor.Dims[0]);
             if (outputChannels != gamma.Length) continue;
@@ -606,7 +606,7 @@ public sealed class Model : IDisposable
     private static void MergeParallelConvBranches(List<OnnxNodeData> nodes,
         Dictionary<string, OnnxTensorData> initializers, OnnxGraphData graph)
     {
-        HashSet<string> graphOutputs = graph.Outputs.Select(static x => x.Name).ToHashSet(StringComparer.Ordinal);
+        HashSet<string> graphOutputs = new(graph.Outputs.Select(static x => x.Name), StringComparer.Ordinal);
         bool merged = true;
         while (merged)
         {
@@ -781,7 +781,7 @@ public sealed class Model : IDisposable
         static void PutI(byte[] buffer, int offset, long value) =>
             BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(offset, 4), checked((int)value));
         static void PutF(byte[] buffer, int offset, float value) =>
-            BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(offset, 4), BitConverter.SingleToInt32Bits(value));
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(offset, 4), BitConverterCompat.SingleToInt32Bits(value));
         static void PutU16(byte[] buffer, int offset, int value) =>
             BinaryPrimitives.WriteUInt16LittleEndian(buffer.AsSpan(offset, 2), checked((ushort)value));
         static void PutU32(byte[] buffer, int offset, long value) =>
@@ -913,7 +913,7 @@ public sealed class Model : IDisposable
         {
             byte[] data = new byte[checked(tensor.FloatData.Count * 4)];
             for (int i = 0; i < tensor.FloatData.Count; i++)
-                BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(i * 4, 4), BitConverter.SingleToInt32Bits(tensor.FloatData[i]));
+                BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(i * 4, 4), BitConverterCompat.SingleToInt32Bits(tensor.FloatData[i]));
             return (type, data);
         }
         if (type == DType.I32)
@@ -946,7 +946,7 @@ public sealed class Model : IDisposable
 
         float[] values = new float[data.Length / 4];
         for (int i = 0; i < values.Length; i++)
-            values[i] = BitConverter.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(i * 4, 4)));
+            values[i] = BitConverterCompat.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(i * 4, 4)));
         return values;
     }
 
@@ -975,8 +975,8 @@ public sealed class Model : IDisposable
         // weight/parameter storage immediately even if the wrapper object is
         // kept alive by user code. Dependent CompiledModel instances are
         // invalid after their source model is disposed, just as before.
-        Array.Clear(_tensorData);
-        Array.Clear(_nodeParameters);
+        Array.Clear(_tensorData, 0, _tensorData.Length);
+        Array.Clear(_nodeParameters, 0, _nodeParameters.Length);
         _packedWeights.Clear();
         _packedConv1x1Int8.Clear();
         GC.SuppressFinalize(this);

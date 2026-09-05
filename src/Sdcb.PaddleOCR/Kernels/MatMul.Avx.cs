@@ -11,7 +11,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class MatMul
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static void MatMulRows1(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rowStart, int rows, int inner, int columns)
     {
@@ -37,7 +37,7 @@ internal static partial class MatMul
             }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulRows4(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rows, int inner, int columns)
     {
@@ -168,7 +168,7 @@ internal static partial class MatMul
     // `columns` floats for every input k. Packing keeps the tile's complete
     // Kx16 working set contiguous and improves cache locality for REC's large
     // [40,80] x [80,6906] projection.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulRows4Packed(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> packedWeights, Span<float> output,
         int batch, int rows, int inner, int columns)

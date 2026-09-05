@@ -2,8 +2,10 @@ using System.Buffers;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -17,7 +19,7 @@ internal static partial class Conv1x1
     /// VPDPBUSD for eight output channels. Adding 128 to symmetric signed
     /// activations is compensated by the precomputed per-output weight sums.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe bool Conv1x1PackedEightOutputsInt8VnniUnsafe(
         ReadOnlySpan<float> input, PackedConv1x1Int8 packedWeights,
         ReadOnlySpan<float> bias, Span<float> output,
@@ -50,7 +52,7 @@ internal static partial class Conv1x1
                             for (int spatial = start; spatial < end; spatial++)
                             {
                                 float value = *source++;
-                                if (!float.IsFinite(value)) return false;
+                                if (!MathCompat.IsFinite(value)) return false;
                                 absMax = MathF.Max(absMax, MathF.Abs(value));
                             }
                         }
@@ -64,7 +66,7 @@ internal static partial class Conv1x1
                             float* source = inputPtr + inputBatch + spatial;
                             for (int ci = 0; ci < inputChannels; ci++)
                             {
-                                int q = Math.Clamp((int)MathF.Round(*source * inverseScale), -127, 127);
+                                int q = MathCompat.Clamp((int)MathF.Round(*source * inverseScale), -127, 127);
                                 destination[ci] = (byte)(q + 128);
                                 source += plane;
                             }
@@ -108,7 +110,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ProcessInt8VnniBlocks(
         byte* quantized, byte* packedWeights, float* weightScales, int* weightSums,
         float* bias, float* output, float* inputScales,

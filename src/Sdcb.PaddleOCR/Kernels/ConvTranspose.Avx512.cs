@@ -11,7 +11,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class ConvTranspose
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2EightOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels)
@@ -123,7 +123,7 @@ internal static partial class ConvTranspose
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2Avx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels)
@@ -174,7 +174,7 @@ internal static partial class ConvTranspose
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2FourOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels)
@@ -254,7 +254,7 @@ internal static partial class ConvTranspose
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2RangeAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels,

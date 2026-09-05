@@ -1,7 +1,9 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 
 namespace Sdcb.PaddleOCR.Kernels;
 
@@ -14,6 +16,7 @@ internal static class ReduceMean
     internal static unsafe void SpatialNchw(ReadOnlySpan<float> input, Span<float> output,
         int batch, int channels, int spatial)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             fixed (float* inputPtr = input)
@@ -44,6 +47,9 @@ internal static class ReduceMean
             }
             return;
         }
+        #endif
+
+        #if !NETSTANDARD2_0
         if (Avx.IsSupported)
         {
             fixed (float* inputPtr = input)
@@ -69,6 +75,8 @@ internal static class ReduceMean
             }
             return;
         }
+        else
+#endif
         if (Vector.IsHardwareAccelerated)
         {
             int width = Vector<float>.Count;
@@ -81,9 +89,9 @@ internal static class ReduceMean
                         Vector<float> sumVector = Vector<float>.Zero;
                         int i = 0;
                         for (; i <= spatial - width; i += width)
-                            sumVector += Vector.LoadUnsafe(ref Unsafe.AsRef<float>(inputPtr + baseOffset + i));
+                            sumVector += SimdOps.VectorLoad(inputPtr + baseOffset + i);
                         float scalar = 0f;
-                        for (int lane = 0; lane < width; lane++) scalar += sumVector[lane];
+                        for (int lane = 0; lane < width; lane++) scalar += sumVector.GetElement(lane);
                         for (; i < spatial; i++) scalar += inputPtr[baseOffset + i];
                         output[b * channels + channel] = scalar / spatial;
                     }

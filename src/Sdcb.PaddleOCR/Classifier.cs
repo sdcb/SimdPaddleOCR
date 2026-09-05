@@ -73,7 +73,7 @@ public sealed class Classifier : IDisposable
             started = profile ? PipelineProfiler.Now() : 0;
             ReadOnlySpan<float> output = session.RunInternal(input);
             if (profile) PipelineProfiler.Add(PipelineProfiler.ClsGraph, started);
-            if (output.Length != 2 || !float.IsFinite(output[0]) || !float.IsFinite(output[1]))
+            if (output.Length != 2 || !MathCompat.IsFinite(output[0]) || !MathCompat.IsFinite(output[1]))
                 throw new InvalidDataException("Classifier output is invalid.");
             uint label = output[1] > output[0] ? 1u : 0u;
             return new PaddleOcrClassificationResult(label, output[(int)label], resizedWidth);

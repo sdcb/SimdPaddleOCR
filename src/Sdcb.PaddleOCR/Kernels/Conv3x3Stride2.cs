@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -16,6 +18,7 @@ internal static partial class Conv3x3Stride2
         int inputHeight, int inputWidth, int outputHeight, int outputWidth, int outputChannels,
         int intraOpThreads = 1)
     {
+        #if !NETSTANDARD2_0
         if (Avx.IsSupported)
         {
             int inputPlane = checked(inputHeight * inputWidth);
@@ -129,7 +132,9 @@ internal static partial class Conv3x3Stride2
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, bias, output, batch, inputChannels,
                 inputHeight, inputWidth, outputHeight, outputWidth, outputChannels, intraOpThreads);
@@ -142,8 +147,11 @@ internal static partial class Conv3x3Stride2
     internal static unsafe bool TryPacked(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,
-        int outputChannels, int intraOpThreads = 1)
+        int outputChannels,         int intraOpThreads = 1)
     {
+#if NETSTANDARD2_0
+        return false;
+#else
         if (!Avx.IsSupported || outputChannels < 8 || (outputChannels & 7) != 0)
             return false;
         int outputPlane = checked(outputHeight * outputWidth);
@@ -177,6 +185,7 @@ internal static partial class Conv3x3Stride2
             }
             return true;
         }
+
         // 8-OC Avx512; skip 16-OC×ZMM (Zen 5 spills). Workers already intraOp==1.
         if (Avx512F.IsSupported)
         {
@@ -184,6 +193,7 @@ internal static partial class Conv3x3Stride2
                 inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
             return true;
         }
+
         if ((outputChannels & 15) == 0)
             Conv3x3Stride2SixteenOutputsPackedUnsafe(input, packedWeights, bias, output,
                 batch, inputChannels, inputHeight, inputWidth, outputHeight, outputWidth,
@@ -192,5 +202,6 @@ internal static partial class Conv3x3Stride2
             Conv3x3Stride2EightOutputsPackedUnsafe(input, packedWeights, bias, output, batch,
                 inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
         return true;
+#endif
     }
 }

@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 
 namespace Sdcb.PaddleOCR.Kernels;
 
@@ -9,7 +11,7 @@ internal static class Warp
     // Interior-only SIMD sampler: channels live in vector lanes (lane 3 is a
     // don't-care), so each channel keeps the scalar accumulation order and
     // the result is bit-identical to PPOCRCrop.SamplePixelCubic.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe void SampleCubicAvx(byte* source, int stride,
         double x, double y, int xBase, int yBase, byte* destination, int destinationOffset)
     {

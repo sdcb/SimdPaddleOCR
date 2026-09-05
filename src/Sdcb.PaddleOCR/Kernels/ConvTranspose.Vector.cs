@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -83,7 +85,7 @@ internal static partial class ConvTranspose
                                 int ox = ix * 2;
                                 for (int lane = 0; lane < widthLanes; lane++)
                                 {
-                                    float value = values[lane];
+                                    float value = values.GetElement(lane);
                                     int px = ox + lane * 2;
                                     dst[outputRow0 + px] += value * w[0];
                                     dst[outputRow0 + px + 1] += value * w[1];

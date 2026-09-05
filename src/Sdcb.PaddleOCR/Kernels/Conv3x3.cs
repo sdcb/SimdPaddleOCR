@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -15,6 +17,7 @@ internal static partial class Conv3x3
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
         int height, int width, int outputChannels, int intraOpThreads = 1)
     {
+        #if !NETSTANDARD2_0
         if (Avx.IsSupported)
         {
             int plane = checked(height * width);
@@ -118,7 +121,9 @@ internal static partial class Conv3x3
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, bias, output, batch, inputChannels,
                 height, width, outputChannels, intraOpThreads);

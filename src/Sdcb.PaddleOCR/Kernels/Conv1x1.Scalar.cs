@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -12,7 +14,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 internal static partial class Conv1x1
 {
     // Scalar twin of the Vector 4-output 1x1: same accumulation order, lanes = 1.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1Scalar(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
         int height, int width, int outputChannels, int groups, int intraOpThreads)
@@ -50,7 +52,7 @@ internal static partial class Conv1x1
             outputChannels, groups);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1ScalarKernel(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
         int height, int width, int outputChannels, int groups)
@@ -149,7 +151,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedScalar(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels, int intraOpThreads)
@@ -186,7 +188,7 @@ internal static partial class Conv1x1
             height, width, outputChannels);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedScalarKernel(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)

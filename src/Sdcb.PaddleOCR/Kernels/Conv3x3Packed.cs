@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -16,6 +18,7 @@ internal static partial class Conv3x3Packed
         int batch, int inputChannels, int height, int width, int outputChannels,
         int intraOpThreads = 1)
     {
+        #if !NETSTANDARD2_0
         if (Avx.IsSupported && outputChannels >= 8 && (outputChannels & 7) == 0)
         {
             int plane = checked(height * width), blocks = outputChannels / 8;
@@ -63,7 +66,9 @@ internal static partial class Conv3x3Packed
                     inputChannels, height, width, outputChannels);
             return true;
         }
-        else if (Vector.IsHardwareAccelerated && outputChannels >= 8 && (outputChannels & 7) == 0)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated && outputChannels >= 8 && (outputChannels & 7) == 0)
         {
             return TryVector(input, packedWeights, bias, output, batch, inputChannels,
                 height, width, outputChannels, intraOpThreads);

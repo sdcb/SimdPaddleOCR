@@ -11,7 +11,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class Conv3x3
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void TrySixteenOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int height, int width, int outputChannels)
@@ -131,7 +131,7 @@ internal static partial class Conv3x3
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void TryEightOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int height, int width, int outputChannels)
@@ -231,7 +231,7 @@ internal static partial class Conv3x3
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void TryFourOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int height, int width, int outputChannels)

@@ -1,6 +1,8 @@
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 
 using Sdcb.PaddleOCR.OnnxSharp;
 using Sdcb.PaddleOCR.Kernels;
@@ -72,6 +74,7 @@ internal static class PPOCRCrop
             {
                 double v = (double)y / unrotatedHeight;
                 int x = 0;
+                #if !NETSTANDARD2_0
                 if (Avx512F.IsSupported && unrotatedWidth >= 8)
                 {
                     // Eight output pixels per iteration via Vector512<double>.
@@ -189,6 +192,8 @@ internal static class PPOCRCrop
                         }
                     }
                 }
+                #endif
+
                 for (; x < unrotatedWidth; x++)
                     ProcessPixelScalar(sourcePtr, sourceWidth, sourceHeight, sourceStride,
                         cropPtr, outputWidth, unrotatedWidth, unrotatedHeight,
@@ -204,11 +209,11 @@ internal static class PPOCRCrop
     {
         double u = (double)x / unrotatedWidth;
         double denominator = g * u + h * v + 1;
-        if (!double.IsFinite(denominator) || Math.Abs(denominator) <= PerspectiveEpsilon)
+        if (!MathCompat.IsFinite(denominator) || Math.Abs(denominator) <= PerspectiveEpsilon)
             throw new InvalidDataException("Invalid perspective transform.");
         double sx = (a * u + b * v + c) / denominator;
         double sy = (d * u + e * v + f) / denominator;
-        if (!double.IsFinite(sx) || !double.IsFinite(sy))
+        if (!MathCompat.IsFinite(sx) || !MathCompat.IsFinite(sy))
             throw new InvalidDataException("Invalid perspective transform.");
         int destinationX = rotateVertical ? unrotatedHeight - 1 - y : x;
         int destinationY = rotateVertical ? x : y;
@@ -217,7 +222,7 @@ internal static class PPOCRCrop
             sx, sy, cropPtr, destination);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void Rotate180(Span<byte> pixels, int width, int height)
     {
         int count = checked(width * height);
@@ -242,7 +247,7 @@ internal static class PPOCRCrop
         LoadPoints(box, points);
         double widthValue = Math.Max(Distance(points[0], points[1]), Distance(points[2], points[3]));
         double heightValue = Math.Max(Distance(points[0], points[3]), Distance(points[1], points[2]));
-        if (!double.IsFinite(widthValue) || !double.IsFinite(heightValue) || widthValue < 1 ||
+        if (!MathCompat.IsFinite(widthValue) || !MathCompat.IsFinite(heightValue) || widthValue < 1 ||
             heightValue < 1 || widthValue > uint.MaxValue || heightValue > uint.MaxValue)
             return false;
         int unrotatedWidth = Math.Max(1, checked((int)Math.Floor(widthValue)));
@@ -259,11 +264,11 @@ internal static class PPOCRCrop
         if (Math.Abs(dx3) > PerspectiveEpsilon || Math.Abs(dy3) > PerspectiveEpsilon)
         {
             double denominator = dx1 * dy2 - dx2 * dy1;
-            if (!double.IsFinite(denominator) || Math.Abs(denominator) <= PerspectiveEpsilon)
+            if (!MathCompat.IsFinite(denominator) || Math.Abs(denominator) <= PerspectiveEpsilon)
                 return false;
             g = (dx3 * dy2 - dx2 * dy3) / denominator;
             h = (dx1 * dy3 - dx3 * dy1) / denominator;
-            if (!double.IsFinite(g) || !double.IsFinite(h))
+            if (!MathCompat.IsFinite(g) || !MathCompat.IsFinite(h))
                 return false;
         }
         double a = points[1].X - points[0].X + g * points[1].X;

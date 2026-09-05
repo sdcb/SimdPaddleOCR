@@ -69,13 +69,13 @@ internal static class PPOCRPreprocess
             (float)((double)roundedHeight / effectiveHeight));
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void DetBgrToNchw(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride, int resizedWidth, int resizedHeight, Span<float> output) =>
         DetBgrToNchw(source, sourceWidth, sourceHeight, sourceStride, resizedWidth, resizedHeight,
             output, null);
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe void DetBgrToNchw(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride, int resizedWidth, int resizedHeight, Span<float> output,
         ResizeWorkspace? workspace)
@@ -106,8 +106,8 @@ internal static class PPOCRPreprocess
                 {
                     GetLinearCoordinate(oy, sourceHeight, resizedHeight,
                         out int sy, out short beta0, out short beta1);
-                    int sy0 = Math.Clamp(sy, 0, sourceHeight - 1);
-                    int sy1 = Math.Clamp(sy + 1, 0, sourceHeight - 1);
+                    int sy0 = MathCompat.Clamp(sy, 0, sourceHeight - 1);
+                    int sy1 = MathCompat.Clamp(sy + 1, 0, sourceHeight - 1);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy0,
                         resizedWidth, xOffsets, xCoefficients, row0);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy1,
@@ -202,12 +202,12 @@ internal static class PPOCRPreprocess
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe int ClsBgrToNchw(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride, Span<float> output) =>
         ClsBgrToNchw(source, sourceWidth, sourceHeight, sourceStride, output, null);
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe int ClsBgrToNchw(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride, Span<float> output, ResizeWorkspace? workspace)
     {
@@ -226,7 +226,7 @@ internal static class PPOCRPreprocess
         return width;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ResizeBgrInterLinearToClsNchw(ReadOnlySpan<byte> source,
         int sourceWidth, int sourceHeight, int sourceStride, int resizedWidth,
         int resizedHeight, Span<float> output, ResizeWorkspace? workspace)
@@ -249,8 +249,8 @@ internal static class PPOCRPreprocess
                 {
                     GetLinearCoordinate(oy, sourceHeight, resizedHeight,
                         out int sy, out short beta0, out short beta1);
-                    int sy0 = Math.Clamp(sy, 0, sourceHeight - 1);
-                    int sy1 = Math.Clamp(sy + 1, 0, sourceHeight - 1);
+                    int sy0 = MathCompat.Clamp(sy, 0, sourceHeight - 1);
+                    int sy1 = MathCompat.Clamp(sy + 1, 0, sourceHeight - 1);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy0,
                         resizedWidth, xOffsets, xCoefficients, row0);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy1,
@@ -268,11 +268,11 @@ internal static class PPOCRPreprocess
                         h0 = row0[rowOffset]; h1 = row1[rowOffset];
                         int b = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
                         outputPtr[destination + ox] =
-                            normalizedPtr[Math.Clamp(r, 0, 255)];
+                            normalizedPtr[MathCompat.Clamp(r, 0, 255)];
                         outputPtr[plane + destination + ox] =
-                            normalizedPtr[256 + Math.Clamp(g, 0, 255)];
+                            normalizedPtr[256 + MathCompat.Clamp(g, 0, 255)];
                         outputPtr[2 * plane + destination + ox] =
-                            normalizedPtr[512 + Math.Clamp(b, 0, 255)];
+                            normalizedPtr[512 + MathCompat.Clamp(b, 0, 255)];
                     }
                 }
             }
@@ -289,12 +289,12 @@ internal static class PPOCRPreprocess
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static int RecBgrToNchw(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride, int targetWidth, Span<float> output) =>
         RecBgrToNchw(source, sourceWidth, sourceHeight, sourceStride, targetWidth, output, null);
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static int RecBgrToNchw(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride, int targetWidth, Span<float> output, ResizeWorkspace? workspace)
     {
@@ -315,7 +315,7 @@ internal static class PPOCRPreprocess
     // for normalization. Keep the exact OpenCV fixed-point rounding, but write
     // the three normalized planes directly and avoid a temporary byte image
     // plus a second full-frame traversal.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ResizeBgrInterLinearToNchw(ReadOnlySpan<byte> source,
         int sourceWidth, int sourceHeight, int sourceStride, int resizedWidth,
         int resizedHeight, int outputWidth, Span<float> output, ResizeWorkspace? workspace)
@@ -338,8 +338,8 @@ internal static class PPOCRPreprocess
                 {
                     GetLinearCoordinate(oy, sourceHeight, resizedHeight,
                         out int sy, out short beta0, out short beta1);
-                    int sy0 = Math.Clamp(sy, 0, sourceHeight - 1);
-                    int sy1 = Math.Clamp(sy + 1, 0, sourceHeight - 1);
+                    int sy0 = MathCompat.Clamp(sy, 0, sourceHeight - 1);
+                    int sy1 = MathCompat.Clamp(sy + 1, 0, sourceHeight - 1);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy0,
                         resizedWidth, xOffsets, xCoefficients, row0);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy1,
@@ -350,13 +350,13 @@ internal static class PPOCRPreprocess
                         int rowOffset = ox * 3;
                         int h0 = row0[rowOffset], h1 = row1[rowOffset];
                         int value = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
-                        outputPtr[destination + ox] = normalizedPtr[Math.Clamp(value, 0, 255)];
+                        outputPtr[destination + ox] = normalizedPtr[MathCompat.Clamp(value, 0, 255)];
                         h0 = row0[rowOffset + 1]; h1 = row1[rowOffset + 1];
                         value = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
-                        outputPtr[plane + destination + ox] = normalizedPtr[Math.Clamp(value, 0, 255)];
+                        outputPtr[plane + destination + ox] = normalizedPtr[MathCompat.Clamp(value, 0, 255)];
                         h0 = row0[rowOffset + 2]; h1 = row1[rowOffset + 2];
                         value = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
-                        outputPtr[plane * 2 + destination + ox] = normalizedPtr[Math.Clamp(value, 0, 255)];
+                        outputPtr[plane * 2 + destination + ox] = normalizedPtr[MathCompat.Clamp(value, 0, 255)];
                     }
                 }
             }
@@ -373,7 +373,7 @@ internal static class PPOCRPreprocess
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void NormalizeBgrResize(ReadOnlySpan<byte> resized, int resizedWidth,
         int resizedHeight, int outputWidth, Span<float> output)
     {
@@ -420,8 +420,8 @@ internal static class PPOCRPreprocess
                 {
                     GetLinearCoordinate(oy, sourceHeight, destinationHeight,
                         out int sy, out short beta0, out short beta1);
-                    int sy0 = Math.Clamp(sy, 0, sourceHeight - 1);
-                    int sy1 = Math.Clamp(sy + 1, 0, sourceHeight - 1);
+                    int sy0 = MathCompat.Clamp(sy, 0, sourceHeight - 1);
+                    int sy1 = MathCompat.Clamp(sy + 1, 0, sourceHeight - 1);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy0,
                         destinationWidth, xOffsets, xCoefficients, row0);
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy1,
@@ -434,13 +434,13 @@ internal static class PPOCRPreprocess
                         int pixelOffset = destinationOffset + rowOffset;
                         int h0 = row0[rowOffset], h1 = row1[rowOffset];
                         int value = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
-                        destinationPtr[pixelOffset] = (byte)Math.Clamp(value, 0, 255);
+                        destinationPtr[pixelOffset] = (byte)MathCompat.Clamp(value, 0, 255);
                         h0 = row0[rowOffset + 1]; h1 = row1[rowOffset + 1];
                         value = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
-                        destinationPtr[pixelOffset + 1] = (byte)Math.Clamp(value, 0, 255);
+                        destinationPtr[pixelOffset + 1] = (byte)MathCompat.Clamp(value, 0, 255);
                         h0 = row0[rowOffset + 2]; h1 = row1[rowOffset + 2];
                         value = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
-                        destinationPtr[pixelOffset + 2] = (byte)Math.Clamp(value, 0, 255);
+                        destinationPtr[pixelOffset + 2] = (byte)MathCompat.Clamp(value, 0, 255);
                     }
                 }
             }

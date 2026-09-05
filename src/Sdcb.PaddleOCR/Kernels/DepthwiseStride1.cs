@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -17,10 +19,11 @@ internal static partial class DepthwiseStride1
         int batch, int channels, int height, int width, int outputHeight, int outputWidth,
         int kernelH, int kernelW, int padTop, int padLeft, int intraOpThreads)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
-            int xStart = Math.Clamp(padLeft, 0, outputWidth);
-            int xEnd = Math.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
+            int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
+            int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
             if (xEnd - xStart < 16) return false;
             if (intraOpThreads > 1 && batch == 1 && channels >= 2 &&
                 (long)channels * outputHeight * outputWidth * kernelH * kernelW >= 4_000_000)
@@ -68,8 +71,8 @@ internal static partial class DepthwiseStride1
         }
         else if (Avx.IsSupported)
         {
-            int xStart = Math.Clamp(padLeft, 0, outputWidth);
-            int xEnd = Math.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
+            int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
+            int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
             if (xEnd - xStart < 16) return false;
             if (intraOpThreads > 1 && batch == 1 && channels >= 2 &&
                 (long)channels * outputHeight * outputWidth * kernelH * kernelW >= 4_000_000)
@@ -115,7 +118,9 @@ internal static partial class DepthwiseStride1
             }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, bias, output, batch, channels, height,
                 width, outputHeight, outputWidth, kernelH, kernelW, padTop, padLeft, intraOpThreads);

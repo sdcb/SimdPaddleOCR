@@ -106,7 +106,7 @@ public sealed class PaddleOcrAll : IDisposable
         if (_options.LineWorkerCount is < 0 or > Parallelism.MaxLineWorkers)
             throw new ArgumentOutOfRangeException(nameof(options));
         if (_options.RecBatchLines < 1) throw new ArgumentOutOfRangeException(nameof(options));
-        if (_options.ClassifierThreshold is < 0 or > 1 || !float.IsFinite(_options.ClassifierThreshold))
+        if (_options.ClassifierThreshold is < 0 or > 1 || !MathCompat.IsFinite(_options.ClassifierThreshold))
             throw new ArgumentOutOfRangeException(nameof(options));
         if (!_options.UseDirectionClassification) classifierModel = null;
         if (_options.UseDirectionClassification && classifierModel is null)

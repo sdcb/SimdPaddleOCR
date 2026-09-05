@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
-using System.Runtime.Intrinsics.X86;
 using Sdcb.PaddleOCR.Kernels;
 
 namespace Sdcb.PaddleOCR.OnnxSharp;
@@ -406,9 +405,7 @@ public sealed class InferenceSession : IDisposable
             projectedOutput.Length != checked(batch * rows * columns))
             return false;
         _compiled.TryGetPackedMatMul(matMul.Inputs[1], out packed);
-        return packed is not null && inner >= 64 && columns >= 1024 &&
-            (Avx512F.IsSupported && rows >= 8 && (rows & 7) == 0 ||
-             Avx2.IsSupported && rows >= 4 && (rows & 3) == 0);
+        return global::Sdcb.PaddleOCR.Kernels.MatMul.CanFuseArgMax(rows, inner, columns, packed);
     }
 
     private bool HasSkippableOutputSoftmax(out NodeRecord softmax)
@@ -1453,7 +1450,7 @@ public sealed class InferenceSession : IDisposable
     private static ushort U16(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadUInt16LittleEndian(p[o..]);
     private static uint U32(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadUInt32LittleEndian(p[o..]);
     private static int I32(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadInt32LittleEndian(p[o..]);
-    private static float F32(ReadOnlySpan<byte> p, int o) => BitConverter.Int32BitsToSingle(I32(p, o));
+    private static float F32(ReadOnlySpan<byte> p, int o) => BitConverterCompat.Int32BitsToSingle(I32(p, o));
 
     public void Dispose()
     {

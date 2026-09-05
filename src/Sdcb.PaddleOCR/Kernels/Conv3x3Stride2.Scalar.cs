@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -11,7 +13,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class Conv3x3Stride2
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv3x3Stride2Scalar(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
         int inputHeight, int inputWidth, int outputHeight, int outputWidth, int outputChannels,
@@ -51,7 +53,7 @@ internal static partial class Conv3x3Stride2
             inputWidth, outputHeight, outputWidth, outputChannels);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv3x3Stride2ScalarKernel(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,

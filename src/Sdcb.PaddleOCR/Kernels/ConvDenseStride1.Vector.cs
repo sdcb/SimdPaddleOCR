@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -18,8 +20,8 @@ internal static partial class ConvDenseStride1
         int intraOpThreads)
     {
         if ((long)kernelH * kernelW * inputChannels > 1 << 20) return false;
-        int xStart = Math.Clamp(padLeft, 0, outputWidth);
-        int xEnd = Math.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
+        int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
+        int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
         int widthLanes = Vector<float>.Count;
         if (xEnd - xStart < widthLanes) return false;
         if (intraOpThreads > 1 && batch == 1 && outputChannels >= 2 &&

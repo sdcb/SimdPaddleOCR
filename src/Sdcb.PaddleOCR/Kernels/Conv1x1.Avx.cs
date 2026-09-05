@@ -15,7 +15,7 @@ internal static partial class Conv1x1
     // sixteen-output kernel is useful for the detector's wide pointwise
     // projections and is restricted to single-threaded execution so the
     // existing four-channel sharding remains available to worker pools.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedSixteenOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)
@@ -112,7 +112,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static void Conv1x1EightOutputs(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels, int height,
         int width, int outputChannels, int groups, int inputPerGroup, int outputPerGroup, int plane)
@@ -226,7 +226,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static void Conv1x1SixteenOutputs(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels, int height,
         int width, int outputChannels, int groups, int inputPerGroup, int outputPerGroup, int plane)
@@ -345,7 +345,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedEightOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)
@@ -415,7 +415,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)

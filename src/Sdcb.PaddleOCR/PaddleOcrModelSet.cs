@@ -213,7 +213,7 @@ public sealed class PaddleOcrModelSet : IDisposable
 
     private static void ValidateDictionary(ReadOnlySpan<byte> dictionary)
     {
-        try { _ = new UTF8Encoding(false, true).GetString(dictionary); }
+        try { _ = EncodingCompat.GetString(new UTF8Encoding(false, true), dictionary); }
         catch (DecoderFallbackException e) { throw new InvalidDataException("Dictionary must be UTF-8.", e); }
     }
 

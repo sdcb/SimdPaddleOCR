@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -11,10 +13,11 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class Depthwise
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static bool Try3x3(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int channels, int height, int width)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             if (batch == 1 && height >= 50 && width >= 10)
@@ -113,7 +116,9 @@ internal static partial class Depthwise
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return Try3x3Vector(input, weights, bias, output, batch, channels, height, width);
         }
@@ -121,11 +126,12 @@ internal static partial class Depthwise
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe bool Try5x5(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int channels, int height, int width,
         int intraOpThreads = 1)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             // The C runtime shards depthwise convolutions by output channel.  This
@@ -216,17 +222,20 @@ internal static partial class Depthwise
             Depthwise5x5Unsafe(input, weights, bias, output, batch, channels, height, width);
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
             return Try5x5Vector(input, weights, bias, output, batch, channels, height, width, intraOpThreads);
         Depthwise5x5Scalar(input, weights, bias, output, batch, channels, height, width);
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe bool Try7x7(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int channels, int height, int width,
         int intraOpThreads = 1)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             long work = (long)channels * height * width * 49;
@@ -299,17 +308,20 @@ internal static partial class Depthwise
             Depthwise7x7Unsafe(input, weights, bias, output, batch, channels, height, width);
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
             return Try7x7Vector(input, weights, bias, output, batch, channels, height, width,
                 intraOpThreads);
         return false;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static bool Try3x3Stride2(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int channels,
         int inputHeight, int inputWidth, int outputHeight, int outputWidth)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             int inputPlane = checked(inputHeight * inputWidth), outputPlane = checked(outputHeight * outputWidth);
@@ -418,7 +430,9 @@ internal static partial class Depthwise
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return Try3x3Stride2Vector(input, weights, bias, output, batch, channels,
                 inputHeight, inputWidth, outputHeight, outputWidth);
@@ -428,12 +442,13 @@ internal static partial class Depthwise
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static bool Try3x3StrideHeight2(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int channels, int inputHeight, int inputWidth,
         int outputHeight, int outputWidth)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             int inputPlane = checked(inputHeight * inputWidth), outputPlane = checked(outputHeight * outputWidth);
@@ -510,7 +525,9 @@ internal static partial class Depthwise
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return Try3x3StrideHeight2Vector(input, weights, bias, output, batch, channels,
                 inputHeight, inputWidth, outputHeight, outputWidth);
@@ -523,12 +540,13 @@ internal static partial class Depthwise
     /// (e.g. g=64 in=64×5×80 → 64×3×80); without this path it falls to scalar Conv.
     /// Accumulation order matches unit-stride depthwise / scalar: bias, then ky→kx +=.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static bool Try5x5StrideHeight2(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int channels, int inputHeight, int inputWidth,
         int outputHeight, int outputWidth)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             int inputPlane = checked(inputHeight * inputWidth), outputPlane = checked(outputHeight * outputWidth);
@@ -608,7 +626,9 @@ internal static partial class Depthwise
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return Try5x5StrideHeight2Vector(input, weights, bias, output, batch, channels,
                 inputHeight, inputWidth, outputHeight, outputWidth);
@@ -616,10 +636,11 @@ internal static partial class Depthwise
         return false;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static bool Try1x5(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int channels, int height, int width)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             int plane = checked(height * width);
@@ -682,7 +703,9 @@ internal static partial class Depthwise
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return Try1x5Vector(input, weights, bias, output, batch, channels, height, width);
         }

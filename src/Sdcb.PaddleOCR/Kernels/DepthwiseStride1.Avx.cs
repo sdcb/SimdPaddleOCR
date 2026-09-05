@@ -11,7 +11,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class DepthwiseStride1
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void DepthwiseStride1ChannelUnsafe(float* input, float* weights,
         float bias, float* output, int height, int width, int outputHeight, int outputWidth,
         int kernelH, int kernelW, int padTop, int padLeft, int xStart, int xEnd)

@@ -25,7 +25,7 @@ public sealed class CompiledModel
     internal CompiledModel(Model model, int intraOpThreads)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
-        _intraOpThreads = Math.Clamp(intraOpThreads, 1, 16);
+        _intraOpThreads = MathCompat.Clamp(intraOpThreads, 1, 16);
         if (model.GraphInputs.Count != 1 || model.GraphOutputs.Count != 1)
             throw new NotSupportedException("Only one-input/one-output graphs are supported.");
         ValidateSupportedGraph(model);
@@ -35,8 +35,8 @@ public sealed class CompiledModel
         _lastUse = new int[_tensors.Length];
         _fusedSkip = new byte[model.Nodes.Length];
         _inplaceSource = new int[_tensors.Length];
-        Array.Fill(_lastUse, -1);
-        Array.Fill(_inplaceSource, -1);
+        ArrayCompat.Fill(_lastUse, -1);
+        ArrayCompat.Fill(_inplaceSource, -1);
         for (int ni = 0; ni < model.Nodes.Length; ni++)
             foreach (uint input in model.Nodes[ni].Inputs)
                 _lastUse[checked((int)input)] = ni;
@@ -245,7 +245,7 @@ public sealed class CompiledModel
             count *= tensor.Dimensions[d];
         if (count != 1) return false;
         ReadOnlySpan<byte> bytes = _model.GetTensorBytes(index);
-        return bytes.Length >= 4 && BinaryPrimitives.ReadSingleLittleEndian(bytes) == expected;
+        return bytes.Length >= 4 && BitConverterCompat.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(bytes)) == expected;
     }
 
     private void StretchLastUse(uint tensorIndex, int nodeIndex)
@@ -437,16 +437,16 @@ public sealed class CompiledModel
         {
             long normalizedStart = start < 0 ? start + dimension : start;
             long normalizedEnd = end < 0 ? end + dimension : end;
-            normalizedStart = Math.Clamp(normalizedStart, 0, dimension);
-            normalizedEnd = Math.Clamp(normalizedEnd, 0, dimension);
+            normalizedStart = MathCompat.Clamp(normalizedStart, 0, dimension);
+            normalizedEnd = MathCompat.Clamp(normalizedEnd, 0, dimension);
             return (checked((int)normalizedStart), normalizedEnd);
         }
         long negativeStart = start == long.MaxValue ? dimension - 1 : start;
         long negativeEnd = end == long.MinValue ? -1 : end;
         if (negativeStart < 0) negativeStart += dimension;
         if (negativeEnd < 0 && negativeEnd != -1) negativeEnd += dimension;
-        negativeStart = Math.Clamp(negativeStart, -1, dimension - 1);
-        negativeEnd = Math.Clamp(negativeEnd, -1, dimension - 1);
+        negativeStart = MathCompat.Clamp(negativeStart, -1, dimension - 1);
+        negativeEnd = MathCompat.Clamp(negativeEnd, -1, dimension - 1);
         return (checked((int)negativeStart), negativeEnd);
     }
 
@@ -462,9 +462,9 @@ public sealed class CompiledModel
     private static int[] ConvShape(int[] i, int[] w, ReadOnlySpan<byte> p) => [i[0], w[0], (i[2] + I32(p, 32) + I32(p, 40) - ((I32(p, 8) - 1) * I32(p, 24) + 1)) / I32(p, 16) + 1, (i[3] + I32(p, 36) + I32(p, 44) - ((I32(p, 12) - 1) * I32(p, 28) + 1)) / I32(p, 20) + 1];
     private static int[] ConvTransposeShape(int[] i, int[] w, ReadOnlySpan<byte> p) => [i[0], checked((int)(w[1] * U32(p, 4))), (i[2] - 1) * I32(p, 16) - I32(p, 32) - I32(p, 40) + (I32(p, 8) - 1) * I32(p, 24) + 1, (i[3] - 1) * I32(p, 20) - I32(p, 36) - I32(p, 44) + (I32(p, 12) - 1) * I32(p, 28) + 1];
     private static int[] PoolShape(int[] i, ReadOnlySpan<byte> p) => [i[0], i[1], (i[2] + I32(p, 24) + I32(p, 32) - I32(p, 8)) / I32(p, 16) + 1, (i[3] + I32(p, 28) + I32(p, 36) - I32(p, 12)) / I32(p, 20) + 1];
-    private static int[] ReduceShape(int[] i, ReadOnlySpan<byte> p) { int count = U16(p, 2); bool keep = U32(p, 4) != 0; bool all = count == 0 && U32(p, 8) == 0; bool[] red = new bool[i.Length]; if (all) Array.Fill(red, true); else for (int k = 0; k < count; k++) { int a = I32(p, 12 + k * 4); if (a < 0) a += i.Length; if ((uint)a < (uint)i.Length) red[a] = true; } List<int> o = []; for (int k = 0; k < i.Length; k++) if (red[k]) { if (keep) o.Add(1); } else o.Add(i[k]); return [.. o]; }
+    private static int[] ReduceShape(int[] i, ReadOnlySpan<byte> p) { int count = U16(p, 2); bool keep = U32(p, 4) != 0; bool all = count == 0 && U32(p, 8) == 0; bool[] red = new bool[i.Length]; if (all) ArrayCompat.Fill(red, true); else for (int k = 0; k < count; k++) { int a = I32(p, 12 + k * 4); if (a < 0) a += i.Length; if ((uint)a < (uint)i.Length) red[a] = true; } List<int> o = []; for (int k = 0; k < i.Length; k++) if (red[k]) { if (keep) o.Add(1); } else o.Add(i[k]); return [.. o]; }
     private static int[] SqueezeShape(int[] i, ReadOnlySpan<byte> p) { int count = U16(p, 2); if (count == 0) return [.. i.Where(d => d != 1)]; bool[] rm = new bool[i.Length]; for (int k = 0; k < count; k++) { int a = I32(p, 4 + k * 4); if (a < 0) a += i.Length; if ((uint)a < (uint)i.Length) rm[a] = true; } return [.. i.Where((d, k) => !rm[k])]; }
-    private static int[] UnsqueezeShape(int[] i, ReadOnlySpan<byte> p) { int n = U16(p, 2); List<int> a = i.ToList(); for (int k = 0; k < n; k++) a.Insert(Math.Clamp(I32(p, 4 + k * 4), 0, a.Count), 1); return [.. a]; }
+    private static int[] UnsqueezeShape(int[] i, ReadOnlySpan<byte> p) { int n = U16(p, 2); List<int> a = i.ToList(); for (int k = 0; k < n; k++) a.Insert(MathCompat.Clamp(I32(p, 4 + k * 4), 0, a.Count), 1); return [.. a]; }
     private static int[] TransposeShape(int[] i, ReadOnlySpan<byte> p) { int n = U16(p, 2); int[] a = new int[n]; for (int k = 0; k < n; k++) a[k] = i[I32(p, 4 + k * 4)]; return a; }
     private static int[] ReshapeShape(int[] input, int[] existing)
     {
@@ -642,7 +642,7 @@ public sealed class CompiledModel
     private static ushort U16(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadUInt16LittleEndian(p[o..]);
     private static uint U32(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadUInt32LittleEndian(p[o..]);
     private static int I32(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadInt32LittleEndian(p[o..]);
-    private static float F32(ReadOnlySpan<byte> p, int o) => BitConverter.Int32BitsToSingle(I32(p, o));
+    private static float F32(ReadOnlySpan<byte> p, int o) => BitConverterCompat.Int32BitsToSingle(I32(p, o));
 
     public void Dispose()
     {

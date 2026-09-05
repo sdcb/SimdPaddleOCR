@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -11,7 +13,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class Stride2
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static void Conv2x2PadEndScalar(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
         int height, int width, int outputChannels)

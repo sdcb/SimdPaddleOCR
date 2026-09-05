@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -23,10 +25,11 @@ internal static partial class ConvDenseStride1
         int intraOpThreads)
     {
         // DenseStride1 Avx512 disabled on Zen 5 (family bisect: OtherConv regresses).
+        #if !NETSTANDARD2_0
         if (Avx.IsSupported && (long)kernelH * kernelW * inputChannels <= 1 << 20)
         {
-            int xStart = Math.Clamp(padLeft, 0, outputWidth);
-            int xEnd = Math.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
+            int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
+            int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
             if (xEnd - xStart < 16) return false;
             if (intraOpThreads > 1 && batch == 1 && outputChannels >= 2 &&
                 (long)outputChannels * inputChannels * outputHeight * outputWidth * kernelH * kernelW >= 4_000_000)
@@ -77,12 +80,38 @@ internal static partial class ConvDenseStride1
             }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, bias, output, batch, inputChannels,
                 height, width, outputChannels, outputHeight, outputWidth, kernelH, kernelW,
                 padTop, padLeft, intraOpThreads);
         }
         return false;
+    }
+
+    // Exact replica of the interpreter's scalar fallback for one dense pixel
+    // (tap-skipping bounds semantics, (ci,ky,kx) accumulation order).
+    private static unsafe void DenseEdgePixel(float* input, float* weights, float* bias,
+        float* output, int inputChannels, int height, int width, int outputHeight, int outputWidth,
+        int kernelH, int kernelW, int padTop, int padLeft, int co, int y, int x)
+    {
+        float sum = bias == null ? 0f : bias[co];
+        long weightBase = (long)co * inputChannels * kernelH * kernelW;
+        for (int ci = 0; ci < inputChannels; ci++)
+            for (int ky = 0; ky < kernelH; ky++)
+            {
+                int iy = y - padTop + ky;
+                if ((uint)iy >= (uint)height) continue;
+                for (int kx = 0; kx < kernelW; kx++)
+                {
+                    int ix = x - padLeft + kx;
+                    if ((uint)ix >= (uint)width) continue;
+                    sum += input[(long)(ci * height + iy) * width + ix] *
+                        weights[weightBase + (ci * kernelH + ky) * kernelW + kx];
+                }
+            }
+        output[(long)(co * outputHeight + y) * outputWidth + x] = sum;
     }
 }

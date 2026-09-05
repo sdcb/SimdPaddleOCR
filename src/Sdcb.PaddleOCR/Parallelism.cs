@@ -22,7 +22,7 @@ internal static class Parallelism
         int requested = lineWorkerCount > 0
             ? lineWorkerCount
             : Math.Min(cpu, MaxAutoLineWorkers);
-        return Math.Clamp(Math.Min(requested, cpu), 1, MaxLineWorkers);
+        return MathCompat.Clamp(Math.Min(requested, cpu), 1, MaxLineWorkers);
     }
 
     public static int ResolveRecognizerIntraOp(int lineWorkers) =>
@@ -34,6 +34,6 @@ internal static class Parallelism
     {
         int cpu = Math.Max(1, processorCount);
         int workers = Math.Max(1, lineWorkers);
-        return Math.Clamp(cpu / workers, 1, MaxRecognizerIntraOpThreads);
+        return MathCompat.Clamp(cpu / workers, 1, MaxRecognizerIntraOpThreads);
     }
 }

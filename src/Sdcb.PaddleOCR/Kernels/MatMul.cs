@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -18,6 +20,7 @@ internal static partial class MatMul
     internal static bool Try(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rows, int inner, int columns, float[]? packedWeights = null)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported && packedWeights is not null &&
             rows >= 8 && (rows & 7) == 0 && inner >= 64 && columns >= 1024)
         {
@@ -41,7 +44,9 @@ internal static partial class MatMul
             MatMulRows1(input, weights, output, batch, 0, rows, inner, columns);
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, output, batch, rows, inner, columns);
         }

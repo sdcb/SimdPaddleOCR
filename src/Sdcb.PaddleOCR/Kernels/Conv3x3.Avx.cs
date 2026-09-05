@@ -17,7 +17,7 @@ internal static partial class Conv3x3
     // accumulators live lets one input load feed both tiles while preserving
     // the original (input-channel, kernel-row, kernel-column) accumulation
     // order for every output channel.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void TrySixteenOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int height, int width, int outputChannels)
@@ -137,7 +137,7 @@ internal static partial class Conv3x3
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void TryEightOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int height, int width, int outputChannels)
@@ -237,7 +237,7 @@ internal static partial class Conv3x3
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void TryFourOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int height, int width, int outputChannels)

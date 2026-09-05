@@ -1,7 +1,9 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 
 namespace Sdcb.PaddleOCR.Kernels;
 
@@ -27,6 +29,7 @@ internal static class Threshold
         int pixels, float threshold)
     {
         int i = 0;
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported && pixels >= 16)
         {
             fixed (float* predictionPtr = prediction)
@@ -83,7 +86,9 @@ internal static class Threshold
                     throw new InvalidDataException("Detector output contains a non-finite value.");
             }
         }
-        else if (Vector.IsHardwareAccelerated && pixels >= Vector<float>.Count)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated && pixels >= Vector<float>.Count)
         {
             int width = Vector<float>.Count;
             Vector<float> vThreshold = new(threshold);
@@ -91,11 +96,11 @@ internal static class Threshold
             {
                 for (; i <= pixels - width; i += width)
                 {
-                    Vector<float> value = Vector.LoadUnsafe(ref Unsafe.AsRef<float>(predictionPtr + i));
+                    Vector<float> value = SimdOps.VectorLoad(predictionPtr + i);
                     for (int lane = 0; lane < width; lane++)
                     {
-                        float laneValue = value[lane];
-                        if (!float.IsFinite(laneValue))
+                        float laneValue = value.GetElement(lane);
+                        if (!MathCompat.IsFinite(laneValue))
                             throw new InvalidDataException("Detector output contains a non-finite value.");
                         bitmap[i + lane] = laneValue > threshold ? (byte)1 : (byte)0;
                     }
@@ -105,7 +110,7 @@ internal static class Threshold
         for (; i < pixels; i++)
         {
             float value = prediction[i];
-            if (!float.IsFinite(value))
+            if (!MathCompat.IsFinite(value))
                 throw new InvalidDataException("Detector output contains a non-finite value.");
             bitmap[i] = value > threshold ? (byte)1 : (byte)0;
         }

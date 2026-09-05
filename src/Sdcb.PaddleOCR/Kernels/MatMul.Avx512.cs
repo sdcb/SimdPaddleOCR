@@ -11,7 +11,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class MatMul
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulRows16PackedAvx512(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> packedWeights, Span<float> output,
         int batch, int rows, int inner, int columns)
@@ -103,7 +103,7 @@ internal static partial class MatMul
     // chains.  The previous four-row AVX-512 kernel only doubled vector width
     // versus AVX while preserving the same weight reuse, which regressed on
     // Zen 5.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulRows8PackedAvx512(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> packedWeights, Span<float> output,
         int batch, int rows, int inner, int columns)
@@ -160,7 +160,7 @@ internal static partial class MatMul
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static void MatMulRows1Avx512(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rowStart, int rows, int inner, int columns)
     {
@@ -186,7 +186,7 @@ internal static partial class MatMul
             }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulRows4Avx512(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rows, int inner, int columns)
     {
@@ -276,7 +276,7 @@ internal static partial class MatMul
     }
 
     // Packed B tiles stay 16 columns; AVX-512 loads each tile as one Vector512.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulRows4PackedAvx512(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> packedWeights, Span<float> output,
         int batch, int rows, int inner, int columns)

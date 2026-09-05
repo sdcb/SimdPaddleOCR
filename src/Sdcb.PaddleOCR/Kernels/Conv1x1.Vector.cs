@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -11,7 +13,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class Conv1x1
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe bool TryVector(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
         int height, int width, int outputChannels, int groups, int intraOpThreads)
@@ -131,7 +133,7 @@ internal static partial class Conv1x1
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe bool TryPackedVector(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels, int intraOpThreads)
@@ -234,7 +236,7 @@ internal static partial class Conv1x1
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedSixteenOutputsVector(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)

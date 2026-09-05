@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -16,6 +18,7 @@ internal static partial class Stride2
         int height, int width, int outputChannels)
     {
         int plane = checked(height * width);
+        #if !NETSTANDARD2_0
         if (Avx.IsSupported)
         {
             if ((outputChannels & 7) == 0)
@@ -68,7 +71,9 @@ internal static partial class Stride2
                 }
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, bias, output, batch, inputChannels,
                 height, width, outputChannels);

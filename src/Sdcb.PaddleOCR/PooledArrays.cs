@@ -20,7 +20,11 @@ internal static class PooledArrays
     {
         if (minimumLength <= 0) return [];
         if (Bytes<T>(minimumLength) >= DiscardThresholdBytes)
+#if NETSTANDARD2_0
+            return new T[minimumLength];
+#else
             return GC.AllocateUninitializedArray<T>(minimumLength);
+#endif
         return ArrayPool<T>.Shared.Rent(minimumLength);
     }
 

@@ -1,18 +1,21 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 
 namespace Sdcb.PaddleOCR.Kernels;
 
 internal static class ArgMax
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe int Find(ReadOnlySpan<float> row, out float bestValue)
     {
         bestValue = row[0];
-        if (!float.IsFinite(bestValue))
+        if (!MathCompat.IsFinite(bestValue))
             throw new InvalidDataException("Recognizer output is invalid.");
+#if !NETSTANDARD2_0
         if (Avx512F.IsSupported && row.Length >= 16)
         {
             fixed (float* rowPtr = row)
@@ -39,7 +42,7 @@ internal static class ArgMax
                 for (; i < row.Length; i++)
                 {
                     float value = row[i];
-                    if (!float.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
+                    if (!MathCompat.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
                     if (value > maximum) maximum = value;
                 }
                 if (!(maximum > bestValue))
@@ -62,6 +65,9 @@ internal static class ArgMax
             }
             throw new InvalidDataException("Recognizer output is invalid.");
         }
+#endif
+
+#if !NETSTANDARD2_0
         if (Avx2.IsSupported && row.Length >= 8)
         {
             fixed (float* rowPtr = row)
@@ -86,7 +92,7 @@ internal static class ArgMax
                 for (; i < row.Length; i++)
                 {
                     float value = row[i];
-                    if (!float.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
+                    if (!MathCompat.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
                     if (value > maximum) maximum = value;
                 }
                 if (!(maximum > bestValue))
@@ -109,6 +115,8 @@ internal static class ArgMax
             }
             throw new InvalidDataException("Recognizer output is invalid.");
         }
+        else
+#endif
         if (Vector.IsHardwareAccelerated && row.Length >= Vector<float>.Count)
         {
             int width = Vector<float>.Count;
@@ -118,21 +126,21 @@ internal static class ArgMax
                 int i = 1;
                 for (; i <= row.Length - width; i += width)
                 {
-                    Vector<float> value = Vector.LoadUnsafe(ref Unsafe.AsRef<float>(rowPtr + i));
+                    Vector<float> value = SimdOps.VectorLoad(rowPtr + i);
                     for (int lane = 0; lane < width; lane++)
                     {
-                        float laneValue = value[lane];
-                        if (!float.IsFinite(laneValue))
+                        float laneValue = value.GetElement(lane);
+                        if (!MathCompat.IsFinite(laneValue))
                             throw new InvalidDataException("Recognizer output is invalid.");
                     }
                     maxVector = Vector.Max(maxVector, value);
                 }
                 float maximum = maxVector[0];
-                for (int lane = 1; lane < width; lane++) maximum = MathF.Max(maximum, maxVector[lane]);
+                for (int lane = 1; lane < width; lane++) maximum = MathF.Max(maximum, maxVector.GetElement(lane));
                 for (; i < row.Length; i++)
                 {
                     float value = row[i];
-                    if (!float.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
+                    if (!MathCompat.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
                     if (value > maximum) maximum = value;
                 }
                 if (!(maximum > bestValue))
@@ -147,7 +155,7 @@ internal static class ArgMax
         for (int c = 1; c < row.Length; c++)
         {
             float value = row[c];
-            if (!float.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
+            if (!MathCompat.IsFinite(value)) throw new InvalidDataException("Recognizer output is invalid.");
             if (value > bestValue) { bestValue = value; scalarBest = c; }
         }
         return scalarBest;

@@ -15,7 +15,7 @@ internal static partial class MatMul
         Vector512.Create(0f, 1f, 2f, 3f, 4f, 5f, 6f, 7f,
             8f, 9f, 10f, 11f, 12f, 13f, 14f, 15f);
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulArgMaxPackedAvx512(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> packedWeights,
         ReadOnlySpan<float> bias, Span<int> indices, Span<float> scores,
@@ -39,7 +39,7 @@ internal static partial class MatMul
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulArgMaxBlock16Avx512(float* input,
         float* weights, float* packed, float* bias, bool hasBias,
         Span<int> indices, Span<float> scores, int batch, int row,
@@ -113,7 +113,7 @@ internal static partial class MatMul
             batch, row, 16, rows, inner, columns, col, maxima, best);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulArgMaxBlock8Avx512(float* input,
         float* weights, float* packed, float* bias, bool hasBias,
         Span<int> indices, Span<float> scores, int batch, int row,
@@ -196,7 +196,7 @@ internal static partial class MatMul
                     index = candidate;
                 }
             }
-            if (!float.IsFinite(maximum))
+            if (!MathCompat.IsFinite(maximum))
                 throw new InvalidDataException("Recognizer output is invalid.");
             maxima[row] = maximum;
             best[row] = index;

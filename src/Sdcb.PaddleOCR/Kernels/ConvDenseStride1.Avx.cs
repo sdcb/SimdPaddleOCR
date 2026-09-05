@@ -11,7 +11,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class ConvDenseStride1
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void DenseStride1QuadUnsafe(float* input, float* weights, float* bias,
         float* output, int inputChannels, int height, int width, int outputHeight, int outputWidth,
         int kernelH, int kernelW, int padTop, int padLeft, int co, int xStart, int xEnd)
@@ -86,7 +86,7 @@ internal static partial class ConvDenseStride1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void DenseStride1SingleUnsafe(float* input, float* weights, float* bias,
         float* output, int inputChannels, int height, int width, int outputHeight, int outputWidth,
         int kernelH, int kernelW, int padTop, int padLeft, int co, int xStart, int xEnd)
@@ -137,29 +137,5 @@ internal static partial class ConvDenseStride1
                 DenseEdgePixel(input, weights, bias, output, inputChannels, height, width,
                     outputHeight, outputWidth, kernelH, kernelW, padTop, padLeft, co, y, x);
         }
-    }
-
-    // Exact replica of the interpreter's scalar fallback for one dense pixel
-    // (tap-skipping bounds semantics, (ci,ky,kx) accumulation order).
-    private static unsafe void DenseEdgePixel(float* input, float* weights, float* bias,
-        float* output, int inputChannels, int height, int width, int outputHeight, int outputWidth,
-        int kernelH, int kernelW, int padTop, int padLeft, int co, int y, int x)
-    {
-        float sum = bias == null ? 0f : bias[co];
-        long weightBase = (long)co * inputChannels * kernelH * kernelW;
-        for (int ci = 0; ci < inputChannels; ci++)
-            for (int ky = 0; ky < kernelH; ky++)
-            {
-                int iy = y - padTop + ky;
-                if ((uint)iy >= (uint)height) continue;
-                for (int kx = 0; kx < kernelW; kx++)
-                {
-                    int ix = x - padLeft + kx;
-                    if ((uint)ix >= (uint)width) continue;
-                    sum += input[(long)(ci * height + iy) * width + ix] *
-                        weights[weightBase + (ci * kernelH + ky) * kernelW + kx];
-                }
-            }
-        output[(long)(co * outputHeight + y) * outputWidth + x] = sum;
     }
 }

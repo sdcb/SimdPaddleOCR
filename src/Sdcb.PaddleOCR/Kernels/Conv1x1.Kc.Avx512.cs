@@ -15,7 +15,7 @@ internal static partial class Conv1x1
     /// Packed 8-OC Avx512 with KC blocking so a weight panel stays in L1 across
     /// the full spatial sweep (classic GEMM microkernel order).
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedEightOutputsKcAvx512Unsafe(
         ReadOnlySpan<float> input, ReadOnlySpan<float> packedWeights,
         ReadOnlySpan<float> bias, Span<float> output,

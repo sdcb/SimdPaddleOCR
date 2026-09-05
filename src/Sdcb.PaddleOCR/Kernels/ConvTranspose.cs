@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -11,12 +13,13 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class ConvTranspose
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe bool Try(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels,
         int intraOpThreads = 1)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             // Output channels are independent for this 2x2/stride-2 transform.
@@ -101,7 +104,9 @@ internal static partial class ConvTranspose
                 inputHeight, inputWidth, outputChannels);
             return true;
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             return TryVector(input, weights, bias, output, batch,
                 inputChannels, inputHeight, inputWidth, outputChannels, intraOpThreads);

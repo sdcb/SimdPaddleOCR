@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -11,7 +13,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class MatMul
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static bool TryVector(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rows, int inner, int columns)
     {
@@ -44,7 +46,7 @@ internal static partial class MatMul
         return true;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulRows4Vector(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rows, int inner, int columns)
     {
@@ -119,10 +121,10 @@ internal static partial class MatMul
                         {
                             for (int lane = 0; lane < width; lane++)
                             {
-                                output[ob + lane] = a0[lane];
-                                output[ob + columns + lane] = a1[lane];
-                                output[ob + columns * 2 + lane] = a2[lane];
-                                output[ob + columns * 3 + lane] = a3[lane];
+                                output[ob + lane] = a0.GetElement(lane);
+                                output[ob + columns + lane] = a1.GetElement(lane);
+                                output[ob + columns * 2 + lane] = a2.GetElement(lane);
+                                output[ob + columns * 3 + lane] = a3.GetElement(lane);
                             }
                         }
                     }

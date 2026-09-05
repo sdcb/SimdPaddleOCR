@@ -25,7 +25,7 @@ internal static partial class ConvTranspose
         oddHigh = Avx2.Permute2x128(oddLo, oddHi, 0x31);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2EightOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels)
@@ -143,7 +143,7 @@ internal static partial class ConvTranspose
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels)
@@ -204,7 +204,7 @@ internal static partial class ConvTranspose
     // Keep four channels in flight so each input vector is expanded only once
     // instead of once per output channel.  Each channel still visits inputs in
     // the original ci/y/x order, preserving deterministic accumulation.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2FourOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels)
@@ -290,7 +290,7 @@ internal static partial class ConvTranspose
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2RangeUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels,

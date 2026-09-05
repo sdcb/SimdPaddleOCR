@@ -41,15 +41,15 @@ public sealed class Detector : IDisposable
             _options = ResolveOptions(model, options);
             if (_options.MaxSessionCacheEntries < 0) throw new ArgumentOutOfRangeException(nameof(options));
             if (_options.MaxPooledSessions < 0) throw new ArgumentOutOfRangeException(nameof(options));
-            _intraOpThreads = Math.Clamp(intraOpThreads, 1, 16);
+            _intraOpThreads = MathCompat.Clamp(intraOpThreads, 1, 16);
             // One shape-agnostic compiled model; pooled sessions are reshaped per image.
             _compiled = new CompiledModel(_model, _intraOpThreads);
             if (_options.LimitSideLength is < 32 or > 4096) throw new ArgumentOutOfRangeException(nameof(options));
             _postprocessPixels = checked(_options.LimitSideLength * _options.LimitSideLength);
             if (_options.MaxCandidates is <= 0 or > 10_000) throw new ArgumentOutOfRangeException(nameof(options));
             if (_options.BitmapThreshold is < 0 or > 1 || _options.BoxThreshold is < 0 or > 1 ||
-                !float.IsFinite(_options.BitmapThreshold) || !float.IsFinite(_options.BoxThreshold) ||
-                _options.UnclipRatio <= 0 || _options.UnclipRatio > 10 || !float.IsFinite(_options.UnclipRatio))
+                !MathCompat.IsFinite(_options.BitmapThreshold) || !MathCompat.IsFinite(_options.BoxThreshold) ||
+                _options.UnclipRatio <= 0 || _options.UnclipRatio > 10 || !MathCompat.IsFinite(_options.UnclipRatio))
                 throw new ArgumentOutOfRangeException(nameof(options));
         }
         catch

@@ -157,7 +157,7 @@ internal static class OnnxProtoReader
             {
                 case 1 when wire == 2: result.Name = reader.ReadString(); break;
                 case 20 when wire == 0: result.Type = checked((int)reader.ReadVarint()); break;
-                case 2 when wire == 5: result.Float = BitConverter.Int32BitsToSingle(unchecked((int)reader.ReadFixed32())); break;
+                case 2 when wire == 5: result.Float = BitConverterCompat.Int32BitsToSingle(unchecked((int)reader.ReadFixed32())); break;
                 case 3 when wire == 0: result.Int = unchecked((long)reader.ReadVarint()); break;
                 case 4 when wire == 2: result.String = reader.ReadBytes(); break;
                 case 5 when wire == 2:
@@ -176,7 +176,7 @@ internal static class OnnxProtoReader
                     nested.EnsureFullyConsumed();
                     break;
                 }
-                case 7 when wire == 5: result.Floats.Add(BitConverter.Int32BitsToSingle(unchecked((int)reader.ReadFixed32()))); break;
+                case 7 when wire == 5: result.Floats.Add(BitConverterCompat.Int32BitsToSingle(unchecked((int)reader.ReadFixed32()))); break;
                 case 8 when wire == 2:
                 {
                     var nested = reader.EnterMessage();
@@ -213,7 +213,7 @@ internal static class OnnxProtoReader
                     nested.EnsureFullyConsumed();
                     break;
                 }
-                case 4 when wire == 5: result.FloatData.Add(BitConverter.Int32BitsToSingle(unchecked((int)reader.ReadFixed32()))); break;
+                case 4 when wire == 5: result.FloatData.Add(BitConverterCompat.Int32BitsToSingle(unchecked((int)reader.ReadFixed32()))); break;
                 case 5 when wire == 2:
                 {
                     var nested = reader.EnterMessage();
@@ -240,7 +240,7 @@ internal static class OnnxProtoReader
                     nested.EnsureFullyConsumed();
                     break;
                 }
-                case 10 when wire == 1: result.DoubleData.Add(BitConverter.Int64BitsToDouble(unchecked((long)reader.ReadFixed64()))); break;
+                case 10 when wire == 1: result.DoubleData.Add(BitConverterCompat.Int64BitsToDouble(unchecked((long)reader.ReadFixed64()))); break;
                 case 11 when wire == 2:
                 {
                     var nested = reader.EnterMessage();
@@ -333,14 +333,14 @@ internal static class OnnxProtoReader
     {
         if ((reader.Remaining & 3) != 0) throw new InvalidDataException("Packed float field is truncated.");
         while (reader.Remaining > 0)
-            destination.Add(BitConverter.Int32BitsToSingle(unchecked((int)reader.ReadFixed32())));
+            destination.Add(BitConverterCompat.Int32BitsToSingle(unchecked((int)reader.ReadFixed32())));
     }
 
     private static void ReadPackedDouble(ref ProtoReader reader, List<double> destination)
     {
         if ((reader.Remaining & 7) != 0) throw new InvalidDataException("Packed double field is truncated.");
         while (reader.Remaining > 0)
-            destination.Add(BitConverter.Int64BitsToDouble(unchecked((long)reader.ReadFixed64())));
+            destination.Add(BitConverterCompat.Int64BitsToDouble(unchecked((long)reader.ReadFixed64())));
     }
 
     private static void ReadPackedInt32(ref ProtoReader reader, List<int> destination)

@@ -69,13 +69,13 @@ public sealed class Recognizer : IDisposable
             // Standalone Recognizer (intraOpThreads 0) assumes one in-flight
             // session. CLS stays intra-op 1; the graph is too small to shard.
             int intraOp = intraOpThreads > 0
-                ? Math.Clamp(intraOpThreads, 1, 16)
+                ? MathCompat.Clamp(intraOpThreads, 1, 16)
                 : Parallelism.ResolveRecognizerIntraOp(1);
             _compiled = new CompiledModel(_model, intraOpThreads: intraOp);
             if (_options.TargetWidth <= 0 || _options.TargetWidth > int.MaxValue)
                 throw new ArgumentOutOfRangeException(nameof(options));
             string text;
-            try { text = new UTF8Encoding(false, true).GetString(dictionaryUtf8); }
+            try { text = EncodingCompat.GetString(new UTF8Encoding(false, true), dictionaryUtf8); }
             catch (DecoderFallbackException ex) { throw new InvalidDataException("Dictionary is not valid UTF-8.", ex); }
             if (text.Length > 0 && text[0] == '\uFEFF') text = text.Substring(1);
             string[] raw = text.Split('\n');

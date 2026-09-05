@@ -16,7 +16,7 @@ internal static partial class Conv3x3Packed
     // is loaded once and feeds sixteen output accumulators.  It is used only
     // for single-threaded execution; the multi-threaded path shards by the
     // existing eight-channel blocks to keep enough independent work items.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv3x3SixteenOutputsPackedUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)
@@ -173,7 +173,7 @@ internal static partial class Conv3x3Packed
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv3x3EightOutputsPackedUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)

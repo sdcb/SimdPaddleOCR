@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 namespace Sdcb.PaddleOCR.Kernels;
@@ -14,6 +16,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 /// </summary>
 internal static class SimdOps
 {
+#if !NETSTANDARD2_0
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static Vector256<float> LoadStride2(ReadOnlySpan<float> source, int offset)
     {
@@ -33,6 +36,7 @@ internal static class SimdOps
         Vector128<float> evenHigh = Sse.Shuffle(second.GetLower(), second.GetUpper(), 0x88);
         return Vector256.Create(evenLow, evenHigh);
     }
+#endif
 
     internal const long IntraOpMinWork = 8_000_000;
 
@@ -58,6 +62,7 @@ internal static class SimdOps
     internal static (int Begin, int End) BlockShard(int worker, int workers, int blocks) =>
         (blocks * worker / workers, blocks * (worker + 1) / workers);
 
+#if !NETSTANDARD2_0
     // FMA when available (higher throughput and precision); edge pixels use
     // the scalar tap-skipping path, so interior/edge rounding may differ by
     // 1 ulp. Deterministic across runs and thread counts either way.
@@ -170,22 +175,50 @@ internal static class SimdOps
         Vector512<float> second = Avx512F.LoadVector512(source + 16);
         return Avx512F.PermuteVar16x32x2(first, Stride2EvenIndex512, second);
     }
+#endif
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static Vector<float> VectorLoad(ReadOnlySpan<float> source, int offset) =>
-        Vector.LoadUnsafe(ref Unsafe.Add(ref MemoryMarshal.GetReference(source), offset));
+    internal static Vector<float> VectorLoad(ReadOnlySpan<float> source, int offset)
+    {
+#if NETSTANDARD2_0
+        return Unsafe.ReadUnaligned<Vector<float>>(
+            ref Unsafe.As<float, byte>(ref Unsafe.Add(ref MemoryMarshal.GetReference(source), offset)));
+#else
+        return Vector.LoadUnsafe(ref Unsafe.Add(ref MemoryMarshal.GetReference(source), offset));
+#endif
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static void VectorStore(Span<float> destination, int offset, Vector<float> value) =>
+    internal static void VectorStore(Span<float> destination, int offset, Vector<float> value)
+    {
+#if NETSTANDARD2_0
+        Unsafe.WriteUnaligned(
+            ref Unsafe.As<float, byte>(ref Unsafe.Add(ref MemoryMarshal.GetReference(destination), offset)),
+            value);
+#else
         value.StoreUnsafe(ref Unsafe.Add(ref MemoryMarshal.GetReference(destination), offset));
+#endif
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static unsafe Vector<float> VectorLoad(float* source) =>
-        Vector.LoadUnsafe(ref Unsafe.AsRef<float>(source));
+    internal static unsafe Vector<float> VectorLoad(float* source)
+    {
+#if NETSTANDARD2_0
+        return Unsafe.ReadUnaligned<Vector<float>>(source);
+#else
+        return Vector.LoadUnsafe(ref Unsafe.AsRef<float>(source));
+#endif
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static unsafe void VectorStore(float* destination, Vector<float> value) =>
+    internal static unsafe void VectorStore(float* destination, Vector<float> value)
+    {
+#if NETSTANDARD2_0
+        Unsafe.WriteUnaligned(destination, value);
+#else
         value.StoreUnsafe(ref Unsafe.AsRef<float>(destination));
+#endif
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static Vector<float> VectorAddMul(Vector<float> accumulator, Vector<float> value, float weight) =>
@@ -195,38 +228,51 @@ internal static class SimdOps
     internal static Vector<float> VectorAddMul(Vector<float> accumulator, Vector<float> value, Vector<float> weight) =>
         accumulator + value * weight;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static unsafe Vector<float> VectorLoadStride2(float* source)
-    {
-        if (Sse.IsSupported && Vector<float>.Count == 4)
-        {
-            Vector128<float> first = Vector128.LoadUnsafe(ref Unsafe.AsRef<float>(source));
-            Vector128<float> second = Vector128.LoadUnsafe(ref Unsafe.AsRef<float>(source + 4));
-            Vector128<float> even = Sse.Shuffle(first, second, 0x88);
-            return Unsafe.BitCast<Vector128<float>, Vector<float>>(even);
-        }
-        Vector<float> value = default;
-        int width = Vector<float>.Count;
-        for (int lane = 0; lane < width; lane++)
-            value = value.WithElement(lane, source[lane * 2]);
-        return value;
-    }
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    internal static unsafe Vector<float> VectorLoadStride2(float* source) =>
+        VectorLoadStride2(ref Unsafe.AsRef<float>(source));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static Vector<float> VectorLoadStride2(ReadOnlySpan<float> source, int offset)
+    internal static Vector<float> VectorLoadStride2(ReadOnlySpan<float> source, int offset) =>
+        VectorLoadStride2(ref Unsafe.Add(ref MemoryMarshal.GetReference(source), offset));
+
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    internal static Vector<float> VectorLoadStride2(ref float source)
     {
+#if !NETSTANDARD2_0
         if (Sse.IsSupported && Vector<float>.Count == 4)
         {
-            ref float origin = ref Unsafe.Add(ref MemoryMarshal.GetReference(source), offset);
-            Vector128<float> first = Vector128.LoadUnsafe(ref origin);
-            Vector128<float> second = Vector128.LoadUnsafe(ref Unsafe.Add(ref origin, 4));
+            Vector128<float> first = Vector128.LoadUnsafe(ref source);
+            Vector128<float> second = Vector128.LoadUnsafe(ref Unsafe.Add(ref source, 4));
             Vector128<float> even = Sse.Shuffle(first, second, 0x88);
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(even);
         }
+#endif
         Vector<float> value = default;
+        ref float d = ref Unsafe.As<Vector<float>, float>(ref value);
         int width = Vector<float>.Count;
+        if (width == 8)
+        {
+            Unsafe.Add(ref d, 0) = source;
+            Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
+            Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
+            Unsafe.Add(ref d, 4) = Unsafe.Add(ref source, 8);
+            Unsafe.Add(ref d, 5) = Unsafe.Add(ref source, 10);
+            Unsafe.Add(ref d, 6) = Unsafe.Add(ref source, 12);
+            Unsafe.Add(ref d, 7) = Unsafe.Add(ref source, 14);
+            return value;
+        }
+        if (width == 4)
+        {
+            Unsafe.Add(ref d, 0) = source;
+            Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
+            Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
+            return value;
+        }
         for (int lane = 0; lane < width; lane++)
-            value = value.WithElement(lane, source[offset + lane * 2]);
+            Unsafe.Add(ref d, lane) = Unsafe.Add(ref source, lane * 2);
         return value;
     }
 }

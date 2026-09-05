@@ -1,8 +1,10 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 
 using static Sdcb.PaddleOCR.Kernels.SimdOps;
@@ -12,7 +14,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 internal static partial class MatMul
 {
     // Scalar twin of MatMulRows4Vector: 4 rows × 4 columns, lanes = 1.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulScalar(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rows, int inner, int columns)
     {

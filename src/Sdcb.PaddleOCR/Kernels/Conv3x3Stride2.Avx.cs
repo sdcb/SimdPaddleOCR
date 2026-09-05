@@ -129,7 +129,7 @@ internal static partial class Conv3x3Stride2
             }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv3x3Stride2EightOutputsUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int inputHeight, int inputWidth,
@@ -322,7 +322,7 @@ internal static partial class Conv3x3Stride2
             }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv3x3Stride2SixteenOutputsPackedUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,
@@ -458,7 +458,7 @@ internal static partial class Conv3x3Stride2
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv3x3Stride2EightOutputsPackedUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,

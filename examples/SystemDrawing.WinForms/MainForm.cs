@@ -164,7 +164,7 @@ internal sealed class MainForm : Form
     {
         stride = checked(bitmap.Width * 3); byte[] bgr = new byte[checked(stride * bitmap.Height)]; Rectangle rectangle = new(0, 0, bitmap.Width, bitmap.Height);
         BitmapData data = bitmap.LockBits(rectangle, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-        try { for (int y = 0; y < bitmap.Height; y++) Marshal.Copy(IntPtr.Add(data.Scan0, y * data.Stride), bgr, y * stride, stride); }
+        try { for (int y = 0; y < bitmap.Height; y++) Marshal.Copy(new IntPtr(data.Scan0.ToInt64() + y * (long)data.Stride), bgr, y * stride, stride); }
         finally { bitmap.UnlockBits(data); }
         return bgr;
     }

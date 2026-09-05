@@ -14,7 +14,7 @@ internal static partial class MatMul
     private static readonly Vector256<float> ArgMaxLanes256 =
         Vector256.Create(0f, 1f, 2f, 3f, 4f, 5f, 6f, 7f);
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void MatMulArgMaxPackedAvx(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> packedWeights,
         ReadOnlySpan<float> bias, Span<int> indices, Span<float> scores,
@@ -110,7 +110,7 @@ internal static partial class MatMul
                     index = candidate;
                 }
             }
-            if (!float.IsFinite(maximum))
+            if (!MathCompat.IsFinite(maximum))
                 throw new InvalidDataException("Recognizer output is invalid.");
             maxima[row] = maximum;
             best[row] = index;

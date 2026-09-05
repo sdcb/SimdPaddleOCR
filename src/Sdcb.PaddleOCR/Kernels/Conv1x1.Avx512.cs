@@ -16,7 +16,7 @@ internal static partial class Conv1x1
     /// [plane][16] tile (cheap Store512), then transpose to NCHW planar output.
     /// Multi-spatial FMA tiles reuse each weight vector on small REC planes.
     /// </summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1OcMajorAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels,
@@ -114,7 +114,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedSixteenOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)
@@ -212,7 +212,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static void Conv1x1EightOutputsAvx512(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels, int height,
         int width, int outputChannels, int groups, int inputPerGroup, int outputPerGroup, int plane)
@@ -290,7 +290,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static void Conv1x1SixteenOutputsAvx512(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels, int height,
         int width, int outputChannels, int groups, int inputPerGroup, int outputPerGroup, int plane)
@@ -409,7 +409,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedEightOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)
@@ -565,7 +565,7 @@ internal static partial class Conv1x1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels)

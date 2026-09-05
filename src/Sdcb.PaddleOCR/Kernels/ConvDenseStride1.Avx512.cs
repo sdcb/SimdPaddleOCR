@@ -11,7 +11,7 @@ namespace Sdcb.PaddleOCR.Kernels;
 
 internal static partial class ConvDenseStride1
 {
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void DenseStride1QuadAvx512Unsafe(float* input, float* weights, float* bias,
         float* output, int inputChannels, int height, int width, int outputHeight, int outputWidth,
         int kernelH, int kernelW, int padTop, int padLeft, int co, int xStart, int xEnd)
@@ -86,7 +86,7 @@ internal static partial class ConvDenseStride1
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void DenseStride1SingleAvx512Unsafe(float* input, float* weights, float* bias,
         float* output, int inputChannels, int height, int width, int outputHeight, int outputWidth,
         int kernelH, int kernelW, int padTop, int padLeft, int co, int xStart, int xEnd)

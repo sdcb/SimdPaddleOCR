@@ -1,7 +1,9 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
+#if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+#endif
 using System.Threading.Tasks;
 using Sdcb.PaddleOCR.OnnxSharp;
 
@@ -60,10 +62,11 @@ internal static partial class SimdKernels
                     new Span<float>((float*)oa + begin, count)));
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void Binary(ReadOnlySpan<float> left, ReadOnlySpan<float> right, Span<float> output, OperatorId op)
     {
         int i = 0, n = output.Length;
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             fixed (float* leftPtr = left, rightPtr = right, outputPtr = output)
@@ -164,7 +167,9 @@ internal static partial class SimdKernels
                 }
             }
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             int width = Vector<float>.Count;
             int unroll = width * 4;
@@ -226,10 +231,11 @@ internal static partial class SimdKernels
         else for (; i < n; i++) output[i] = left[i] / right[i];
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void BinaryRightScalar(ReadOnlySpan<float> left, float right, Span<float> output, OperatorId op)
     {
         int i = 0, n = output.Length;
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             Vector512<float> scalar = Vector512.Create(right);
@@ -332,7 +338,9 @@ internal static partial class SimdKernels
                 }
             }
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             int width = Vector<float>.Count;
             int unroll = width * 4;
@@ -395,7 +403,7 @@ internal static partial class SimdKernels
         else for (; i < n; i++) output[i] = left[i] / right;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void BinaryChannelBroadcast(ReadOnlySpan<float> left, ReadOnlySpan<float> channels,
         Span<float> output, int batch, int channelCount, int plane, OperatorId op)
     {
@@ -406,6 +414,7 @@ internal static partial class SimdKernels
                 float* src = leftPtr + bc * plane, dst = outputPtr + bc * plane;
                 float channelValue = channels[bc % channelCount];
                 int i = 0;
+                #if !NETSTANDARD2_0
                 if (Avx512F.IsSupported)
                 {
                     Vector512<float> scalar = Vector512.Create(channelValue);
@@ -446,7 +455,9 @@ internal static partial class SimdKernels
                         for (; i <= plane - 8; i += 8) Avx.Store(dst + i, Avx.Divide(Avx.LoadVector256(src + i), scalar));
                     }
                 }
-                else if (Vector.IsHardwareAccelerated)
+                else
+#endif
+                if (Vector.IsHardwareAccelerated)
                 {
                     int width = Vector<float>.Count;
                     Vector<float> scalar = new(channelValue);
@@ -476,11 +487,12 @@ internal static partial class SimdKernels
     }
 
     /// <summary>Hard-sigmoid with an AVX fast path.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void HardSigmoid(ReadOnlySpan<float> input, Span<float> output,
         float alpha, float beta)
     {
         int i = 0, n = output.Length;
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             Vector512<float> va = Vector512.Create(alpha);
@@ -513,13 +525,15 @@ internal static partial class SimdKernels
                 }
             }
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             int width = Vector<float>.Count;
             Vector<float> va = new(alpha);
             Vector<float> vb = new(beta);
             Vector<float> zero = Vector<float>.Zero;
-            Vector<float> one = Vector<float>.One;
+            Vector<float> one = new Vector<float>(1f);
             fixed (float* inputPtr = input, outputPtr = output)
             {
                 for (; i <= n - width; i += width)
@@ -533,16 +547,17 @@ internal static partial class SimdKernels
         for (; i < n; i++)
         {
             float value = alpha * input[i] + beta;
-            output[i] = Math.Clamp(value, 0f, 1f);
+            output[i] = MathCompat.Clamp(value, 0f, 1f);
         }
     }
 
     /// <summary>Fused hard-swish (x * clamp(alpha*x + beta, 0, 1)).</summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void HardSwish(ReadOnlySpan<float> input, Span<float> output,
         float alpha, float beta)
     {
         int i = 0, n = output.Length;
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             Vector512<float> va = Vector512.Create(alpha);
@@ -577,13 +592,15 @@ internal static partial class SimdKernels
                 }
             }
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             int width = Vector<float>.Count;
             Vector<float> va = new(alpha);
             Vector<float> vb = new(beta);
             Vector<float> zero = Vector<float>.Zero;
-            Vector<float> one = Vector<float>.One;
+            Vector<float> one = new Vector<float>(1f);
             fixed (float* inputPtr = input, outputPtr = output)
             {
                 for (; i <= n - width; i += width)
@@ -597,17 +614,18 @@ internal static partial class SimdKernels
         for (; i < n; i++)
         {
             float value = input[i];
-            float gate = Math.Clamp(alpha * value + beta, 0f, 1f);
+            float gate = MathCompat.Clamp(alpha * value + beta, 0f, 1f);
             output[i] = value * gate;
         }
     }
 
     /// <summary>2x2 max-pool with one-cell end padding and unit stride.</summary>
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void MaxPool2x2PadEnd(ReadOnlySpan<float> input, Span<float> output,
         int batch, int channels, int height, int width)
     {
         int plane = checked(height * width);
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             fixed (float* inputPtr = input, outputPtr = output)
@@ -640,6 +658,9 @@ internal static partial class SimdKernels
             }
             return;
         }
+        #endif
+
+        #if !NETSTANDARD2_0
         if (Avx.IsSupported)
         {
             fixed (float* inputPtr = input, outputPtr = output)
@@ -672,6 +693,8 @@ internal static partial class SimdKernels
             }
             return;
         }
+        else
+#endif
         if (Vector.IsHardwareAccelerated)
         {
             int widthLanes = Vector<float>.Count;
@@ -722,10 +745,11 @@ internal static partial class SimdKernels
             }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void SoftmaxContiguous(ReadOnlySpan<float> input, Span<float> output,
         int rowCount, int axisCount)
     {
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported && axisCount >= 16)
         {
             fixed (float* inputPtr = input, outputPtr = output)
@@ -796,7 +820,9 @@ internal static partial class SimdKernels
                     for (int i = iVec; i < axisCount; i++) outputRow[i] /= sum;
                 }
         }
-        else if (Vector.IsHardwareAccelerated && axisCount >= Vector<float>.Count)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated && axisCount >= Vector<float>.Count)
         {
             int width = Vector<float>.Count;
             fixed (float* inputPtr = input, outputPtr = output)
@@ -808,7 +834,7 @@ internal static partial class SimdKernels
                     for (; i <= axisCount - width; i += width)
                         maxVector = Vector.Max(maxVector, VecLoad(inputRow + i));
                     float max = maxVector[0];
-                    for (int lane = 1; lane < width; lane++) max = MathF.Max(max, maxVector[lane]);
+                    for (int lane = 1; lane < width; lane++) max = MathF.Max(max, maxVector.GetElement(lane));
                     for (; i < axisCount; i++) max = MathF.Max(max, inputRow[i]);
                     Vector<float> vmax = new(max);
                     i = 0;
@@ -820,7 +846,7 @@ internal static partial class SimdKernels
                     for (; sumEnd <= axisCount - width; sumEnd += width)
                         sumVector += VecLoad(outputRow + sumEnd);
                     float sum = 0f;
-                    for (int lane = 0; lane < width; lane++) sum += sumVector[lane];
+                    for (int lane = 0; lane < width; lane++) sum += sumVector.GetElement(lane);
                     for (int j = sumEnd; j < axisCount; j++) sum += outputRow[j];
                     Vector<float> inv = new(1f / sum);
                     i = 0;
@@ -846,11 +872,12 @@ internal static partial class SimdKernels
     // Computes just Softmax(argmax(logits)). This is the only probability CTC
     // decoding consumes, so avoid writing, rereading, and normalizing the
     // entire (typically many-thousand-class) row.
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe float SoftmaxMaximumProbability(ReadOnlySpan<float> logits,
         float maximum)
     {
         int i = 0;
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported && logits.Length >= 16)
         {
             Vector512<float> vmax = Vector512.Create(maximum);
@@ -875,6 +902,9 @@ internal static partial class SimdKernels
             for (; i < logits.Length; i++) sum += MathF.Exp(logits[i] - maximum);
             return 1f / sum;
         }
+        #endif
+
+        #if !NETSTANDARD2_0
         if (Avx2.IsSupported && logits.Length >= 8)
         {
             Vector256<float> vmax = Vector256.Create(maximum);
@@ -901,17 +931,46 @@ internal static partial class SimdKernels
             for (; i < logits.Length; i++) sum += MathF.Exp(logits[i] - maximum);
             return 1f / sum;
         }
+        #endif
+
+        if (Vector.IsHardwareAccelerated && logits.Length >= Vector<float>.Count)
+        {
+            int width = Vector<float>.Count;
+            Vector<float> vmax = new(maximum);
+            Vector<float> sum0 = Vector<float>.Zero, sum1 = Vector<float>.Zero;
+            fixed (float* ptr = logits)
+            {
+                for (; i <= logits.Length - width * 2; i += width * 2)
+                {
+                    sum0 += ExpExactVector(VecLoad(ptr + i) - vmax);
+                    sum1 += ExpExactVector(VecLoad(ptr + i + width) - vmax);
+                }
+                if (i <= logits.Length - width)
+                {
+                    sum0 += ExpExactVector(VecLoad(ptr + i) - vmax);
+                    i += width;
+                }
+            }
+            Vector<float> sums = sum0 + sum1;
+            float sum = 0;
+            for (int lane = 0; lane < width; lane++)
+                sum += sums.GetElement(lane);
+            for (; i < logits.Length; i++) sum += MathF.Exp(logits[i] - maximum);
+            return 1f / sum;
+        }
+
         float scalarSum = 0;
         for (; i < logits.Length; i++) scalarSum += MathF.Exp(logits[i] - maximum);
         return 1f / scalarSum;
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void Unary(ReadOnlySpan<float> input, Span<float> output, OperatorId op)
     {
         int i = 0, n = output.Length;
         if (op == OperatorId.Relu)
         {
+            #if !NETSTANDARD2_0
             if (Avx512F.IsSupported)
             {
                 Vector512<float> z = Vector512<float>.Zero;
@@ -936,7 +995,9 @@ internal static partial class SimdKernels
                     }
                 }
             }
-            else if (Vector.IsHardwareAccelerated)
+            else
+#endif
+            if (Vector.IsHardwareAccelerated)
             {
                 int width = Vector<float>.Count;
                 Vector<float> z = Vector<float>.Zero;
@@ -951,6 +1012,7 @@ internal static partial class SimdKernels
         }
         if (op == OperatorId.Sigmoid)
         {
+            #if !NETSTANDARD2_0
             if (Avx512F.IsSupported)
             {
                 fixed (float* inputPtr = input, outputPtr = output)
@@ -991,7 +1053,9 @@ internal static partial class SimdKernels
                     }
                 }
             }
-            else if (Vector.IsHardwareAccelerated)
+            else
+#endif
+            if (Vector.IsHardwareAccelerated)
             {
                 int width = Vector<float>.Count;
                 fixed (float* inputPtr = input, outputPtr = output)
@@ -1003,6 +1067,7 @@ internal static partial class SimdKernels
         }
         if (op == OperatorId.Erf)
         {
+            #if !NETSTANDARD2_0
             if (Avx512F.IsSupported)
             {
                 fixed (float* inputPtr = input, outputPtr = output)
@@ -1019,7 +1084,9 @@ internal static partial class SimdKernels
                         Avx.Store(outputPtr + i, ErfVector(Avx.LoadVector256(inputPtr + i)));
                 }
             }
-            else if (Vector.IsHardwareAccelerated)
+            else
+#endif
+            if (Vector.IsHardwareAccelerated)
             {
                 int width = Vector<float>.Count;
                 fixed (float* inputPtr = input, outputPtr = output)
@@ -1041,6 +1108,7 @@ internal static partial class SimdKernels
         }
         if (op == OperatorId.Sqrt)
         {
+            #if !NETSTANDARD2_0
             if (Avx512F.IsSupported)
             {
                 fixed (float* inputPtr = input, outputPtr = output)
@@ -1057,7 +1125,9 @@ internal static partial class SimdKernels
                         Avx.Store(outputPtr + i, Avx.Sqrt(Avx.LoadVector256(inputPtr + i)));
                 }
             }
-            else if (Vector.IsHardwareAccelerated)
+            else
+#endif
+            if (Vector.IsHardwareAccelerated)
             {
                 int width = Vector<float>.Count;
                 fixed (float* inputPtr = input, outputPtr = output)
@@ -1070,10 +1140,11 @@ internal static partial class SimdKernels
         for (; i < n; i++) output[i] = op == OperatorId.Sigmoid ? Sigmoid(input[i]) : op == OperatorId.Sqrt ? MathF.Sqrt(input[i]) : Erf(input[i]);
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     public static unsafe void Gelu(ReadOnlySpan<float> input, Span<float> output)
     {
         int i = 0;
+        #if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             fixed (float* inputPtr = input, outputPtr = output)
@@ -1118,11 +1189,13 @@ internal static partial class SimdKernels
                 }
             }
         }
-        else if (Vector.IsHardwareAccelerated)
+        else
+#endif
+        if (Vector.IsHardwareAccelerated)
         {
             int width = Vector<float>.Count;
             Vector<float> invSqrtTwo = new(0.70710678118654752f);
-            Vector<float> one = Vector<float>.One;
+            Vector<float> one = new Vector<float>(1f);
             Vector<float> half = new(0.5f);
             fixed (float* inputPtr = input, outputPtr = output)
             {
