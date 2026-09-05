@@ -1,17 +1,6 @@
-<div align="center">
-
-<img src="assets/icon.png" width="120" alt="Sdcb.SimdPaddleOCR" />
-
-# Sdcb.SimdPaddleOCR
-
-[![test](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml/badge.svg)](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml)
-[![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+# Sdcb.SimdPaddleOCR [![test](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml/badge.svg)](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml) [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR) [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE) [![QQ](https://img.shields.io/badge/QQ_Group-579060605-52B6EF?style=social&logo=tencent-qq&logoColor=000&logoWidth=20)](https://qm.qq.com/q/bPw5jAK4qk)
 
 纯 C# PP-OCRv6 推理库：多平台 SIMD 优化、较低内存占用、高正确率。
-
-</div>
-
 自带托管 ONNX 解释器，不依赖 Paddle Inference、ONNX Runtime 或 OpenCV 原生库。
 
 核心 API 只接收 BGR8 内存，不负责图片解码，因此不会强制引入 ImageSharp、SkiaSharp 或 OpenCvSharp。
@@ -190,3 +179,9 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 [GitHub Actions `test` 工作流](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml)
 会跑单元测试，并在 Windows / Linux / macOS 多架构上对 tiny / small / medium 做 bench
 （含关闭 AVX-512 / AVX2 / AVX / 全部硬件加速，以及 `netstandard2.0` 库）。汇总报告写入 job summary 与 `report.md` artifact。
+
+## 微信群
+
+![](https://io.starworks.cc:88/cv-public/2026/ocr-wxg-qr.png)
+
+如果微信群二维码过期了，请加入 QQ 群 [C#/.NET计算机视觉技术交流 579060605](https://qm.qq.com/q/bPw5jAK4qk)。
