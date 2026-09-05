@@ -65,7 +65,7 @@ public sealed class Recognizer : IDisposable
         {
             _options = options ?? new PaddleOcrRecognizerOptions();
             if (_options.MaxPooledSessions < 0) throw new ArgumentOutOfRangeException(nameof(options));
-            // Not a public knob: leftover cores after LineWorkerCount, cap 3.
+            // Not a public knob: leftover cores after LineWorkerCount, cap 4.
             // Standalone Recognizer (intraOpThreads 0) assumes one in-flight
             // session. CLS stays intra-op 1; the graph is too small to shard.
             int intraOp = intraOpThreads > 0

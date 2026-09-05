@@ -91,7 +91,7 @@ public sealed class PaddleOcrOptions
     /// <see cref="Environment.ProcessorCount"/> (2-core machine requesting 4
     /// → 2). <c>0</c> (default) is <c>min(ProcessorCount, 4)</c>. Does not
     /// change <see cref="DetIntraOpThreads"/>. Leftover cores go to hidden
-    /// REC intra-op (cap 3).
+    /// REC intra-op (cap 4).
     /// </summary>
     public int LineWorkerCount { get; init; }
     /// <summary>

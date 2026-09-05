@@ -17,9 +17,9 @@ public class ParallelismTests
     [Theory]
     [InlineData(2, 2, 1)]
     [InlineData(1, 2, 2)]
-    [InlineData(4, 16, 3)]
+    [InlineData(4, 16, 4)]
     [InlineData(4, 8, 2)]
-    [InlineData(1, 8, 3)]
+    [InlineData(1, 8, 4)]
     public void ResolveRecognizerIntraOp(int lineWorkers, int processorCount, int expected) =>
         Assert.Equal(expected, Parallelism.ResolveRecognizerIntraOp(lineWorkers, processorCount));
 }
