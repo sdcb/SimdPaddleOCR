@@ -1,4 +1,12 @@
 <Solution>
+  <Folder Name="/root/">
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="Directory.Build.targets" />
+    <File Path="LICENSE" />
+    <File Path="README.md" />
+    <File Path="THIRD-PARTY-NOTICES.md" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Sdcb.SimdPaddleOCR.ModelProvider/Sdcb.SimdPaddleOCR.ModelProvider.csproj" />
     <Project Path="src/Sdcb.SimdPaddleOCR/Sdcb.SimdPaddleOCR.csproj" />
@@ -8,6 +16,11 @@
     <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.ChineseV6Small/Sdcb.SimdPaddleOCR.Models.ChineseV6Small.csproj" />
     <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
     <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.TextLineOrientation/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.csproj" />
+  </Folder>
+  <Folder Name="/build/">
+    <File Path="build/00-common.linq" />
+    <File Path="build/01-build-packages.linq" />
+    <File Path="build/02-publish-proget-nuget.linq" />
   </Folder>
   <Folder Name="/examples/">
     <Project Path="examples/ImageSharp.AspNetCore/ImageSharp.AspNetCore.csproj" />
