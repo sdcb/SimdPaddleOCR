@@ -34,7 +34,8 @@ internal static class PipelineProfiler
     internal const int RecRent = 17;        // per-line REC: bucket.Rent (may build session on miss)
     internal const int RecPool = 18;        // per-line REC: input scratch ensure (was ArrayPool.Rent)
     internal const int RecReshape = 19;     // per-line REC: session.Reshape
-    internal const int StageCount = 20;
+    internal const int DetUnclip = 20;      // nested in det_postprocess: convex outward offset
+    internal const int StageCount = 21;
 
     internal static readonly string[] StageNames =
     [
@@ -43,7 +44,7 @@ internal static class PipelineProfiler
         "rec_postprocess", "lines_wall",
         "crop_setup", "rec_acquire", "cls_acquire", "rec_decode",
         "rec_release", "cls_release", "rec_cache_get", "rec_rent", "rec_pool",
-        "rec_reshape"
+        "rec_reshape", "det_unclip"
     ];
 
     private static bool s_enabled;

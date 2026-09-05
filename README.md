@@ -109,8 +109,6 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 
 - PP-OCRv6 DET/REC、TextLineOrientation CLS 及字典来自 PaddleOCR 生态，来源资料标记为
   Apache-2.0；发布模型包时请保留来源和许可证说明。
-- `src/Sdcb.PaddleOCR/ThirdParty/Clipper` 使用 Boost Software License 1.0，许可证见其
-  [`LICENSE.txt`](src/Sdcb.PaddleOCR/ThirdParty/Clipper/LICENSE.txt)。
 - 示例依赖遵循各自上游许可证；特别是 ImageSharp 3.x 使用 Six Labors Split License，
   不是普通 MIT 许可证。
 

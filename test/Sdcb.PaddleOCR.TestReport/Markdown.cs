@@ -7,7 +7,7 @@ static class Markdown
 {
     private static readonly string[] StageOrder =
     [
-        "det_preprocess", "det_graph", "det_postprocess", "crop",
+        "det_preprocess", "det_graph", "det_postprocess", "det_unclip", "crop",
         "cls_preprocess", "cls_graph", "cls_postprocess",
         "rec_preprocess", "rec_graph", "rec_postprocess",
         "lines_wall", "crop_setup",

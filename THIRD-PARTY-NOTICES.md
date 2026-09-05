@@ -29,13 +29,6 @@ The model files are distributed for use with this project and remain subject
 to the upstream model terms. PaddleOCR and PP-OCR are trademarks of their
 respective owners; this project is not endorsed by or affiliated with them.
 
-## Clipper
-
-`src/Sdcb.PaddleOCR/ThirdParty/Clipper/Clipper.cs` is Clipper 5.1.5 by Angus
-Johnson, copyright 2010-2013. It is distributed under the Boost Software
-License 1.0. The complete license and the original attribution header are
-retained in [`src/Sdcb.PaddleOCR/ThirdParty/Clipper/LICENSE.txt`](src/Sdcb.PaddleOCR/ThirdParty/Clipper/LICENSE.txt).
-
 ## Example dependencies
 
 The example projects use third-party NuGet packages. They retain their own

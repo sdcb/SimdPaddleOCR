@@ -1,5 +1,4 @@
 using System.Buffers;
-using ClipperLib;
 
 using Sdcb.PaddleOCR.OnnxSharp;
 using Sdcb.PaddleOCR.Kernels;
@@ -298,16 +297,111 @@ internal static class DbPostprocess
 
     private static Point[] Unclip(ReadOnlySpan<Point> box, float ratio)
     {
+        int n = box.Length;
+        if (n < 3) return [];
         double area = Math.Abs(SignedArea(box)), perimeter = 0;
-        for (int i = 0; i < box.Length; i++) perimeter += Distance(box[i], box[(i + 1) % box.Length]);
+        for (int i = 0; i < n; i++) perimeter += Distance(box[i], box[(i + 1) % n]);
         double distance = area * ratio / perimeter;
         if (!MathCompat.IsFinite(distance) || distance <= 0) return [];
-        List<IntPoint> path = [with(box.Length)];
-        foreach (Point p in box) path.Add(new IntPoint((long)Math.Round(p.X), (long)Math.Round(p.Y)));
-        List<List<IntPoint>> expanded = Clipper.OffsetPolygons([path], distance, JoinType.jtRound);
-        return expanded.Count == 1 && expanded[0].Count >= 3
-            ? [.. expanded[0].Select(static p => new Point(p.X, p.Y))] : [];
+        bool profile = PipelineProfiler.Enabled;
+        long started = profile ? PipelineProfiler.Now() : 0;
+        Point[] expanded = OffsetRound(box, distance);
+        if (profile) PipelineProfiler.Add(PipelineProfiler.DetUnclip, started);
+        return expanded.Length >= 3 ? expanded : [];
     }
+
+    /// <summary>
+    /// Convex outward offset with round joins. Same construction as Clipper 5.1.5
+    /// <c>PolyOffsetBuilder</c> for a single positive-delta polygon, without the
+    /// trailing boolean union (unnecessary once the caller takes a min-area rect).
+    /// </summary>
+    private static Point[] OffsetRound(ReadOnlySpan<Point> box, double delta)
+    {
+        int n = box.Length;
+        Span<(long X, long Y)> pts = stackalloc (long, long)[n];
+        int count = 0;
+        for (int i = 0; i < n; i++)
+        {
+            long x = (long)Math.Round(box[i].X, MidpointRounding.ToEven);
+            long y = (long)Math.Round(box[i].Y, MidpointRounding.ToEven);
+            if (count > 0 && pts[count - 1].X == x && pts[count - 1].Y == y) continue;
+            pts[count++] = (x, y);
+        }
+        if (count >= 2 && pts[0].X == pts[count - 1].X && pts[0].Y == pts[count - 1].Y) count--;
+        if (count < 3) return [];
+
+        double winding = 0;
+        for (int i = 0; i < count; i++)
+        {
+            (long X, long Y) = pts[i];
+            (long X, long Y) b = pts[(i + 1) % count];
+            winding += (double)X * b.Y - (double)b.X * Y;
+        }
+        if (winding < 0) pts[..count].Reverse();
+
+        Span<(double X, double Y)> normals = stackalloc (double, double)[count];
+        for (int i = 0; i < count; i++)
+        {
+            (long X, long Y) = pts[i];
+            (long X, long Y) b = pts[(i + 1) % count];
+            double dx = b.X - X, dy = b.Y - Y;
+            double len = Math.Sqrt(dx * dx + dy * dy);
+            if (len > 0) { dx /= len; dy /= len; }
+            normals[i] = (dy, -dx);
+        }
+
+        List<Point> result = [with(count * 6)];
+        int prev = count - 1;
+        for (int i = 0; i < count; i++)
+        {
+            (long X, long Y) = pts[i];
+            (double X, double Y) incoming = normals[prev];
+            (double X, double Y) outgoing = normals[i];
+            AddRounded(result, X + incoming.X * delta, Y + incoming.Y * delta);
+            if ((incoming.X * outgoing.Y - outgoing.X * incoming.Y) * delta >= 0)
+            {
+                if (outgoing.X * incoming.X + outgoing.Y * incoming.Y < 0.985)
+                {
+                    double start = Math.Atan2(incoming.Y, incoming.X);
+                    double end = Math.Atan2(outgoing.Y, outgoing.X);
+                    if (end < start) end += Math.PI * 2;
+                    AddArc(result, X, Y, start, end, delta);
+                }
+            }
+            else AddRounded(result, X, Y);
+            AddRounded(result, X + outgoing.X * delta, Y + outgoing.Y * delta);
+            prev = i;
+        }
+        return [.. result];
+    }
+
+    private static void AddArc(List<Point> dst, double cx, double cy, double start, double end, double radius)
+    {
+        double radiusAbs = Math.Abs(radius);
+        double chord = Math.Min(0.25, radiusAbs);
+        double fraction = Math.Abs(end - start) / (2 * Math.PI);
+        if (fraction <= 0 || radiusAbs <= 0) return;
+        int steps = (int)(fraction * Math.PI / Math.Acos(1 - chord / radiusAbs));
+        if (steps < 2) steps = 2;
+        int cap = (int)(222.0 * fraction);
+        if (steps > cap) steps = Math.Max(2, cap);
+        double x = Math.Cos(start), y = Math.Sin(start);
+        double step = (end - start) / steps;
+        double cos = Math.Cos(step), sin = Math.Sin(step);
+        for (int i = 0; i <= steps; i++)
+        {
+            AddRounded(dst, cx + x * radius, cy + y * radius);
+            double nx = x * cos - y * sin;
+            y = x * sin + y * cos;
+            x = nx;
+        }
+    }
+
+    private static void AddRounded(List<Point> dst, double x, double y) =>
+        dst.Add(new Point(RoundHalfAway(x), RoundHalfAway(y)));
+
+    private static float RoundHalfAway(double value) =>
+        value < 0 ? (long)(value - 0.5) : (long)(value + 0.5);
 
     private static double SignedArea(ReadOnlySpan<Point> points)
     {
