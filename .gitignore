@@ -1,0 +1,21 @@
+bin/
+obj/
+.vs/
+*.f32
+*.bgr
+*.ppm
+*.trace
+*.obj
+c-trace.txt
+*.user
+
+# OpenVINO benchmark and debug artifacts
+.tmp-openvino/
+
+# Other local benchmark outputs and scratch files
+.tmp-artifacts/
+perf-input/*
+artifacts/*
+fonts/
+c-assets/
+dataset/

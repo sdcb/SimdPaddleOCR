@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sdcb.PaddleOCR\Sdcb.PaddleOCR.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Tiny\Sdcb.PaddleOCR.Models.ChineseV6Tiny.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Small\Sdcb.PaddleOCR.Models.ChineseV6Small.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Medium\Sdcb.PaddleOCR.Models.ChineseV6Medium.csproj" />
+    <PackageReference Include="OpenCvSharp5" Version="5.0.0.20260806" />
+    <PackageReference Include="OpenCvSharp5.Windows" Version="5.0.0.20260806" />
+    <PackageReference Include="OpenCvSharp5.runtime.win" Version="5.0.0.20260806" />
+  </ItemGroup>
+</Project>

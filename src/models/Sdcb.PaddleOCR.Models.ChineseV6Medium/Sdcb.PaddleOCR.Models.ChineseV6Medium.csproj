@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Sdcb.PaddleOCR.Models.ChineseV6Medium</AssemblyName>
+    <PackageId>Sdcb.PaddleOCR.Models.ChineseV6Medium</PackageId>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Sdcb.PaddleOCR.ModelProvider\Sdcb.PaddleOCR.ModelProvider.csproj" />
+    <ProjectReference Include="..\Sdcb.PaddleOCR.Models.TextLineOrientation\Sdcb.PaddleOCR.Models.TextLineOrientation.csproj" />
+    <EmbeddedResource Include="..\..\..\models\medium_det.onnx" Link="det.onnx" />
+    <EmbeddedResource Include="..\..\..\models\medium_rec.onnx" Link="rec.onnx" />
+    <EmbeddedResource Include="..\..\..\models\medium_rec_keys.txt" Link="dict.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+</Project>

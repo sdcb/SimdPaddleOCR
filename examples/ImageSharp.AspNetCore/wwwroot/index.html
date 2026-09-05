@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sdcb.PaddleOCR · ImageSharp</title>
+  <link rel="stylesheet" href="/app.css" />
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Sdcb.PaddleOCR</h1>
+      <p>ImageSharp + ASP.NET Core 示例 · 上传图片体验识别，或直接调用 API</p>
+    </div>
+    <a class="docs" href="/scalar" target="_blank" rel="noreferrer">OpenAPI / Scalar</a>
+  </header>
+
+  <section class="toolbar">
+    <label class="file">
+      选择图片
+      <input id="file" type="file" accept="image/*" hidden />
+    </label>
+    <button type="button" id="sample" class="secondary">试用示例图</button>
+    <input id="fileName" class="path" type="text" readonly placeholder="尚未选择图片" />
+    <button type="button" id="run" class="primary" disabled>运行 OCR</button>
+  </section>
+
+  <section class="models">
+    <span>模型：</span>
+    <label><input type="radio" name="model" value="tiny" checked /> tiny</label>
+    <label><input type="radio" name="model" value="small" /> small</label>
+    <label><input type="radio" name="model" value="medium" /> medium</label>
+  </section>
+
+  <main class="layout">
+    <section class="pane preview-pane">
+      <div id="drop" class="drop">
+        <canvas id="canvas" hidden></canvas>
+        <p id="placeholder">拖放图片到此处，或选择 / 试用示例图</p>
+      </div>
+    </section>
+    <aside class="pane">
+      <h2>识别文本</h2>
+      <textarea id="output" readonly placeholder="识别结果会显示在这里"></textarea>
+      <h2>API 调用</h2>
+      <pre id="curl"></pre>
+    </aside>
+  </main>
+
+  <footer id="status">请选择图片后运行 OCR</footer>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AvaloniaUseCompiledBindingsByDefault>true</AvaloniaUseCompiledBindingsByDefault>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sdcb.PaddleOCR\Sdcb.PaddleOCR.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Tiny\Sdcb.PaddleOCR.Models.ChineseV6Tiny.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Small\Sdcb.PaddleOCR.Models.ChineseV6Small.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Medium\Sdcb.PaddleOCR.Models.ChineseV6Medium.csproj" />
+    <PackageReference Include="Avalonia" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />
+    <PackageReference Include="SkiaSharp" Version="4.151.1" />
+  </ItemGroup>
+</Project>

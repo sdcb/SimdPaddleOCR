@@ -1,0 +1,186 @@
+name: test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/cache@v6
+        id: dataset
+        with:
+          path: dataset
+          key: ocr-dataset-${{ hashFiles('test/Sdcb.PaddleOCR.TestData/**/*.cs', 'test/Sdcb.PaddleOCR.TestData/**/*.csproj') }}
+      - uses: actions/setup-dotnet@v6
+        if: steps.dataset.outputs.cache-hit != 'true'
+        with:
+          dotnet-version: "10.0.x"
+      - name: Generate dataset
+        if: steps.dataset.outputs.cache-hit != 'true'
+        run: dotnet run --project test/Sdcb.PaddleOCR.TestData -c Release -- --out dataset
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ocr-dataset
+          path: dataset
+          if-no-files-found: error
+          retention-days: 30
+
+  bench:
+    needs: generate
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: win-x64-tiny-4w
+            os: windows-2025
+            rid: win-x64
+            workers: 4
+            model: tiny
+          - name: win-x64-tiny-1w
+            os: windows-2025
+            rid: win-x64
+            workers: 1
+            model: tiny
+          - name: win-x64-tiny-4w-c
+            os: windows-2025
+            rid: win-x64
+            workers: 4
+            model: tiny
+            engine: c
+          - name: win-x64-tiny-1w-c
+            os: windows-2025
+            rid: win-x64
+            workers: 1
+            model: tiny
+            engine: c
+          - name: win-x86-tiny-4w
+            os: windows-2025
+            rid: win-x86
+            workers: 4
+            model: tiny
+          - name: win-arm64-tiny-4w
+            os: windows-11-arm
+            rid: win-arm64
+            workers: 4
+            model: tiny
+          - name: linux-x64-tiny-4w
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: tiny
+          - name: linux-arm64-tiny-4w
+            os: ubuntu-24.04-arm
+            rid: linux-arm64
+            workers: 4
+            model: tiny
+          - name: osx-arm64-tiny-4w
+            os: macos-26
+            rid: osx-arm64
+            workers: 4
+            model: tiny
+          - name: osx-x64-tiny-4w
+            os: macos-26-intel
+            rid: osx-x64
+            workers: 4
+            model: tiny
+          - name: linux-x64-tiny-1w
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 1
+            model: tiny
+          - name: linux-x64-small-4w
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: small
+          - name: linux-x64-medium-4w
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: medium
+          - name: linux-x64-tiny-4w-noavx512
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: tiny
+            env: DOTNET_EnableAVX512=0
+          - name: linux-x64-tiny-4w-noavx2
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: tiny
+            env: DOTNET_EnableAVX2=0
+          - name: linux-x64-tiny-4w-noavx
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: tiny
+            env: DOTNET_EnableAVX=0
+          - name: linux-x64-tiny-4w-nohw
+            os: ubuntu-24.04
+            rid: linux-x64
+            workers: 4
+            model: tiny
+            env: DOTNET_EnableHWIntrinsic=0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/setup-dotnet@v6
+        if: matrix.rid == 'win-x86'
+        with:
+          dotnet-version: "10.0.x"
+          architecture: x86
+      - uses: actions/download-artifact@v8
+        with:
+          name: ocr-dataset
+          path: dataset
+      - if: ${{ matrix.env }}
+        shell: bash
+        run: echo "${{ matrix.env }}" >> "$GITHUB_ENV"
+      - name: Run test
+        run: >
+          dotnet run --project test/Sdcb.PaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained --
+          --engine ${{ matrix.engine || 'sharp' }} --workers ${{ matrix.workers }} --model ${{ matrix.model }}
+          --input dataset --out ${{ matrix.name }}.json
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: result-${{ matrix.name }}
+          path: ${{ matrix.name }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+  report:
+    needs: bench
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: result-*
+          path: results
+          merge-multiple: true
+      - name: Build markdown report
+        run: |
+          dotnet run --project test/Sdcb.PaddleOCR.TestReport -c Release -- --in results --out report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: perf-report
+          path: report.md
+          if-no-files-found: error
+          retention-days: 30

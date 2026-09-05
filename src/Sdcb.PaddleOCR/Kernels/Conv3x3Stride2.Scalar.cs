@@ -1,0 +1,136 @@
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
+using System.Threading.Tasks;
+
+using static Sdcb.PaddleOCR.Kernels.SimdOps;
+
+namespace Sdcb.PaddleOCR.Kernels;
+
+internal static partial class Conv3x3Stride2
+{
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static unsafe void Conv3x3Stride2Scalar(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+        ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
+        int inputHeight, int inputWidth, int outputHeight, int outputWidth, int outputChannels,
+        int intraOpThreads)
+    {
+        int outputPlane = checked(outputHeight * outputWidth);
+        int weightsPerOutput = checked(inputChannels * 9);
+        if (CanShardOutputs(intraOpThreads, batch, 1, outputChannels,
+            (long)outputChannels * weightsPerOutput * outputPlane))
+        {
+            int workers = ShardWorkers(intraOpThreads, outputChannels / OutputTile);
+            fixed (float* inputPtr = input, weightsPtr = weights, biasPtr = bias, outputPtr = output)
+            {
+                nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                    biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                int inputLength = input.Length, weightsLength = weights.Length, biasLength = bias.Length,
+                    outputLength = output.Length;
+                Parallel.For(0, workers, worker =>
+                {
+                    (int begin, int end) = AlignedOutputShard(worker, workers, outputChannels);
+                    if (end <= begin) return;
+                    int count = end - begin;
+                    ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                    ReadOnlySpan<float> w = new ReadOnlySpan<float>((void*)weightsAddress, weightsLength)
+                        .Slice(begin * weightsPerOutput, count * weightsPerOutput);
+                    ReadOnlySpan<float> b = biasLength == 0 ? []
+                        : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(begin, count);
+                    Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
+                        .Slice(begin * outputPlane, count * outputPlane);
+                    Conv3x3Stride2ScalarKernel(inSpan, w, b, outSpan, 1, inputChannels, inputHeight,
+                        inputWidth, outputHeight, outputWidth, count);
+                });
+            }
+            return;
+        }
+        Conv3x3Stride2ScalarKernel(input, weights, bias, output, batch, inputChannels, inputHeight,
+            inputWidth, outputHeight, outputWidth, outputChannels);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static unsafe void Conv3x3Stride2ScalarKernel(ReadOnlySpan<float> input,
+        ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
+        int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,
+        int outputChannels)
+    {
+        int inputPlane = checked(inputHeight * inputWidth);
+        int outputPlane = checked(outputHeight * outputWidth);
+        int weightsPerOutput = checked(inputChannels * 9);
+        fixed (float* inputPtr = input, weightsPtr = weights, biasPtr = bias, outputPtr = output)
+        {
+            for (int b = 0; b < batch; b++)
+            {
+                int co = 0;
+                for (; co <= outputChannels - OutputTile; co += OutputTile)
+                {
+                    float* w0 = weightsPtr + co * weightsPerOutput, w1 = w0 + weightsPerOutput;
+                    float* w2 = w1 + weightsPerOutput, w3 = w2 + weightsPerOutput;
+                    float* o0 = outputPtr + (b * outputChannels + co) * outputPlane;
+                    float* o1 = o0 + outputPlane, o2 = o1 + outputPlane, o3 = o2 + outputPlane;
+                    float b0 = biasPtr == null ? 0f : biasPtr[co], b1 = biasPtr == null ? 0f : biasPtr[co + 1];
+                    float b2 = biasPtr == null ? 0f : biasPtr[co + 2], b3 = biasPtr == null ? 0f : biasPtr[co + 3];
+                    float* batchInput = inputPtr + b * inputChannels * inputPlane;
+                    for (int oy = 0; oy < outputHeight; oy++)
+                        for (int ox = 0; ox < outputWidth; ox++)
+                        {
+                            float s0 = b0, s1 = b1, s2 = b2, s3 = b3;
+                            for (int ci = 0; ci < inputChannels; ci++)
+                            {
+                                float* src = batchInput + ci * inputPlane;
+                                int wb = ci * 9;
+                                for (int ky = 0; ky < 3; ky++)
+                                {
+                                    int iy = oy * 2 + ky - 1;
+                                    if ((uint)iy >= (uint)inputHeight) continue;
+                                    for (int kx = 0; kx < 3; kx++)
+                                    {
+                                        int ix = ox * 2 + kx - 1;
+                                        if ((uint)ix >= (uint)inputWidth) continue;
+                                        float value = src[iy * inputWidth + ix];
+                                        int wi = wb + ky * 3 + kx;
+                                        s0 += value * w0[wi]; s1 += value * w1[wi];
+                                        s2 += value * w2[wi]; s3 += value * w3[wi];
+                                    }
+                                }
+                            }
+                            int idx = oy * outputWidth + ox;
+                            o0[idx] = s0; o1[idx] = s1; o2[idx] = s2; o3[idx] = s3;
+                        }
+                }
+                for (; co < outputChannels; co++)
+                {
+                    float* dst = outputPtr + (b * outputChannels + co) * outputPlane;
+                    float* w = weightsPtr + co * weightsPerOutput;
+                    float initial = biasPtr == null ? 0f : biasPtr[co];
+                    float* batchInput = inputPtr + b * inputChannels * inputPlane;
+                    for (int oy = 0; oy < outputHeight; oy++)
+                        for (int ox = 0; ox < outputWidth; ox++)
+                        {
+                            float sum = initial;
+                            for (int ci = 0; ci < inputChannels; ci++)
+                            {
+                                float* src = batchInput + ci * inputPlane;
+                                int wb = ci * 9;
+                                for (int ky = 0; ky < 3; ky++)
+                                {
+                                    int iy = oy * 2 + ky - 1;
+                                    if ((uint)iy >= (uint)inputHeight) continue;
+                                    for (int kx = 0; kx < 3; kx++)
+                                    {
+                                        int ix = ox * 2 + kx - 1;
+                                        if ((uint)ix >= (uint)inputWidth) continue;
+                                        sum += src[iy * inputWidth + ix] * w[wb + ky * 3 + kx];
+                                    }
+                                }
+                            }
+                            dst[oy * outputWidth + ox] = sum;
+                        }
+                }
+            }
+        }
+    }
+}

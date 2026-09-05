@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>preview</LangVersion>
+    <AssemblyName>Sdcb.PaddleOCR.Tests</AssemblyName>
+    <RootNamespace>Sdcb.PaddleOCR.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sdcb.PaddleOCR\Sdcb.PaddleOCR.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Tiny\Sdcb.PaddleOCR.Models.ChineseV6Tiny.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Small\Sdcb.PaddleOCR.Models.ChineseV6Small.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Medium\Sdcb.PaddleOCR.Models.ChineseV6Medium.csproj" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
+  </ItemGroup>
+</Project>
