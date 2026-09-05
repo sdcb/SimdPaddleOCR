@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Sdcb.SimdPaddleOCR.ModelProvider/Sdcb.SimdPaddleOCR.ModelProvider.csproj" />
     <Project Path="src/Sdcb.SimdPaddleOCR/Sdcb.SimdPaddleOCR.csproj" />
   </Folder>
   <Folder Name="/src/Models/">
@@ -18,5 +19,6 @@
     <Project Path="test/Sdcb.SimdPaddleOCR.TestData/Sdcb.SimdPaddleOCR.TestData.csproj" />
     <Project Path="test/Sdcb.SimdPaddleOCR.Tests/Sdcb.SimdPaddleOCR.Tests.csproj" />
     <Project Path="test/Sdcb.SimdPaddleOCR.TestReport/Sdcb.SimdPaddleOCR.TestReport.csproj" />
+    <Project Path="test/Sdcb.SimdPaddleOCR.UnitTests/Sdcb.SimdPaddleOCR.UnitTests.csproj" />
   </Folder>
 </Solution>
