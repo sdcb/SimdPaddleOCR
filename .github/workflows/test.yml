@@ -194,6 +194,9 @@ jobs:
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -206,11 +209,20 @@ jobs:
           merge-multiple: true
       - name: Build markdown report
         run: |
-          dotnet run --project test/Sdcb.SimdPaddleOCR.TestReport -c Release -- --in results --out report.md
-          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          dotnet run --project test/Sdcb.SimdPaddleOCR.TestReport -c Release -- --in results --out results/report.md
+          cat results/report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: perf-report
-          path: report.md
+          path: results
           if-no-files-found: error
           retention-days: 30
+      - name: Delete individual result artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("result-")) | .id')
+          for id in $ids; do
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"
+          done
