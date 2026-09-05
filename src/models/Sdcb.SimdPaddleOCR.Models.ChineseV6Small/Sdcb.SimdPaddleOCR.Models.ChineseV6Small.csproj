@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Sdcb.SimdPaddleOCR.Models.ChineseV6Small</AssemblyName>
+    <PackageId>Sdcb.SimdPaddleOCR.Models.ChineseV6Small</PackageId>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Sdcb.SimdPaddleOCR.ModelProvider\Sdcb.SimdPaddleOCR.ModelProvider.csproj" />
+    <ProjectReference Include="..\Sdcb.SimdPaddleOCR.Models.TextLineOrientation\Sdcb.SimdPaddleOCR.Models.TextLineOrientation.csproj" />
+    <EmbeddedResource Include="..\..\..\models\small_det.onnx" Link="det.onnx" />
+    <EmbeddedResource Include="..\..\..\models\small_rec.onnx" Link="rec.onnx" />
+    <EmbeddedResource Include="..\..\..\models\rec_keys.txt" Link="dict.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>Sdcb.SimdPaddleOCR.Models.TextLineOrientation</AssemblyName>
+    <PackageId>Sdcb.SimdPaddleOCR.Models.TextLineOrientation</PackageId>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\Sdcb.SimdPaddleOCR.ModelProvider\Sdcb.SimdPaddleOCR.ModelProvider.csproj" />
+    <EmbeddedResource Include="..\..\..\models\cls.onnx" Link="cls.onnx" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+</Project>

@@ -1,6 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Tasks;
-using Sdcb.PaddleOCR;
+using Sdcb.SimdPaddleOCR;
 
 namespace ImageSharp.AspNetCore;
 
@@ -50,9 +50,9 @@ public sealed class OcrEngine : IDisposable
 
     private static Task<PaddleOcrAll> LoadModelAsync(string name) => name switch
     {
-        "tiny" => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModels.Default),
-        "small" => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Small.ChineseV6SmallModels.Default),
-        "medium" => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Medium.ChineseV6MediumModels.Default),
+        "tiny" => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModels.Default),
+        "small" => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Small.ChineseV6SmallModels.Default),
+        "medium" => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.ChineseV6MediumModels.Default),
         _ => throw new ArgumentOutOfRangeException(nameof(name))
     };
 }

@@ -29,7 +29,7 @@ internal static class Program
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         while (directory is not null)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "Sdcb.PaddleOCR.slnx")))
+            if (File.Exists(Path.Combine(directory.FullName, "Sdcb.SimdPaddleOCR.slnx")))
                 return directory.FullName;
             directory = directory.Parent;
         }

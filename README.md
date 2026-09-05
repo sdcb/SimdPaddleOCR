@@ -1,7 +1,7 @@
-# Sdcb.PaddleOCR
+# Sdcb.SimdPaddleOCR
 
-[![test](https://github.com/sdcb/Sdcb.PaddleOCR/actions/workflows/test.yml/badge.svg)](https://github.com/sdcb/Sdcb.PaddleOCR/actions/workflows/test.yml)
-[![NuGet](https://img.shields.io/nuget/v/Sdcb.PaddleOCR.svg)](https://www.nuget.org/packages/Sdcb.PaddleOCR)
+[![test](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml/badge.svg)](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml)
+[![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 纯 C# PP-OCRv6 推理库：多平台 SIMD 优化、较低内存占用、高正确率。
@@ -14,8 +14,8 @@
 安装核心包和 tiny 模型（tiny 会传递引用 CLS 与 `ModelProvider`）：
 
 ```powershell
-dotnet add package Sdcb.PaddleOCR
-dotnet add package Sdcb.PaddleOCR.Models.ChineseV6Tiny
+dotnet add package Sdcb.SimdPaddleOCR
+dotnet add package Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny
 dotnet add package SixLabors.ImageSharp --version 3.1.11
 ```
 
@@ -24,8 +24,8 @@ dotnet add package SixLabors.ImageSharp --version 3.1.11
 ### ImageSharp 3（推荐）
 
 ```csharp
-using Sdcb.PaddleOCR;
-using Sdcb.PaddleOCR.Models.ChineseV6Tiny;
+using Sdcb.SimdPaddleOCR;
+using Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -102,12 +102,12 @@ finally
 
 | NuGet 包 | 版本 | 说明 |
 | --- | --- | --- |
-| `Sdcb.PaddleOCR` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.PaddleOCR.svg)](https://www.nuget.org/packages/Sdcb.PaddleOCR) | 纯托管推理核心（`net10.0;netstandard2.0`） |
-| `Sdcb.PaddleOCR.ModelProvider` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.PaddleOCR.ModelProvider.svg)](https://www.nuget.org/packages/Sdcb.PaddleOCR.ModelProvider) | 模型契约（`IPaddleOcrModelProvider` / `PaddleOcrModelBundle`），通常被传递引用 |
-| `Sdcb.PaddleOCR.Models.ChineseV6Tiny` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.PaddleOCR.Models.ChineseV6Tiny.svg)](https://www.nuget.org/packages/Sdcb.PaddleOCR.Models.ChineseV6Tiny) | PP-OCRv6 tiny DET+REC+字典；`ChineseV6TinyModels.Default` 含 CLS |
-| `Sdcb.PaddleOCR.Models.ChineseV6Small` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.PaddleOCR.Models.ChineseV6Small.svg)](https://www.nuget.org/packages/Sdcb.PaddleOCR.Models.ChineseV6Small) | PP-OCRv6 small；`ChineseV6SmallModels.Default` |
-| `Sdcb.PaddleOCR.Models.ChineseV6Medium` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.PaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.PaddleOCR.Models.ChineseV6Medium) | PP-OCRv6 medium；`ChineseV6MediumModels.Default` |
-| `Sdcb.PaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.PaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.PaddleOCR.Models.TextLineOrientation) | PP-LCNet 文本行方向 CLS，被三个中文模型包传递引用 |
+| `Sdcb.SimdPaddleOCR` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR) | 纯托管推理核心（`net10.0;netstandard2.0`） |
+| `Sdcb.SimdPaddleOCR.ModelProvider` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.ModelProvider.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.ModelProvider) | 模型契约（`IPaddleOcrModelProvider` / `PaddleOcrModelBundle`），通常被传递引用 |
+| `Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny) | PP-OCRv6 tiny DET+REC+字典；`ChineseV6TinyModels.Default` 含 CLS |
+| `Sdcb.SimdPaddleOCR.Models.ChineseV6Small` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Small.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Small) | PP-OCRv6 small；`ChineseV6SmallModels.Default` |
+| `Sdcb.SimdPaddleOCR.Models.ChineseV6Medium` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium) | PP-OCRv6 medium；`ChineseV6MediumModels.Default` |
+| `Sdcb.SimdPaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.TextLineOrientation) | PP-LCNet 文本行方向 CLS，被三个中文模型包传递引用 |
 
 每个 `IPaddleOcrModelProvider` 提供 `Name`、`Kind`、`Format`、语言和版本元数据以及 `OpenRead()` / `OpenReadAsync()`。完整 OCR 组合由 `PaddleOcrModelBundle` 表达（DET、REC、字典和可选 CLS）。当前语言代码为 `zh`。单个模型也可被其他推理实现消费，例如 `ChineseV6TinyModel.Detection.OpenReadAsync()`。`Model`、`Detector`、`Classifier`、`Recognizer` 和 `PaddleOcrAll` 均提供 Stream 加载入口；解析完成后不会继续保留完整的 ONNX 原始字节。
 
@@ -116,7 +116,7 @@ finally
 核心不下载模型。使用本地 DET、CLS、REC 和字典文件时：
 
 ```csharp
-using Sdcb.PaddleOCR;
+using Sdcb.SimdPaddleOCR;
 
 using PaddleOcrAll ocr = await PaddleOcrAll.LoadAsync(
     detectionPath: "models/det.onnx",
@@ -180,6 +180,6 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 
 ## 性能复现
 
-[GitHub Actions `test` 工作流](https://github.com/sdcb/Sdcb.PaddleOCR/actions/workflows/test.yml)
+[GitHub Actions `test` 工作流](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml)
 会跑单元测试，并在 Windows / Linux / macOS 多架构上对 tiny / small / medium 做 bench
 （含关闭 AVX-512 / AVX2 / AVX / 全部硬件加速，以及 `netstandard2.0` 库）。汇总报告写入 job summary 与 `report.md` artifact。

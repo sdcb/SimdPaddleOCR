@@ -1,0 +1,22 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sdcb.SimdPaddleOCR/Sdcb.SimdPaddleOCR.csproj" />
+  </Folder>
+  <Folder Name="/src/Models/">
+    <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.csproj" />
+    <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.ChineseV6Small/Sdcb.SimdPaddleOCR.Models.ChineseV6Small.csproj" />
+    <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
+    <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.TextLineOrientation/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.csproj" />
+  </Folder>
+  <Folder Name="/examples/">
+    <Project Path="examples/ImageSharp.AspNetCore/ImageSharp.AspNetCore.csproj" />
+    <Project Path="examples/SkiaSharp.Avalonia/SkiaSharp.Avalonia.csproj" />
+    <Project Path="examples/OpenCvSharp5.Wpf/OpenCvSharp5.Wpf.csproj" />
+    <Project Path="examples/SystemDrawing.WinForms/SystemDrawing.WinForms.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Sdcb.SimdPaddleOCR.TestData/Sdcb.SimdPaddleOCR.TestData.csproj" />
+    <Project Path="test/Sdcb.SimdPaddleOCR.Tests/Sdcb.SimdPaddleOCR.Tests.csproj" />
+    <Project Path="test/Sdcb.SimdPaddleOCR.TestReport/Sdcb.SimdPaddleOCR.TestReport.csproj" />
+  </Folder>
+</Solution>

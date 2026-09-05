@@ -25,9 +25,9 @@ jobs:
         with:
           dotnet-version: "10.0.x"
       - name: Unit tests (net10 library)
-        run: dotnet test test/Sdcb.PaddleOCR.UnitTests -c Release --nologo
+        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo
       - name: Unit tests (ns2.0 library)
-        run: dotnet test test/Sdcb.PaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true
+        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true
 
   generate:
     runs-on: windows-2025
@@ -38,14 +38,14 @@ jobs:
         id: dataset
         with:
           path: dataset
-          key: ocr-dataset-${{ hashFiles('test/Sdcb.PaddleOCR.TestData/**/*.cs', 'test/Sdcb.PaddleOCR.TestData/**/*.csproj') }}
+          key: ocr-dataset-${{ hashFiles('test/Sdcb.SimdPaddleOCR.TestData/**/*.cs', 'test/Sdcb.SimdPaddleOCR.TestData/**/*.csproj') }}
       - uses: actions/setup-dotnet@v6
         if: steps.dataset.outputs.cache-hit != 'true'
         with:
           dotnet-version: "10.0.x"
       - name: Generate dataset
         if: steps.dataset.outputs.cache-hit != 'true'
-        run: dotnet run --project test/Sdcb.PaddleOCR.TestData -c Release -- --out dataset
+        run: dotnet run --project test/Sdcb.SimdPaddleOCR.TestData -c Release -- --out dataset
       - uses: actions/upload-artifact@v7
         with:
           name: ocr-dataset
@@ -177,7 +177,7 @@ jobs:
         run: echo "${{ matrix.env }}" >> "$GITHUB_ENV"
       - name: Run test
         run: >
-          dotnet run --project test/Sdcb.PaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained
+          dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained
           ${{ matrix.props }} --
           --engine ${{ matrix.engine || 'sharp' }} --workers ${{ matrix.workers }} --model ${{ matrix.model }}
           --input dataset --out ${{ matrix.name }}.json
@@ -206,7 +206,7 @@ jobs:
           merge-multiple: true
       - name: Build markdown report
         run: |
-          dotnet run --project test/Sdcb.PaddleOCR.TestReport -c Release -- --in results --out report.md
+          dotnet run --project test/Sdcb.SimdPaddleOCR.TestReport -c Release -- --in results --out report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:

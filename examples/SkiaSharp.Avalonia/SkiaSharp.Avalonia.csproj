@@ -7,10 +7,10 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Sdcb.PaddleOCR\Sdcb.PaddleOCR.csproj" />
-    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Tiny\Sdcb.PaddleOCR.Models.ChineseV6Tiny.csproj" />
-    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Small\Sdcb.PaddleOCR.Models.ChineseV6Small.csproj" />
-    <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Medium\Sdcb.PaddleOCR.Models.ChineseV6Medium.csproj" />
+    <ProjectReference Include="..\..\src\Sdcb.SimdPaddleOCR\Sdcb.SimdPaddleOCR.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Small\Sdcb.SimdPaddleOCR.Models.ChineseV6Small.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Medium\Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.csproj" />
     <PackageReference Include="Avalonia" Version="12.1.1" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.1" />
     <PackageReference Include="Avalonia.Themes.Fluent" Version="12.1.1" />

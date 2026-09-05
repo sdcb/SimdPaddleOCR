@@ -21,19 +21,19 @@ static void NuGetRun(string args) => Run(@".\nuget.exe", args, Encoding.GetEncod
 static void DotNetRun(string args) => Run("dotnet", args.Dump(), Encoding.GetEncoding("utf-8"));
 static void Run(string exe, string args, Encoding encoding) => Util.Cmd(exe, args, encoding);
 
-// Independent package versions. Sdcb.PaddleOCR is expected to ship often;
+// Independent package versions. Sdcb.SimdPaddleOCR is expected to ship often;
 // ModelProvider and the four model packages should stay stable.
 // Keep Directory.Build.props defaults in sync.
-// Do not pack with -p:Version=; pack passes these properties instead so a 4.0.1
-// PaddleOCR package can depend on ModelProvider 1.0.0.
+// Do not pack with -p:Version=; pack passes these properties instead so a 1.0.1
+// SimdPaddleOCR package can depend on ModelProvider 1.0.0.
 static ProjectVersion[] Projects =
 {
-	new("Sdcb.PaddleOCR", "4.0.0"),
-	new("Sdcb.PaddleOCR.ModelProvider", "1.0.0"),
-	new("Sdcb.PaddleOCR.Models.TextLineOrientation", "1.0.0"),
-	new("Sdcb.PaddleOCR.Models.ChineseV6Tiny", "1.0.0"),
-	new("Sdcb.PaddleOCR.Models.ChineseV6Small", "1.0.0"),
-	new("Sdcb.PaddleOCR.Models.ChineseV6Medium", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR.ModelProvider", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR.Models.TextLineOrientation", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR.Models.ChineseV6Small", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR.Models.ChineseV6Medium", "1.0.0"),
 };
 
 static string VersionPropertyName(string projectName) => projectName.Replace(".", "") + "Version";

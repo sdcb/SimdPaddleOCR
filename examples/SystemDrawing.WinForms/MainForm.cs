@@ -7,7 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Sdcb.PaddleOCR;
+using Sdcb.SimdPaddleOCR;
 
 namespace SystemDrawing.WinForms;
 
@@ -44,7 +44,7 @@ internal sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = $"Sdcb.PaddleOCR - System.Drawing WinForms [{TargetFrameworkDisplayName}]";
+        Text = $"Sdcb.SimdPaddleOCR - System.Drawing WinForms [{TargetFrameworkDisplayName}]";
         AutoScaleMode = AutoScaleMode.Dpi;
         AutoScaleDimensions = new SizeF(96F, 96F);
         Width = 1200; Height = 760; MinimumSize = new Size(900, 600);
@@ -194,7 +194,7 @@ internal sealed class MainForm : Form
 
     private static string FindRepositoryRoot()
     {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory); while (directory is not null) { if (File.Exists(Path.Combine(directory.FullName, "Sdcb.PaddleOCR.slnx"))) return directory.FullName; directory = directory.Parent; }
+        DirectoryInfo? directory = new(AppContext.BaseDirectory); while (directory is not null) { if (File.Exists(Path.Combine(directory.FullName, "Sdcb.SimdPaddleOCR.slnx"))) return directory.FullName; directory = directory.Parent; }
         return Directory.GetCurrentDirectory();
     }
 

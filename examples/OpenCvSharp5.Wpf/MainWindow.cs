@@ -15,7 +15,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using OpenCvSharp;
-using Sdcb.PaddleOCR;
+using Sdcb.SimdPaddleOCR;
 
 namespace OpenCvSharp5.Wpf;
 
@@ -37,7 +37,7 @@ internal sealed class MainWindow : System.Windows.Window
     public MainWindow(string imagePath, string modelDirectory)
     {
         _ = modelDirectory; _imagePath = imagePath;
-        Title = $"Sdcb.PaddleOCR - OpenCvSharp5 WPF [{BuildConfiguration}]";
+        Title = $"Sdcb.SimdPaddleOCR - OpenCvSharp5 WPF [{BuildConfiguration}]";
         Width = 1200; Height = 760; MinWidth = 900; MinHeight = 600; WindowStartupLocation = WindowStartupLocation.CenterScreen;
         _imagePathText.Text = imagePath; _imagePathText.IsReadOnly = true;
         _output.AcceptsReturn = true; _output.IsReadOnly = true; _output.TextWrapping = TextWrapping.Wrap; _output.FontSize = 14; ScrollViewer.SetVerticalScrollBarVisibility(_output, ScrollBarVisibility.Auto);
@@ -64,7 +64,7 @@ internal sealed class MainWindow : System.Windows.Window
     private void SelectImage() { OpenFileDialog dialog = new() { Title = "选择 OCR 图片", Filter = "图片文件|*.jpg;*.jpeg;*.png;*.bmp;*.webp|所有文件|*.*", FileName = _imagePath }; if (dialog.ShowDialog(this) != true) return; _imagePath = dialog.FileName; _imagePathText.Text = _imagePath; _output.Clear(); LoadPreview(); }
     private async Task ModelSelectionChangedAsync() { if (IsLoaded) await InitializeModelAsync(); }
     private string SelectedModelName => _tiny.IsChecked == true ? "tiny" : _medium.IsChecked == true ? "medium" : "small";
-    private static Task<PaddleOcrAll> LoadModelAsync(string name) => name switch { "tiny" => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModels.Default), "medium" => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Medium.ChineseV6MediumModels.Default), _ => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Small.ChineseV6SmallModels.Default) };
+    private static Task<PaddleOcrAll> LoadModelAsync(string name) => name switch { "tiny" => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModels.Default), "medium" => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.ChineseV6MediumModels.Default), _ => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Small.ChineseV6SmallModels.Default) };
 
     private async Task InitializeModelAsync()
     {

@@ -3,7 +3,7 @@ using ImageSharp.AspNetCore;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Scalar.AspNetCore;
-using Sdcb.PaddleOCR;
+using Sdcb.SimdPaddleOCR;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 

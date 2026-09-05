@@ -4,19 +4,19 @@
     `dotnet pack -p:Version=` must not flow into referenced projects; see Directory.Build.targets.
   -->
   <PropertyGroup>
-    <SdcbPaddleOCRVersion Condition="'$(SdcbPaddleOCRVersion)' == ''">4.0.0</SdcbPaddleOCRVersion>
-    <SdcbPaddleOCRModelProviderVersion Condition="'$(SdcbPaddleOCRModelProviderVersion)' == ''">1.0.0</SdcbPaddleOCRModelProviderVersion>
-    <SdcbPaddleOCRModelsTextLineOrientationVersion Condition="'$(SdcbPaddleOCRModelsTextLineOrientationVersion)' == ''">1.0.0</SdcbPaddleOCRModelsTextLineOrientationVersion>
-    <SdcbPaddleOCRModelsChineseV6TinyVersion Condition="'$(SdcbPaddleOCRModelsChineseV6TinyVersion)' == ''">1.0.0</SdcbPaddleOCRModelsChineseV6TinyVersion>
-    <SdcbPaddleOCRModelsChineseV6SmallVersion Condition="'$(SdcbPaddleOCRModelsChineseV6SmallVersion)' == ''">1.0.0</SdcbPaddleOCRModelsChineseV6SmallVersion>
-    <SdcbPaddleOCRModelsChineseV6MediumVersion Condition="'$(SdcbPaddleOCRModelsChineseV6MediumVersion)' == ''">1.0.0</SdcbPaddleOCRModelsChineseV6MediumVersion>
+    <SdcbSimdPaddleOCRVersion Condition="'$(SdcbSimdPaddleOCRVersion)' == ''">1.0.0</SdcbSimdPaddleOCRVersion>
+    <SdcbSimdPaddleOCRModelProviderVersion Condition="'$(SdcbSimdPaddleOCRModelProviderVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelProviderVersion>
+    <SdcbSimdPaddleOCRModelsTextLineOrientationVersion Condition="'$(SdcbSimdPaddleOCRModelsTextLineOrientationVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsTextLineOrientationVersion>
+    <SdcbSimdPaddleOCRModelsChineseV6TinyVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6TinyVersion>
+    <SdcbSimdPaddleOCRModelsChineseV6SmallVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6SmallVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6SmallVersion>
+    <SdcbSimdPaddleOCRModelsChineseV6MediumVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6MediumVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6MediumVersion>
   </PropertyGroup>
 
   <PropertyGroup>
     <Authors>sdcb</Authors>
     <Company>Sdcb</Company>
-    <PackageProjectUrl>https://github.com/sdcb/Sdcb.PaddleOCR</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/sdcb/Sdcb.PaddleOCR.git</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/sdcb/SimdPaddleOCR</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/sdcb/SimdPaddleOCR.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageTags>Sdcb;AI;OCR;PaddleOCR;PP-OCRv6</PackageTags>
@@ -28,33 +28,33 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.PaddleOCR'">
-    <Version>$(SdcbPaddleOCRVersion)</Version>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR'">
+    <Version>$(SdcbSimdPaddleOCRVersion)</Version>
     <IsPackable>true</IsPackable>
     <Description>Pure-managed PP-OCRv6 inference library. Accepts packed BGR8 memory only.</Description>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.PaddleOCR.ModelProvider'">
-    <Version>$(SdcbPaddleOCRModelProviderVersion)</Version>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR.ModelProvider'">
+    <Version>$(SdcbSimdPaddleOCRModelProviderVersion)</Version>
     <IsPackable>true</IsPackable>
     <Description>OCR model contracts (IPaddleOcrModelProvider / PaddleOcrModelBundle).</Description>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.PaddleOCR.Models.TextLineOrientation'">
-    <Version>$(SdcbPaddleOCRModelsTextLineOrientationVersion)</Version>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR.Models.TextLineOrientation'">
+    <Version>$(SdcbSimdPaddleOCRModelsTextLineOrientationVersion)</Version>
     <IsPackable>true</IsPackable>
     <Description>Embedded PP-LCNet text-line orientation (CLS) model for PP-OCR.</Description>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.PaddleOCR.Models.ChineseV6Tiny'">
-    <Version>$(SdcbPaddleOCRModelsChineseV6TinyVersion)</Version>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny'">
+    <Version>$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)</Version>
     <IsPackable>true</IsPackable>
     <Description>Embedded PP-OCRv6 tiny Chinese DET+REC+dictionary models.</Description>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.PaddleOCR.Models.ChineseV6Small'">
-    <Version>$(SdcbPaddleOCRModelsChineseV6SmallVersion)</Version>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR.Models.ChineseV6Small'">
+    <Version>$(SdcbSimdPaddleOCRModelsChineseV6SmallVersion)</Version>
     <IsPackable>true</IsPackable>
     <Description>Embedded PP-OCRv6 small Chinese DET+REC+dictionary models.</Description>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.PaddleOCR.Models.ChineseV6Medium'">
-    <Version>$(SdcbPaddleOCRModelsChineseV6MediumVersion)</Version>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR.Models.ChineseV6Medium'">
+    <Version>$(SdcbSimdPaddleOCRModelsChineseV6MediumVersion)</Version>
     <IsPackable>true</IsPackable>
     <Description>Embedded PP-OCRv6 medium Chinese DET+REC+dictionary models.</Description>
   </PropertyGroup>

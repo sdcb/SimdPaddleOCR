@@ -11,7 +11,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
-using Sdcb.PaddleOCR;
+using Sdcb.SimdPaddleOCR;
 using SkiaSharp;
 using AvaloniaBitmap = Avalonia.Media.Imaging.Bitmap;
 
@@ -37,7 +37,7 @@ internal sealed class MainWindow : Window
     {
         _imagePath = imagePath;
 
-        Title = $"Sdcb.PaddleOCR - SkiaSharp/Avalonia [{BuildConfiguration}]";
+        Title = $"Sdcb.SimdPaddleOCR - SkiaSharp/Avalonia [{BuildConfiguration}]";
         Width = 1100;
         Height = 700;
         MinWidth = 820;
@@ -248,7 +248,7 @@ internal sealed class MainWindow : Window
     }
 
     private string SelectedModelName => _tiny.IsChecked == true ? "tiny" : _small.IsChecked == true ? "small" : "medium";
-    private static Task<PaddleOcrAll> LoadModelAsync(string name) => name switch { "tiny" => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModels.Default), "small" => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Small.ChineseV6SmallModels.Default), _ => PaddleOcrAll.LoadAsync(Sdcb.PaddleOCR.Models.ChineseV6Medium.ChineseV6MediumModels.Default) };
+    private static Task<PaddleOcrAll> LoadModelAsync(string name) => name switch { "tiny" => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModels.Default), "small" => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Small.ChineseV6SmallModels.Default), _ => PaddleOcrAll.LoadAsync(Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.ChineseV6MediumModels.Default) };
     private async Task ModelSelectionChangedAsync() { if (IsVisible) await InitializeModelAsync(); }
 
     private async Task RunOcrAsync()
