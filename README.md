@@ -1,3 +1,7 @@
+<div align="center">
+
+<img src="assets/icon.png" width="120" alt="Sdcb.SimdPaddleOCR" />
+
 # Sdcb.SimdPaddleOCR
 
 [![test](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml/badge.svg)](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml)
@@ -5,6 +9,9 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 纯 C# PP-OCRv6 推理库：多平台 SIMD 优化、较低内存占用、高正确率。
+
+</div>
+
 自带托管 ONNX 解释器，不依赖 Paddle Inference、ONNX Runtime 或 OpenCV 原生库。
 
 核心 API 只接收 BGR8 内存，不负责图片解码，因此不会强制引入 ImageSharp、SkiaSharp 或 OpenCvSharp。

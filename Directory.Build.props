@@ -58,4 +58,11 @@
     <IsPackable>true</IsPackable>
     <Description>Embedded PP-OCRv6 medium Chinese DET+REC+dictionary models.</Description>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <PackageIcon>icon.png</PackageIcon>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(MSBuildThisFileDirectory)assets\icon.png" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
 </Project>
