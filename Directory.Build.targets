@@ -1,0 +1,37 @@
+<Project>
+  <!--
+    `dotnet pack -p:Version=` is a global property. It would otherwise:
+    1) flow into referenced project compiles, and
+    2) be returned by NuGet's _GetProjectVersion as the package dependency version
+       (that MSBuild call does not honor ProjectReference.GlobalPropertiesToRemove).
+    Result: packing Sdcb.PaddleOCR 4.0.1 would depend on ModelProvider 4.0.1.
+  -->
+  <ItemGroup>
+    <ProjectReference Update="@(ProjectReference)">
+      <GlobalPropertiesToRemove>%(ProjectReference.GlobalPropertiesToRemove);Version;PackageVersion</GlobalPropertiesToRemove>
+    </ProjectReference>
+  </ItemGroup>
+
+  <Target Name="FixPackProjectReferenceVersions" AfterTargets="_GetProjectReferenceVersions">
+    <ItemGroup>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.PaddleOCR'">
+        <ProjectVersion>$(SdcbPaddleOCRVersion)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.PaddleOCR.ModelProvider'">
+        <ProjectVersion>$(SdcbPaddleOCRModelProviderVersion)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.PaddleOCR.Models.TextLineOrientation'">
+        <ProjectVersion>$(SdcbPaddleOCRModelsTextLineOrientationVersion)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.PaddleOCR.Models.ChineseV6Tiny'">
+        <ProjectVersion>$(SdcbPaddleOCRModelsChineseV6TinyVersion)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.PaddleOCR.Models.ChineseV6Small'">
+        <ProjectVersion>$(SdcbPaddleOCRModelsChineseV6SmallVersion)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.PaddleOCR.Models.ChineseV6Medium'">
+        <ProjectVersion>$(SdcbPaddleOCRModelsChineseV6MediumVersion)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
+    </ItemGroup>
+  </Target>
+</Project>

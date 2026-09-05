@@ -12,6 +12,10 @@ c-trace.txt
 # OpenVINO benchmark and debug artifacts
 .tmp-openvino/
 
+# LINQPad NuGet pack output
+build/nupkgs/
+build/nuget.exe
+
 # Other local benchmark outputs and scratch files
 .tmp-artifacts/
 perf-input/*
