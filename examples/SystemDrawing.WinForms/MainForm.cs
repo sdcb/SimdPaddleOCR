@@ -46,7 +46,7 @@ internal sealed class MainForm : Form
     {
         Text = $"Sdcb.PaddleOCR - System.Drawing WinForms [{TargetFrameworkDisplayName}]";
         AutoScaleMode = AutoScaleMode.Dpi;
-        AutoScaleDimensions = new SizeF(96, 96);
+        AutoScaleDimensions = new SizeF(96F, 96F);
         Width = 1200; Height = 760; MinimumSize = new Size(900, 600);
         string root = FindRepositoryRoot();
         _imagePath.Text = Path.Combine(root, "examples", "sample.jpg");

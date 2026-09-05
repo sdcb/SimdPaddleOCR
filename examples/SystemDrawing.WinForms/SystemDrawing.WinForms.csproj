@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ApplicationHighDpiMode Condition="'$(TargetFramework)' != 'net48'">PerMonitorV2</ApplicationHighDpiMode>
     <AutoGenerateBindingRedirects Condition="'$(TargetFramework)' == 'net48'">true</AutoGenerateBindingRedirects>
-    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationManifest Condition="'$(TargetFramework)' == 'net48'">app.manifest</ApplicationManifest>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
   <ItemGroup>
