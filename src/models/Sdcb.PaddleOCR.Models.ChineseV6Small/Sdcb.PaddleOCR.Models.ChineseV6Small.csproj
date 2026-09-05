@@ -13,7 +13,7 @@
     <ProjectReference Include="..\Sdcb.PaddleOCR.Models.TextLineOrientation\Sdcb.PaddleOCR.Models.TextLineOrientation.csproj" />
     <EmbeddedResource Include="..\..\..\models\small_det.onnx" Link="det.onnx" />
     <EmbeddedResource Include="..\..\..\models\small_rec.onnx" Link="rec.onnx" />
-    <EmbeddedResource Include="..\..\..\models\small_rec_keys.txt" Link="dict.txt" />
+    <EmbeddedResource Include="..\..\..\models\rec_keys.txt" Link="dict.txt" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\..\..\README.md" Pack="true" PackagePath="README.md" />
