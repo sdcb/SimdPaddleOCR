@@ -52,6 +52,12 @@ public sealed class Recognizer : IDisposable
 
     private Recognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8,
         PaddleOcrRecognizerOptions? options, bool ownsModel)
+        : this(model, dictionaryUtf8, options, ownsModel, intraOpThreads: 0)
+    {
+    }
+
+    internal Recognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8,
+        PaddleOcrRecognizerOptions? options, bool ownsModel, int intraOpThreads)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
         _ownsModel = ownsModel;
@@ -59,12 +65,12 @@ public sealed class Recognizer : IDisposable
         {
             _options = options ?? new PaddleOcrRecognizerOptions();
             if (_options.MaxPooledSessions < 0) throw new ArgumentOutOfRangeException(nameof(options));
-            // Not a public knob: CLS and REC share LineWorkerCount, and the CLS
-            // graph is too small to want its own intra-op. REC still shards hot
-            // 1x1 convs inside each session (cap 3) so high-thread CPUs do not
-            // need extra line workers.
-            int intraOp = Environment.ProcessorCount >= 16 ? 3
-                : Environment.ProcessorCount >= 12 ? 2 : 1;
+            // Not a public knob: leftover cores after LineWorkerCount, cap 3.
+            // Standalone Recognizer (intraOpThreads 0) assumes one in-flight
+            // session. CLS stays intra-op 1; the graph is too small to shard.
+            int intraOp = intraOpThreads > 0
+                ? Math.Clamp(intraOpThreads, 1, 16)
+                : Parallelism.ResolveRecognizerIntraOp(1);
             _compiled = new CompiledModel(_model, intraOpThreads: intraOp);
             if (_options.TargetWidth <= 0 || _options.TargetWidth > int.MaxValue)
                 throw new ArgumentOutOfRangeException(nameof(options));

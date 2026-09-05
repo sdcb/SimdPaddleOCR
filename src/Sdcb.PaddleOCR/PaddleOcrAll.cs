@@ -31,6 +31,12 @@ public sealed class PaddleOcrAll : IDisposable
     private readonly object _cropLock = new();
     private bool _disposed;
 
+    /// <summary>
+    /// CLS/REC sessions that actually run in parallel after clamping
+    /// <see cref="PaddleOcrOptions.LineWorkerCount"/> to ProcessorCount.
+    /// </summary>
+    public int EffectiveLineWorkerCount => _lineWorkers;
+
     public PaddleOcrAll(PaddleOcrModelSet models, PaddleOcrOptions? options = null)
         : this(models?.DetectionModel ?? throw new ArgumentNullException(nameof(models)), models.ClassificationModel,
             models.RecognitionModel, models.DictionaryUtf8.Span, options) => _ownedModels = models;
@@ -97,18 +103,21 @@ public sealed class PaddleOcrAll : IDisposable
         ReadOnlySpan<byte> dictionaryUtf8, PaddleOcrOptions? options = null)
     {
         _options = options ?? new PaddleOcrOptions();
-        if (_options.LineWorkerCount is < 0 or > 16) throw new ArgumentOutOfRangeException(nameof(options));
+        if (_options.LineWorkerCount is < 0 or > Parallelism.MaxLineWorkers)
+            throw new ArgumentOutOfRangeException(nameof(options));
         if (_options.RecBatchLines < 1) throw new ArgumentOutOfRangeException(nameof(options));
         if (_options.ClassifierThreshold is < 0 or > 1 || !float.IsFinite(_options.ClassifierThreshold))
             throw new ArgumentOutOfRangeException(nameof(options));
         if (!_options.UseDirectionClassification) classifierModel = null;
         if (_options.UseDirectionClassification && classifierModel is null)
             throw new ArgumentNullException(nameof(classifierModel));
-        _lineWorkers = ResolveLineWorkers(_options.LineWorkerCount);
+        _lineWorkers = Parallelism.ResolveLineWorkers(_options.LineWorkerCount);
         _detector = new Detector(detectorModel ?? throw new ArgumentNullException(nameof(detectorModel)), _options.Detector,
             ResolveDetectorIntraThreads(_options));
         _classifier = classifierModel is null ? null : new Classifier(classifierModel, _options.Classifier);
-        _recognizer = new Recognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)), dictionaryUtf8, _options.Recognizer);
+        _recognizer = new Recognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)),
+            dictionaryUtf8, _options.Recognizer, ownsModel: false,
+            Parallelism.ResolveRecognizerIntraOp(_lineWorkers));
     }
 
     private static byte[] ReadDictionary(Stream source)
@@ -450,18 +459,6 @@ public sealed class PaddleOcrAll : IDisposable
             AppliedRotationDegrees = rotation,
             EmittedCount = (uint)recognition.EmittedCount
         };
-    }
-
-    // Reserved intra-op budget for the LineWorkerCount auto formula (and REC's
-    // intra-op cap). DET still uses an exclusive window of up to 8 threads;
-    // line workers leave ~4 cores per worker for REC Conv sharding instead of
-    // packing min(8, CPU) sessions.
-    private const int ReservedIntraOpThreads = 4;
-
-    private static int ResolveLineWorkers(int lineWorkerCount)
-    {
-        if (lineWorkerCount > 0) return lineWorkerCount;
-        return Math.Clamp(Environment.ProcessorCount / ReservedIntraOpThreads, 1, 16);
     }
 
     // DET runs in an exclusive window before crop and line workers start, so

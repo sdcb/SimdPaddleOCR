@@ -16,7 +16,7 @@ using ImageSharpImage = SixLabors.ImageSharp.Image;
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
-    Console.WriteLine("usage: --workers 1|4 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c] [--c-assets <dir>]");
+    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c] [--c-assets <dir>]");
     Console.WriteLine("       --summarize <file...> [--input <dataset>] [--out-md <path>]");
     return args.Length == 0 ? 2 : 0;
 }
@@ -45,8 +45,8 @@ for (int i = 0; i < args.Length; i++)
     }
 }
 
-if (workers is not (1 or 4))
-    throw new ArgumentException("--workers must be 1 or 4");
+if (workers is < 1 or > 16)
+    throw new ArgumentException("--workers must be 1..16");
 if (modelType is not ("tiny" or "small" or "medium"))
     throw new ArgumentException("--model must be tiny, small, or medium");
 if (engineName is not ("sharp" or "c"))
@@ -168,9 +168,10 @@ else
     PipelineProfiler.Enable(true);
     InferenceSession.EnableProfiling(true);
     extra["cacheEntries"] = cacheEntries;
+    extra["effectiveWorkers"] = engine.EffectiveLineWorkerCount;
     wsLoaded = WorkingSetMb();
     wsPeak = wsLoaded;
-    Console.WriteLine($"loaded working_set={wsLoaded:F1} MB engine=sharp");
+    Console.WriteLine($"loaded working_set={wsLoaded:F1} MB engine=sharp workers={engine.EffectiveLineWorkerCount}/{workers} cpu={Environment.ProcessorCount}");
 
     rows = [];
     var prev = PipelineProfiler.Snapshot();

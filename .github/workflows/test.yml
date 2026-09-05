@@ -6,6 +6,17 @@ on:
   workflow_dispatch:
 
 jobs:
+  unittest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Unit tests
+        run: dotnet test test/Sdcb.PaddleOCR.UnitTests -c Release --nologo
+
   generate:
     runs-on: windows-2025
     timeout-minutes: 20

@@ -69,8 +69,9 @@ public sealed class PaddleOcrRecognizerOptions
 /// <para>
 /// Two independent knobs: <see cref="DetIntraOpThreads"/> is threads inside
 /// the single DET session; <see cref="LineWorkerCount"/> is how many CLS/REC
-/// sessions run in parallel (the two stages share that count). REC may still
-/// shard convolutions inside each session; that budget is not customer-facing.
+/// sessions run in parallel (the two stages share that count, clamped to
+/// ProcessorCount). REC may still shard convolutions inside each session
+/// with leftover cores; that budget is not customer-facing.
 /// </para>
 /// </summary>
 public sealed class PaddleOcrOptions
@@ -86,9 +87,11 @@ public sealed class PaddleOcrOptions
     /// <summary>
     /// How many crop / CLS / REC line workers run at once. Each worker may
     /// hold its own CLS and REC session, so memory scales with this value.
-    /// A positive value is exact (1 → one session in flight). <c>0</c>
-    /// (default) is <c>ProcessorCount / 4</c> (16-thread CPU → 4). Does not
-    /// change <see cref="DetIntraOpThreads"/>.
+    /// A positive value is a maximum, clamped to
+    /// <see cref="Environment.ProcessorCount"/> (2-core machine requesting 4
+    /// → 2). <c>0</c> (default) is <c>min(ProcessorCount, 4)</c>. Does not
+    /// change <see cref="DetIntraOpThreads"/>. Leftover cores go to hidden
+    /// REC intra-op (cap 3).
     /// </summary>
     public int LineWorkerCount { get; init; }
     /// <summary>

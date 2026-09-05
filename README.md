@@ -56,7 +56,8 @@ using PaddleOcrAll ocr = await PaddleOcrAll.LoadAsync(
 
 `PaddleOcrOptions` 里两套并行不要混用：`DetIntraOpThreads` 是检测图内的卷积线程
 （一份 session，默认最多 8）；`LineWorkerCount` 是一行一组的 CLS/REC worker 路数
-（每路一个 session，`0` 为 `ProcessorCount / 4`）。检测阈值、边界长度、方向分类、
+（每路一个 session，上限，实际 `min(请求, ProcessorCount)`；`0` 为
+`min(ProcessorCount, 4)`）。检测阈值、边界长度、方向分类、
 动态识别宽度和 Session 缓存上限等也在同一组 options 里。输入约定为 8-bit BGR，
 `stride = 0` 表示紧密排列。
 
