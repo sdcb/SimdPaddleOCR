@@ -66,9 +66,9 @@ internal sealed class MainForm : Form
         _paths.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86)); _paths.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _paths.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70)); _paths.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
         AddPathRow(0, "图片", _imagePath, "图片|*.jpg;*.jpeg;*.png;*.bmp;*.webp|所有文件|*.*", true);
-        AddPathRow(1, "DET 模型", _detPath, "模型|*.onnx;*.lwm|所有文件|*.*", false);
-        AddPathRow(2, "CLS 模型", _clsPath, "模型|*.onnx;*.lwm|所有文件|*.*", false);
-        AddPathRow(3, "REC 模型", _recPath, "模型|*.onnx;*.lwm|所有文件|*.*", false);
+        AddPathRow(1, "DET 模型", _detPath, "模型|*.onnx|所有文件|*.*", false);
+        AddPathRow(2, "CLS 模型", _clsPath, "模型|*.onnx|所有文件|*.*", false);
+        AddPathRow(3, "REC 模型", _recPath, "模型|*.onnx|所有文件|*.*", false);
         AddPathRow(4, "字典", _dictPath, "字典|*.txt|所有文件|*.*", false);
 
         TableLayoutPanel root = new() { Dock = DockStyle.Fill, Padding = new Padding(12), RowCount = 3, ColumnCount = 1 };
