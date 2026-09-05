@@ -221,6 +221,19 @@ internal static class SimdOps
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static Vector<int> VectorNonFiniteMask(Vector<float> value)
+    {
+        Vector<int> finite = Vector.AsVectorInt32(Vector.Equals(value, value));
+        Vector<int> infinity = Vector.AsVectorInt32(
+            Vector.GreaterThanOrEqual(Vector.Abs(value), new Vector<float>(float.PositiveInfinity)));
+        return (finite ^ new Vector<int>(-1)) | infinity;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool VectorAnyNonZero(Vector<int> mask) =>
+        !Vector.EqualsAll(mask, Vector<int>.Zero);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static Vector<float> VectorAddMul(Vector<float> accumulator, Vector<float> value, float weight) =>
         accumulator + value * new Vector<float>(weight);
 

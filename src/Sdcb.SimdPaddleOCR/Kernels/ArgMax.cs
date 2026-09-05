@@ -120,18 +120,16 @@ internal static class ArgMax
             fixed (float* rowPtr = row)
             {
                 Vector<float> maxVector = new(bestValue);
+                Vector<int> invalid = Vector<int>.Zero;
                 int i = 1;
                 for (; i <= row.Length - width; i += width)
                 {
                     Vector<float> value = SimdOps.VectorLoad(rowPtr + i);
-                    for (int lane = 0; lane < width; lane++)
-                    {
-                        float laneValue = value.GetElement(lane);
-                        if (!MathCompat.IsFinite(laneValue))
-                            throw new InvalidDataException("Recognizer output is invalid.");
-                    }
+                    invalid |= SimdOps.VectorNonFiniteMask(value);
                     maxVector = Vector.Max(maxVector, value);
                 }
+                if (SimdOps.VectorAnyNonZero(invalid))
+                    throw new InvalidDataException("Recognizer output is invalid.");
                 float maximum = maxVector[0];
                 for (int lane = 1; lane < width; lane++) maximum = MathF.Max(maximum, maxVector.GetElement(lane));
                 for (; i < row.Length; i++)
@@ -142,7 +140,22 @@ internal static class ArgMax
                 }
                 if (!(maximum > bestValue))
                     return 0;
+                Vector<float> maximumVector = new(maximum);
                 i = 1;
+                for (; i <= row.Length - width; i += width)
+                {
+                    Vector<int> equal = Vector.AsVectorInt32(
+                        Vector.Equals(SimdOps.VectorLoad(rowPtr + i), maximumVector));
+                    if (!SimdOps.VectorAnyNonZero(equal))
+                        continue;
+                    for (int lane = 0; lane < width; lane++)
+                    {
+                        if (equal.GetElement(lane) == 0) continue;
+                        int index = i + lane;
+                        bestValue = row[index];
+                        return index;
+                    }
+                }
                 for (; i < row.Length; i++)
                     if (row[i] == maximum) { bestValue = row[i]; return i; }
             }

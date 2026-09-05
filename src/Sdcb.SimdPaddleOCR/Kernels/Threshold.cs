@@ -92,20 +92,18 @@ internal static class Threshold
         {
             int width = Vector<float>.Count;
             Vector<float> vThreshold = new(threshold);
+            Vector<int> invalid = Vector<int>.Zero;
             fixed (float* predictionPtr = prediction)
             {
                 for (; i <= pixels - width; i += width)
                 {
                     Vector<float> value = SimdOps.VectorLoad(predictionPtr + i);
-                    for (int lane = 0; lane < width; lane++)
-                    {
-                        float laneValue = value.GetElement(lane);
-                        if (!MathCompat.IsFinite(laneValue))
-                            throw new InvalidDataException("Detector output contains a non-finite value.");
-                        bitmap[i + lane] = laneValue > threshold ? (byte)1 : (byte)0;
-                    }
+                    invalid |= SimdOps.VectorNonFiniteMask(value);
+                    StoreBitmapBits(bitmap, i, Vector.AsVectorInt32(Vector.GreaterThan(value, vThreshold)), width);
                 }
             }
+            if (SimdOps.VectorAnyNonZero(invalid))
+                throw new InvalidDataException("Detector output contains a non-finite value.");
         }
         for (; i < pixels; i++)
         {
@@ -114,5 +112,32 @@ internal static class Threshold
                 throw new InvalidDataException("Detector output contains a non-finite value.");
             bitmap[i] = value > threshold ? (byte)1 : (byte)0;
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void StoreBitmapBits(byte[] bitmap, int offset, Vector<int> bits, int width)
+    {
+        if (width == 8)
+        {
+            bitmap[offset] = (byte)(bits.GetElement(0) & 1);
+            bitmap[offset + 1] = (byte)(bits.GetElement(1) & 1);
+            bitmap[offset + 2] = (byte)(bits.GetElement(2) & 1);
+            bitmap[offset + 3] = (byte)(bits.GetElement(3) & 1);
+            bitmap[offset + 4] = (byte)(bits.GetElement(4) & 1);
+            bitmap[offset + 5] = (byte)(bits.GetElement(5) & 1);
+            bitmap[offset + 6] = (byte)(bits.GetElement(6) & 1);
+            bitmap[offset + 7] = (byte)(bits.GetElement(7) & 1);
+            return;
+        }
+        if (width == 4)
+        {
+            bitmap[offset] = (byte)(bits.GetElement(0) & 1);
+            bitmap[offset + 1] = (byte)(bits.GetElement(1) & 1);
+            bitmap[offset + 2] = (byte)(bits.GetElement(2) & 1);
+            bitmap[offset + 3] = (byte)(bits.GetElement(3) & 1);
+            return;
+        }
+        for (int lane = 0; lane < width; lane++)
+            bitmap[offset + lane] = (byte)(bits.GetElement(lane) & 1);
     }
 }

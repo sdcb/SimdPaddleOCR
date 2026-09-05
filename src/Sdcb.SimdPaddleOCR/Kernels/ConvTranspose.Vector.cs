@@ -82,16 +82,16 @@ internal static partial class ConvTranspose
                             for (; ix <= inputWidth - widthLanes; ix += widthLanes)
                             {
                                 Vector<float> values = VectorLoad(src + inputRow + ix);
+                                ExpandTranspose2x(values, out Vector<float> evenLow, out Vector<float> evenHigh,
+                                    out Vector<float> oddLow, out Vector<float> oddHigh);
                                 int ox = ix * 2;
-                                for (int lane = 0; lane < widthLanes; lane++)
-                                {
-                                    float value = values.GetElement(lane);
-                                    int px = ox + lane * 2;
-                                    dst[outputRow0 + px] += value * w[0];
-                                    dst[outputRow0 + px + 1] += value * w[1];
-                                    dst[outputRow1 + px] += value * w[2];
-                                    dst[outputRow1 + px + 1] += value * w[3];
-                                }
+                                float* row0 = dst + outputRow0 + ox;
+                                float* row1 = dst + outputRow1 + ox;
+                                Vector<float> w0 = new(w[0]), w1 = new(w[1]), w2 = new(w[2]), w3 = new(w[3]);
+                                AddStore(row0, evenLow * w0 + oddLow * w1);
+                                AddStore(row0 + widthLanes, evenHigh * w0 + oddHigh * w1);
+                                AddStore(row1, evenLow * w2 + oddLow * w3);
+                                AddStore(row1 + widthLanes, evenHigh * w2 + oddHigh * w3);
                             }
                             for (; ix < inputWidth; ix++)
                             {
@@ -102,6 +102,74 @@ internal static partial class ConvTranspose
                         }
                     }
                 }
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void AddStore(float* destination, Vector<float> value) =>
+        VectorStore(destination, VectorLoad(destination) + value);
+
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static void ExpandTranspose2x(Vector<float> values,
+        out Vector<float> evenLow, out Vector<float> evenHigh,
+        out Vector<float> oddLow, out Vector<float> oddHigh)
+    {
+        evenLow = default;
+        evenHigh = default;
+        oddLow = default;
+        oddHigh = default;
+        ref float source = ref Unsafe.As<Vector<float>, float>(ref values);
+        ref float evenLowRef = ref Unsafe.As<Vector<float>, float>(ref evenLow);
+        ref float evenHighRef = ref Unsafe.As<Vector<float>, float>(ref evenHigh);
+        ref float oddLowRef = ref Unsafe.As<Vector<float>, float>(ref oddLow);
+        ref float oddHighRef = ref Unsafe.As<Vector<float>, float>(ref oddHigh);
+        int width = Vector<float>.Count;
+        if (width == 8)
+        {
+            evenLowRef = source;
+            Unsafe.Add(ref evenLowRef, 2) = Unsafe.Add(ref source, 1);
+            Unsafe.Add(ref evenLowRef, 4) = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref evenLowRef, 6) = Unsafe.Add(ref source, 3);
+            Unsafe.Add(ref oddLowRef, 1) = source;
+            Unsafe.Add(ref oddLowRef, 3) = Unsafe.Add(ref source, 1);
+            Unsafe.Add(ref oddLowRef, 5) = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref oddLowRef, 7) = Unsafe.Add(ref source, 3);
+            evenHighRef = Unsafe.Add(ref source, 4);
+            Unsafe.Add(ref evenHighRef, 2) = Unsafe.Add(ref source, 5);
+            Unsafe.Add(ref evenHighRef, 4) = Unsafe.Add(ref source, 6);
+            Unsafe.Add(ref evenHighRef, 6) = Unsafe.Add(ref source, 7);
+            Unsafe.Add(ref oddHighRef, 1) = Unsafe.Add(ref source, 4);
+            Unsafe.Add(ref oddHighRef, 3) = Unsafe.Add(ref source, 5);
+            Unsafe.Add(ref oddHighRef, 5) = Unsafe.Add(ref source, 6);
+            Unsafe.Add(ref oddHighRef, 7) = Unsafe.Add(ref source, 7);
+            return;
+        }
+        if (width == 4)
+        {
+            evenLowRef = source;
+            Unsafe.Add(ref evenLowRef, 2) = Unsafe.Add(ref source, 1);
+            Unsafe.Add(ref oddLowRef, 1) = source;
+            Unsafe.Add(ref oddLowRef, 3) = Unsafe.Add(ref source, 1);
+            evenHighRef = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref evenHighRef, 2) = Unsafe.Add(ref source, 3);
+            Unsafe.Add(ref oddHighRef, 1) = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref oddHighRef, 3) = Unsafe.Add(ref source, 3);
+            return;
+        }
+        for (int lane = 0; lane < width; lane++)
+        {
+            float value = Unsafe.Add(ref source, lane);
+            int expanded = lane * 2;
+            if (expanded < width)
+            {
+                Unsafe.Add(ref evenLowRef, expanded) = value;
+                Unsafe.Add(ref oddLowRef, expanded + 1) = value;
+            }
+            else
+            {
+                Unsafe.Add(ref evenHighRef, expanded - width) = value;
+                Unsafe.Add(ref oddHighRef, expanded - width + 1) = value;
+            }
         }
     }
 }
