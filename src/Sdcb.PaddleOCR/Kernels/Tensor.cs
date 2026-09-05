@@ -658,10 +658,7 @@ internal static partial class SimdKernels
             }
             return;
         }
-        #endif
-
-        #if !NETSTANDARD2_0
-        if (Avx.IsSupported)
+        else if (Avx.IsSupported)
         {
             fixed (float* inputPtr = input, outputPtr = output)
             {
@@ -854,7 +851,6 @@ internal static partial class SimdKernels
                         VecStore(outputRow + i, VecLoad(outputRow + i) * inv);
                     for (; i < axisCount; i++) outputRow[i] /= sum;
                 }
-            return;
         }
         else
         {
@@ -902,10 +898,7 @@ internal static partial class SimdKernels
             for (; i < logits.Length; i++) sum += MathF.Exp(logits[i] - maximum);
             return 1f / sum;
         }
-        #endif
-
-        #if !NETSTANDARD2_0
-        if (Avx2.IsSupported && logits.Length >= 8)
+        else if (Avx2.IsSupported && logits.Length >= 8)
         {
             Vector256<float> vmax = Vector256.Create(maximum);
             Vector256<float> sum0 = Vector256<float>.Zero, sum1 = Vector256<float>.Zero;
@@ -931,8 +924,8 @@ internal static partial class SimdKernels
             for (; i < logits.Length; i++) sum += MathF.Exp(logits[i] - maximum);
             return 1f / sum;
         }
-        #endif
-
+        else
+#endif
         if (Vector.IsHardwareAccelerated && logits.Length >= Vector<float>.Count)
         {
             int width = Vector<float>.Count;
@@ -958,10 +951,12 @@ internal static partial class SimdKernels
             for (; i < logits.Length; i++) sum += MathF.Exp(logits[i] - maximum);
             return 1f / sum;
         }
-
-        float scalarSum = 0;
-        for (; i < logits.Length; i++) scalarSum += MathF.Exp(logits[i] - maximum);
-        return 1f / scalarSum;
+        else
+        {
+            float scalarSum = 0;
+            for (; i < logits.Length; i++) scalarSum += MathF.Exp(logits[i] - maximum);
+            return 1f / scalarSum;
+        }
     }
 
     [MethodImpl(MethodImplCompat.AggressiveOptimization)]

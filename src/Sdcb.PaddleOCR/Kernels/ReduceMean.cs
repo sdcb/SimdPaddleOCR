@@ -47,10 +47,7 @@ internal static class ReduceMean
             }
             return;
         }
-        #endif
-
-        #if !NETSTANDARD2_0
-        if (Avx.IsSupported)
+        else if (Avx.IsSupported)
         {
             fixed (float* inputPtr = input)
             {

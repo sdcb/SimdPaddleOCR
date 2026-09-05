@@ -18,7 +18,7 @@ internal static partial class Conv3x3
         int height, int width, int outputChannels, int intraOpThreads = 1)
     {
         #if !NETSTANDARD2_0
-        if (Avx.IsSupported)
+        if (Avx512F.IsSupported && (outputChannels & 3) == 0)
         {
             int plane = checked(height * width);
             int weightsPerOutput = checked(inputChannels * 9);
@@ -47,16 +47,43 @@ internal static partial class Conv3x3
                 }
                 return true;
             }
-            if (Avx512F.IsSupported && (outputChannels & 3) == 0)
+            if (intraOpThreads == 1 && (outputChannels & 7) == 0)
             {
-                if (intraOpThreads == 1 && (outputChannels & 7) == 0)
+                TryEightOutputsAvx512Unsafe(input, weights, bias, output, batch, inputChannels,
+                    height, width, outputChannels);
+                return true;
+            }
+            TryFourOutputsAvx512Unsafe(input, weights, bias, output, batch, inputChannels, height,
+                width, outputChannels);
+            return true;
+        }
+        else if (Avx.IsSupported)
+        {
+            int plane = checked(height * width);
+            int weightsPerOutput = checked(inputChannels * 9);
+            if (intraOpThreads > 1 && batch == 1 && outputChannels >= 8 &&
+                (long)outputChannels * weightsPerOutput * plane >= IntraOpMinWork)
+            {
+                int workers = Math.Min(intraOpThreads, outputChannels / 4);
+                fixed (float* inputPtr = input, weightsPtr = weights, biasPtr = bias, outputPtr = output)
                 {
-                    TryEightOutputsAvx512Unsafe(input, weights, bias, output, batch, inputChannels,
-                        height, width, outputChannels);
-                    return true;
+                    nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                        biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                    int inputLength = input.Length, weightsLength = weights.Length, biasLength = bias.Length,
+                        outputLength = output.Length;
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int begin = (outputChannels * worker / workers) & ~3;
+                        int end = worker == workers - 1 ? outputChannels : (outputChannels * (worker + 1) / workers) & ~3;
+                        if (end <= begin) return;
+                        int count = end - begin;
+                        ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                        ReadOnlySpan<float> w = new ReadOnlySpan<float>((void*)weightsAddress, weightsLength).Slice(begin * weightsPerOutput, count * weightsPerOutput);
+                        ReadOnlySpan<float> b = biasLength == 0 ? [] : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(begin, count);
+                        Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength).Slice(begin * plane, count * plane);
+                        Try(inSpan, w, b, outSpan, 1, inputChannels, height, width, count, 1);
+                    });
                 }
-                TryFourOutputsAvx512Unsafe(input, weights, bias, output, batch, inputChannels, height,
-                    width, outputChannels);
                 return true;
             }
             if ((outputChannels & 3) == 0)

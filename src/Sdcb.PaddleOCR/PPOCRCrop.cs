@@ -1,8 +1,4 @@
 using System.Runtime.CompilerServices;
-#if !NETSTANDARD2_0
-using System.Runtime.Intrinsics;
-using System.Runtime.Intrinsics.X86;
-#endif
 
 using Sdcb.PaddleOCR.OnnxSharp;
 using Sdcb.PaddleOCR.Kernels;
@@ -68,158 +64,18 @@ internal static class PPOCRCrop
         fixed (byte* sourcePtr = source)
         fixed (byte* cropPtr = crop)
         {
-            double* sxArr = stackalloc double[8];
-            double* syArr = stackalloc double[8];
             for (int y = 0; y < unrotatedHeight; y++)
             {
                 double v = (double)y / unrotatedHeight;
                 int x = 0;
-                #if !NETSTANDARD2_0
-                if (Avx512F.IsSupported && unrotatedWidth >= 8)
-                {
-                    // Eight output pixels per iteration via Vector512<double>.
-                    Vector512<double> vLane = Vector512.Create(0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0);
-                    Vector512<double> vWidth = Vector512.Create((double)unrotatedWidth);
-                    Vector512<double> vOne = Vector512.Create(1.0);
-                    Vector512<double> vEps = Vector512.Create(1e-12);
-                    Vector512<double> vInf = Vector512.Create(double.PositiveInfinity);
-                    Vector512<double> vAbsMask = Vector512.Create(long.MaxValue).AsDouble();
-                    Vector512<double> vA = Vector512.Create(a), vD = Vector512.Create(d), vG = Vector512.Create(g);
-                    Vector512<double> vV = Vector512.Create(v);
-                    Vector512<double> bv = Avx512F.Multiply(Vector512.Create(b), vV);
-                    Vector512<double> ev = Avx512F.Multiply(Vector512.Create(e), vV);
-                    Vector512<double> hv = Avx512F.Multiply(Vector512.Create(h), vV);
-                    Vector512<double> vC = Vector512.Create(c), vF = Vector512.Create(f);
-                    for (; x <= unrotatedWidth - 8; x += 8)
-                    {
-                        Vector512<double> u = Avx512F.Divide(Avx512F.Add(Vector512.Create((double)x), vLane), vWidth);
-                        Vector512<double> denominator = Avx512F.Add(Avx512F.Add(Avx512F.Multiply(vG, u), hv), vOne);
-                        Vector512<double> absDenominator = Avx512F.And(denominator.AsInt64(), vAbsMask.AsInt64()).AsDouble();
-                        Vector512<double> sx = Avx512F.Divide(Avx512F.Add(Avx512F.Add(Avx512F.Multiply(vA, u), bv), vC), denominator);
-                        Vector512<double> sy = Avx512F.Divide(Avx512F.Add(Avx512F.Add(Avx512F.Multiply(vD, u), ev), vF), denominator);
-                        Vector512<double> ok = Avx512F.And(
-                            Avx512F.And(
-                                Avx512F.Compare(absDenominator, vEps, FloatComparisonMode.OrderedGreaterThanNonSignaling).AsInt64(),
-                                Avx512F.Compare(absDenominator, vInf, FloatComparisonMode.OrderedLessThanNonSignaling).AsInt64()),
-                            Avx512F.And(
-                                Avx512F.Compare(Avx512F.And(sx.AsInt64(), vAbsMask.AsInt64()).AsDouble(), vInf, FloatComparisonMode.OrderedLessThanNonSignaling).AsInt64(),
-                                Avx512F.Compare(Avx512F.And(sy.AsInt64(), vAbsMask.AsInt64()).AsDouble(), vInf, FloatComparisonMode.OrderedLessThanNonSignaling).AsInt64())).AsDouble();
-                        int okMask = Avx512DQ.IsSupported
-                            ? Avx512DQ.MoveMask(ok)
-                            : (int)Vector512.ExtractMostSignificantBits(ok);
-                        if (okMask != 0xFF)
-                        {
-                            for (int lane = 0; lane < 8; lane++)
-                                ProcessPixelScalar(sourcePtr, sourceWidth, sourceHeight, sourceStride,
-                                    cropPtr, outputWidth, unrotatedWidth, unrotatedHeight,
-                                    rotateVertical, a, b, c, d, e, f, g, h, x + lane, y, v);
-                            continue;
-                        }
-                        Avx512F.Store(sxArr, sx);
-                        Avx512F.Store(syArr, sy);
-                        for (int lane = 0; lane < 8; lane++)
-                        {
-                            double pixelX = sxArr[lane], pixelY = syArr[lane];
-                            int xBase = (int)Math.Floor(pixelX), yBase = (int)Math.Floor(pixelY);
-                            int destinationX = rotateVertical ? unrotatedHeight - 1 - y : x + lane;
-                            int destinationY = rotateVertical ? x + lane : y;
-                            int destination = checked((destinationY * outputWidth + destinationX) * 3);
-                            if (xBase >= 1 && xBase < sourceWidth - 3 && yBase >= 1 && yBase < sourceHeight - 2)
-                                Warp.SampleCubicAvx(sourcePtr, sourceStride, pixelX, pixelY,
-                                    xBase, yBase, cropPtr, destination);
-                            else
-                                SamplePixelCubic(sourcePtr, sourceWidth, sourceHeight, sourceStride,
-                                    pixelX, pixelY, cropPtr, destination);
-                        }
-                    }
-                }
-                else if (Avx2.IsSupported && unrotatedWidth >= 4)
-                {
-                    // Four output pixels per iteration.  Every lane performs the
-                    // exact scalar operation sequence (same associativity, no
-                    // FMA contraction), so results are bit-identical.
-                    Vector256<double> vLane = Vector256.Create(0.0, 1.0, 2.0, 3.0);
-                    Vector256<double> vWidth = Vector256.Create((double)unrotatedWidth);
-                    Vector256<double> vOne = Vector256.Create(1.0);
-                    Vector256<double> vEps = Vector256.Create(1e-12);
-                    Vector256<double> vInf = Vector256.Create(double.PositiveInfinity);
-                    Vector256<double> vAbsMask = Vector256.Create(long.MaxValue).AsDouble();
-                    Vector256<double> vA = Vector256.Create(a), vD = Vector256.Create(d), vG = Vector256.Create(g);
-                    Vector256<double> vV = Vector256.Create(v);
-                    Vector256<double> bv = Avx.Multiply(Vector256.Create(b), vV);
-                    Vector256<double> ev = Avx.Multiply(Vector256.Create(e), vV);
-                    Vector256<double> hv = Avx.Multiply(Vector256.Create(h), vV);
-                    Vector256<double> vC = Vector256.Create(c), vF = Vector256.Create(f);
-                    for (; x <= unrotatedWidth - 4; x += 4)
-                    {
-                        Vector256<double> u = Avx.Divide(Avx.Add(Vector256.Create((double)x), vLane), vWidth);
-                        Vector256<double> denominator = Avx.Add(Avx.Add(Avx.Multiply(vG, u), hv), vOne);
-                        Vector256<double> absDenominator = Avx.And(denominator, vAbsMask);
-                        Vector256<double> sx = Avx.Divide(Avx.Add(Avx.Add(Avx.Multiply(vA, u), bv), vC), denominator);
-                        Vector256<double> sy = Avx.Divide(Avx.Add(Avx.Add(Avx.Multiply(vD, u), ev), vF), denominator);
-                        Vector256<double> ok = Avx.And(
-                            Avx.And(
-                                Avx.Compare(absDenominator, vEps, FloatComparisonMode.OrderedGreaterThanNonSignaling),
-                                Avx.Compare(absDenominator, vInf, FloatComparisonMode.OrderedLessThanNonSignaling)),
-                            Avx.And(
-                                Avx.Compare(Avx.And(sx, vAbsMask), vInf, FloatComparisonMode.OrderedLessThanNonSignaling),
-                                Avx.Compare(Avx.And(sy, vAbsMask), vInf, FloatComparisonMode.OrderedLessThanNonSignaling)));
-                        if (Avx.MoveMask(ok) != 0xF)
-                        {
-                            for (int lane = 0; lane < 4; lane++)
-                                ProcessPixelScalar(sourcePtr, sourceWidth, sourceHeight, sourceStride,
-                                    cropPtr, outputWidth, unrotatedWidth, unrotatedHeight,
-                                    rotateVertical, a, b, c, d, e, f, g, h, x + lane, y, v);
-                            continue;
-                        }
-                        Avx.Store(sxArr, sx);
-                        Avx.Store(syArr, sy);
-                        for (int lane = 0; lane < 4; lane++)
-                        {
-                            double pixelX = sxArr[lane], pixelY = syArr[lane];
-                            int xBase = (int)Math.Floor(pixelX), yBase = (int)Math.Floor(pixelY);
-                            int destinationX = rotateVertical ? unrotatedHeight - 1 - y : x + lane;
-                            int destinationY = rotateVertical ? x + lane : y;
-                            int destination = checked((destinationY * outputWidth + destinationX) * 3);
-                            // The SIMD sampler loads 4 bytes per tap, so it needs
-                            // one extra in-bounds column on the right.
-                            if (xBase >= 1 && xBase < sourceWidth - 3 && yBase >= 1 && yBase < sourceHeight - 2)
-                                Warp.SampleCubicAvx(sourcePtr, sourceStride, pixelX, pixelY,
-                                    xBase, yBase, cropPtr, destination);
-                            else
-                                SamplePixelCubic(sourcePtr, sourceWidth, sourceHeight, sourceStride,
-                                    pixelX, pixelY, cropPtr, destination);
-                        }
-                    }
-                }
-                #endif
-
+                Warp.MapRow(sourcePtr, sourceWidth, sourceHeight, sourceStride, cropPtr, outputWidth,
+                    unrotatedWidth, unrotatedHeight, rotateVertical, a, b, c, d, e, f, g, h, y, v, ref x);
                 for (; x < unrotatedWidth; x++)
-                    ProcessPixelScalar(sourcePtr, sourceWidth, sourceHeight, sourceStride,
+                    Warp.ProcessPixel(sourcePtr, sourceWidth, sourceHeight, sourceStride,
                         cropPtr, outputWidth, unrotatedWidth, unrotatedHeight,
                         rotateVertical, a, b, c, d, e, f, g, h, x, y, v);
             }
         }
-    }
-
-    private static unsafe void ProcessPixelScalar(byte* sourcePtr, int sourceWidth, int sourceHeight,
-        int sourceStride, byte* cropPtr, int outputWidth, int unrotatedWidth, int unrotatedHeight,
-        bool rotateVertical, double a, double b, double c, double d, double e, double f,
-        double g, double h, int x, int y, double v)
-    {
-        double u = (double)x / unrotatedWidth;
-        double denominator = g * u + h * v + 1;
-        if (!MathCompat.IsFinite(denominator) || Math.Abs(denominator) <= PerspectiveEpsilon)
-            throw new InvalidDataException("Invalid perspective transform.");
-        double sx = (a * u + b * v + c) / denominator;
-        double sy = (d * u + e * v + f) / denominator;
-        if (!MathCompat.IsFinite(sx) || !MathCompat.IsFinite(sy))
-            throw new InvalidDataException("Invalid perspective transform.");
-        int destinationX = rotateVertical ? unrotatedHeight - 1 - y : x;
-        int destinationY = rotateVertical ? x : y;
-        int destination = checked((destinationY * outputWidth + destinationX) * 3);
-        SamplePixelCubic(sourcePtr, sourceWidth, sourceHeight, sourceStride,
-            sx, sy, cropPtr, destination);
     }
 
     [MethodImpl(MethodImplCompat.AggressiveOptimization)]
@@ -292,78 +148,6 @@ internal static class PPOCRCrop
     }
 
     private static double Distance(Point a, Point b) => Math.Sqrt((b.X - a.X) * (b.X - a.X) + (b.Y - a.Y) * (b.Y - a.Y));
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe void SamplePixelCubic(byte* source, int width, int height, int stride,
-        double x, double y, byte* destination, int destinationOffset)
-    {
-        int xBase = (int)Math.Floor(x), yBase = (int)Math.Floor(y);
-        Span<double> xWeights =
-        [
-            CubicWeight(x - (xBase - 1)),
-            CubicWeight(x - xBase),
-            CubicWeight(x - (xBase + 1)),
-            CubicWeight(x - (xBase + 2)),
-        ];
-        Span<double> yWeights =
-        [
-            CubicWeight(y - (yBase - 1)),
-            CubicWeight(y - yBase),
-            CubicWeight(y - (yBase + 1)),
-            CubicWeight(y - (yBase + 2)),
-        ];
-        double value0 = 0, value1 = 0, value2 = 0;
-        if (xBase >= 1 && xBase < width - 2 && yBase >= 1 && yBase < height - 2)
-        {
-            for (int ky = 0; ky < 4; ky++)
-            {
-                double wy = yWeights[ky];
-                int sourceOffset = (yBase + ky - 1) * stride + (xBase - 1) * 3;
-                for (int kx = 0; kx < 4; kx++, sourceOffset += 3)
-                {
-                    double wx = xWeights[kx];
-                    value0 += source[sourceOffset] * wx * wy;
-                    value1 += source[sourceOffset + 1] * wx * wy;
-                    value2 += source[sourceOffset + 2] * wx * wy;
-                }
-            }
-        }
-        else
-        {
-            for (int ky = 0; ky < 4; ky++)
-            {
-                double wy = yWeights[ky];
-                int sy = Clamp(yBase + ky - 1, height);
-                for (int kx = 0; kx < 4; kx++)
-                {
-                    double wx = xWeights[kx];
-                    int sx = Clamp(xBase + kx - 1, width);
-                    int sourceOffset = sy * stride + sx * 3;
-                    value0 += source[sourceOffset] * wx * wy;
-                    value1 += source[sourceOffset + 1] * wx * wy;
-                    value2 += source[sourceOffset + 2] * wx * wy;
-                }
-            }
-        }
-        destination[destinationOffset] = value0 <= 0 ? (byte)0 :
-            value0 >= 255 ? (byte)255 : checked((byte)Math.Floor(value0 + 0.5));
-        destination[destinationOffset + 1] = value1 <= 0 ? (byte)0 :
-            value1 >= 255 ? (byte)255 : checked((byte)Math.Floor(value1 + 0.5));
-        destination[destinationOffset + 2] = value2 <= 0 ? (byte)0 :
-            value2 >= 255 ? (byte)255 : checked((byte)Math.Floor(value2 + 0.5));
-    }
-
-    // OpenCV INTER_CUBIC uses the Keys cubic kernel with a=-0.75.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static double CubicWeight(double x)
-    {
-        x = Math.Abs(x);
-        const double a = -0.75;
-        return x <= 1 ? (a + 2) * x * x * x - (a + 3) * x * x + 1
-            : x < 2 ? a * x * x * x - 5 * a * x * x + 8 * a * x - 4 * a : 0;
-    }
-
-    private static int Clamp(int value, int limit) => value < 0 ? 0 : value >= limit ? limit - 1 : value;
 
     private static void ValidateSource(ReadOnlySpan<byte> source, int width, int height, int stride)
     {

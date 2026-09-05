@@ -19,7 +19,7 @@ internal static partial class Conv3x3Stride2
         int intraOpThreads = 1)
     {
         #if !NETSTANDARD2_0
-        if (Avx.IsSupported)
+        if (Avx512F.IsSupported && (outputChannels & 3) == 0)
         {
             int inputPlane = checked(inputHeight * inputWidth);
             int outputPlane = checked(outputHeight * outputWidth);
@@ -49,20 +49,45 @@ internal static partial class Conv3x3Stride2
                 }
                 return true;
             }
-            if (Avx512F.IsSupported)
+            if ((outputChannels & 7) == 0)
             {
-                if ((outputChannels & 7) == 0)
+                Conv3x3Stride2EightOutputsAvx512Unsafe(input, weights, bias, output, batch, inputChannels,
+                    inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
+                return true;
+            }
+            Conv3x3Stride2FourOutputsAvx512(input, weights, bias, output, batch, inputChannels,
+                inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
+            return true;
+        }
+        else if (Avx.IsSupported)
+        {
+            int inputPlane = checked(inputHeight * inputWidth);
+            int outputPlane = checked(outputHeight * outputWidth);
+            int weightsPerOutput = checked(inputChannels * 9);
+            if (intraOpThreads > 1 && batch == 1 && outputChannels >= 8 &&
+                (long)outputChannels * weightsPerOutput * outputPlane >= IntraOpMinWork)
+            {
+                int workers = Math.Min(intraOpThreads, outputChannels / 4);
+                fixed (float* inputPtr = input, weightsPtr = weights, biasPtr = bias, outputPtr = output)
                 {
-                    Conv3x3Stride2EightOutputsAvx512Unsafe(input, weights, bias, output, batch, inputChannels,
-                        inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
-                    return true;
+                    nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                        biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                    int inputLength = input.Length, weightsLength = weights.Length, biasLength = bias.Length,
+                        outputLength = output.Length;
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int begin = (outputChannels * worker / workers) & ~3;
+                        int end = worker == workers - 1 ? outputChannels : (outputChannels * (worker + 1) / workers) & ~3;
+                        if (end <= begin) return;
+                        int count = end - begin;
+                        ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                        ReadOnlySpan<float> w = new ReadOnlySpan<float>((void*)weightsAddress, weightsLength).Slice(begin * weightsPerOutput, count * weightsPerOutput);
+                        ReadOnlySpan<float> b = biasLength == 0 ? [] : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(begin, count);
+                        Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength).Slice(begin * outputPlane, count * outputPlane);
+                        Try(inSpan, w, b, outSpan, 1, inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, count, 1);
+                    });
                 }
-                if ((outputChannels & 3) == 0)
-                {
-                    Conv3x3Stride2FourOutputsAvx512(input, weights, bias, output, batch, inputChannels,
-                        inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
-                    return true;
-                }
+                return true;
             }
             if ((outputChannels & 7) == 0)
             {
@@ -147,17 +172,18 @@ internal static partial class Conv3x3Stride2
     internal static unsafe bool TryPacked(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,
-        int outputChannels,         int intraOpThreads = 1)
+        int outputChannels, int intraOpThreads = 1)
     {
 #if NETSTANDARD2_0
         return false;
 #else
-        if (!Avx.IsSupported || outputChannels < 8 || (outputChannels & 7) != 0)
+        if (outputChannels < 8 || (outputChannels & 7) != 0)
             return false;
         int outputPlane = checked(outputHeight * outputWidth);
         int blocks = outputChannels / 8;
         const int weightsPerInput = 9 * 8;
-        if (intraOpThreads > 1 && batch == 1 && blocks >= 2)
+        if (intraOpThreads > 1 && batch == 1 && blocks >= 2 &&
+            (Avx512F.IsSupported || Avx.IsSupported))
         {
             int workers = Math.Min(intraOpThreads, blocks);
             fixed (float* inputPtr = input, weightsPtr = packedWeights,
@@ -193,15 +219,18 @@ internal static partial class Conv3x3Stride2
                 inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
             return true;
         }
-
-        if ((outputChannels & 15) == 0)
-            Conv3x3Stride2SixteenOutputsPackedUnsafe(input, packedWeights, bias, output,
-                batch, inputChannels, inputHeight, inputWidth, outputHeight, outputWidth,
-                outputChannels);
-        else
-            Conv3x3Stride2EightOutputsPackedUnsafe(input, packedWeights, bias, output, batch,
-                inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
-        return true;
+        else if (Avx.IsSupported)
+        {
+            if ((outputChannels & 15) == 0)
+                Conv3x3Stride2SixteenOutputsPackedUnsafe(input, packedWeights, bias, output,
+                    batch, inputChannels, inputHeight, inputWidth, outputHeight, outputWidth,
+                    outputChannels);
+            else
+                Conv3x3Stride2EightOutputsPackedUnsafe(input, packedWeights, bias, output, batch,
+                    inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
+            return true;
+        }
+        return false;
 #endif
     }
 }

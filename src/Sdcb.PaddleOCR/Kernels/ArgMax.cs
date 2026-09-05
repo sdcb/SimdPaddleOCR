@@ -65,10 +65,7 @@ internal static class ArgMax
             }
             throw new InvalidDataException("Recognizer output is invalid.");
         }
-#endif
-
-#if !NETSTANDARD2_0
-        if (Avx2.IsSupported && row.Length >= 8)
+        else if (Avx2.IsSupported && row.Length >= 8)
         {
             fixed (float* rowPtr = row)
             {

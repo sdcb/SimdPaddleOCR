@@ -27,7 +27,6 @@
     <Compile Remove="**/*Avx*.cs" />
     <Compile Remove="**/*Avx512*.cs" />
     <Compile Remove="Kernels/Conv1x1.Int8Vnni.cs" />
-    <Compile Remove="Kernels/Warp.cs" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Sdcb.PaddleOCR" />

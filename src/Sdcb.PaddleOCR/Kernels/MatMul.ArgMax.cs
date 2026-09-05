@@ -20,8 +20,9 @@ internal static partial class MatMul
 #if !NETSTANDARD2_0
         if (Avx512F.IsSupported && rows >= 8 && (rows & 7) == 0)
             return true;
-        if (Avx2.IsSupported && rows >= 4 && (rows & 3) == 0)
+        else if (Avx2.IsSupported && rows >= 4 && (rows & 3) == 0)
             return true;
+        else
 #endif
         return Vector.IsHardwareAccelerated && Vector<float>.Count > 0 &&
             (16 % Vector<float>.Count) == 0;
@@ -43,14 +44,14 @@ internal static partial class MatMul
                 indices, scores, batch, rows, inner, columns);
             return true;
         }
-        if (Avx2.IsSupported && rows >= 4 && (rows & 3) == 0)
+        else if (Avx2.IsSupported && rows >= 4 && (rows & 3) == 0)
         {
             MatMulArgMaxPackedAvx(input, weights, packedWeights, bias,
                 indices, scores, batch, rows, inner, columns);
             return true;
         }
+        else
         #endif
-
         if (Vector.IsHardwareAccelerated && (16 % Vector<float>.Count) == 0)
         {
             MatMulArgMaxPackedVector(input, weights, packedWeights!, bias,
