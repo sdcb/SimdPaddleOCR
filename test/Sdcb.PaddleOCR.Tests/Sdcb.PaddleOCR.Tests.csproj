@@ -22,4 +22,8 @@
     <ProjectReference Include="..\..\src\models\Sdcb.PaddleOCR.Models.ChineseV6Medium\Sdcb.PaddleOCR.Models.ChineseV6Medium.csproj" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
   </ItemGroup>
+  <ItemGroup Condition="'$(UseNs20Library)' == 'true'">
+    <!-- SetTargetFramework does not flow ns2.0 PackageReferences into the net10 host deps.json. -->
+    <PackageReference Include="Microsoft.Bcl.Numerics" Version="10.0.11" />
+  </ItemGroup>
 </Project>

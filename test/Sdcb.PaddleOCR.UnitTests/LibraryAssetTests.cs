@@ -17,4 +17,11 @@ public class LibraryAssetTests
         Assert.Contains("NETCoreApp", tfm, StringComparison.OrdinalIgnoreCase);
 #endif
     }
+
+    [Fact]
+    public void LibraryAssemblyReferencesLoad()
+    {
+        foreach (AssemblyName name in typeof(PaddleOcrAll).Assembly.GetReferencedAssemblies())
+            Assembly.Load(name);
+    }
 }
