@@ -23,7 +23,7 @@ Sources:
 - <https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx>
 - <https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx>
 - <https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx>
-- <https://huggingface.co/PaddlePaddle/PP-LCNet_x0_25_textline_ori_onnx_infer>
+- <https://huggingface.co/PaddlePaddle/PP-LCNet_x0_25_textline_ori_onnx>
 
 The model files are distributed for use with this project and remain subject
 to the upstream model terms. PaddleOCR and PP-OCR are trademarks of their
