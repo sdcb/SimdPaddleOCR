@@ -36,7 +36,9 @@ sealed class Run
     public Dictionary<string, double> Operators { get; init; } = [];
     public Dictionary<string, double> Conv { get; init; } = [];
 
-    public bool IsSharp => Engine != "c";
+    public bool IsSharp => Engine is "sharp" or "";
+    public bool IsC => Engine == "c";
+    public bool IsOpenVino => Engine == "openvino";
 
     public bool IsTiny4wDefault =>
         IsSharp && Model == "tiny" && Workers == 4 && Simd.Length == 0;
@@ -48,9 +50,9 @@ sealed class Run
         IsSharp && Rid == "linux-x64" && Workers == 4 && Simd.Length == 0 &&
         Model is "tiny" or "small" or "medium";
 
-    public bool IsWinX64TinyCSharpVsC =>
+    public bool IsWinX64TinyEngineCompare =>
         Rid == "win-x64" && Model == "tiny" && Simd.Length == 0 &&
-        Workers is 1 or 4;
+        ((IsSharp || IsC) && Workers is 1 or 4 || IsOpenVino);
 
     public int SimdRank => Simd switch
     {
@@ -100,6 +102,33 @@ sealed class Run
         }
 
         var (mean, median, p95) = Stats(totals);
+        int n = totals.Count;
+        if (root is JsonObject rootObj && rootObj["summary"] is JsonObject summary)
+        {
+            if (summary["n"] is JsonNode nNode)
+            {
+                try { n = nNode.GetValue<int>(); }
+                catch { /* keep computed n */ }
+            }
+            if (summary["total_ms"] is JsonObject t)
+            {
+                mean = t["mean"]?.GetValue<double>() ?? mean;
+                median = t["median"]?.GetValue<double>() ?? median;
+                p95 = t["p95"]?.GetValue<double>() ?? p95;
+            }
+            if (summary["stage_ms_mean"] is JsonObject stageMean && stages.Count == 0)
+                foreach ((string key, JsonNode? value) in stageMean)
+                    if (value is JsonValue)
+                        stages[key] = [value.GetValue<double>()];
+            if (summary["operator_ms_mean"] is JsonObject opMean && ops.Count == 0)
+                foreach ((string key, JsonNode? value) in opMean)
+                    if (value is JsonValue)
+                        ops[key] = [value.GetValue<double>()];
+            if (summary["conv_class_ms_mean"] is JsonObject convMean && conv.Count == 0)
+                foreach ((string key, JsonNode? value) in convMean)
+                    if (value is JsonValue)
+                        conv[key] = [value.GetValue<double>()];
+        }
         string rid = meta?["rid"]?.GetValue<string>() ?? "";
         string engine = meta?["mode"]?.GetValue<string>() ?? "sharp";
         if (engine.Length == 0) engine = "sharp";
@@ -142,7 +171,7 @@ sealed class Run
             Cpu = meta?["cpu"]?.GetValue<int>() ?? 0,
             CpuName = meta?["cpuName"]?.GetValue<string>(),
             MemoryMb = Mb(meta?["memoryMb"]),
-            N = totals.Count,
+            N = n,
             Mean = mean,
             Median = median,
             P95 = p95,

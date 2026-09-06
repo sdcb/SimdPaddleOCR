@@ -85,8 +85,108 @@ static class BenchSummary
     public static JsonObject WrapWithMeta(List<BenchmarkRow> rows, JsonObject meta) => new()
     {
         ["meta"] = meta,
+        ["summary"] = BuildSummary(rows, meta),
         ["rows"] = JsonSerializer.SerializeToNode(rows, BenchJsonContext.Default.ListBenchmarkRow)!.AsArray(),
     };
+
+    public static JsonObject BuildSummary(List<BenchmarkRow> rows, JsonObject meta)
+    {
+        BenchmarkRow? warmup = rows.FirstOrDefault(r => r.Warmup);
+        List<BenchmarkRow> measured = rows.Where(r => !r.Warmup).ToList();
+        double[] totals = measured.Select(r => r.TotalMs).ToArray();
+        var (mean, median, p95) = Stats(totals);
+        BenchmarkRow? slowest = measured.Count == 0 ? null : measured.MaxBy(r => r.TotalMs);
+        int lineTotal = measured.Sum(r => r.Lines);
+        double? wsLoaded = meta["working_set_mb_loaded"]?.GetValue<double>();
+        double? wsLast = meta["working_set_mb_last"]?.GetValue<double>();
+        var summary = new JsonObject
+        {
+            ["n"] = measured.Count,
+            ["warmup"] = rows.Count(r => r.Warmup),
+            ["total_ms"] = new JsonObject
+            {
+                ["mean"] = mean,
+                ["median"] = median,
+                ["p95"] = p95,
+                ["min"] = totals.Length == 0 ? 0 : totals.Min(),
+                ["max"] = totals.Length == 0 ? 0 : totals.Max(),
+                ["sum"] = totals.Length == 0 ? 0 : totals.Sum(),
+            },
+            ["img_per_s"] = mean > 0 ? 1000.0 / mean : 0,
+            ["lines"] = new JsonObject
+            {
+                ["mean"] = measured.Count == 0 ? 0 : (double)lineTotal / measured.Count,
+                ["total"] = lineTotal,
+            },
+        };
+        if (warmup is not null)
+            summary["warmup_ms"] = warmup.TotalMs;
+        if (slowest is not null)
+        {
+            summary["slowest"] = new JsonObject
+            {
+                ["file"] = slowest.File,
+                ["total_ms"] = slowest.TotalMs,
+            };
+        }
+        if (wsLoaded is { } loaded && wsLast is { } last)
+            summary["working_set_mb_delta"] = last - loaded;
+
+        JsonObject stageMeans = MeanDict(measured.Select(r => r.StageMs));
+        if (stageMeans.Count > 0)
+            summary["stage_ms_mean"] = stageMeans;
+        JsonObject operatorMeans = MeanMetricDict(measured.Select(r => r.OperatorMs));
+        if (operatorMeans.Count > 0)
+            summary["operator_ms_mean"] = operatorMeans;
+        JsonObject convMeans = MeanMetricDict(measured.Select(r => r.ConvClassMs));
+        if (convMeans.Count > 0)
+            summary["conv_class_ms_mean"] = convMeans;
+        return summary;
+    }
+
+    private static JsonObject MeanDict(IEnumerable<Dictionary<string, double>?> sources)
+    {
+        var sums = new Dictionary<string, (double Sum, int Count)>();
+        foreach (Dictionary<string, double>? dict in sources)
+        {
+            if (dict is null) continue;
+            foreach ((string key, double value) in dict)
+            {
+                sums.TryGetValue(key, out (double Sum, int Count) cur);
+                sums[key] = (cur.Sum + value, cur.Count + 1);
+            }
+        }
+        var result = new JsonObject();
+        foreach (string key in OrderedSummaryKeys(sums.Keys.ToHashSet()))
+            result[key] = sums[key].Sum / sums[key].Count;
+        return result;
+    }
+
+    private static JsonObject MeanMetricDict(IEnumerable<Dictionary<string, BenchmarkMetric>?> sources)
+    {
+        var sums = new Dictionary<string, (double Sum, int Count)>();
+        foreach (Dictionary<string, BenchmarkMetric>? dict in sources)
+        {
+            if (dict is null) continue;
+            foreach ((string key, BenchmarkMetric metric) in dict)
+            {
+                sums.TryGetValue(key, out (double Sum, int Count) cur);
+                sums[key] = (cur.Sum + metric.Ms, cur.Count + 1);
+            }
+        }
+        var result = new JsonObject();
+        foreach ((string key, (double Sum, int Count) value) in
+            sums.OrderByDescending(kv => kv.Value.Sum / kv.Value.Count))
+            result[key] = value.Sum / value.Count;
+        return result;
+    }
+
+    private static IEnumerable<string> OrderedSummaryKeys(HashSet<string> rest)
+    {
+        foreach (string k in StageOrder)
+            if (rest.Remove(k)) yield return k;
+        foreach (string k in rest.OrderBy(k => k)) yield return k;
+    }
 
     public static JsonObject AccuracyNode(BenchmarkAccuracy accuracy) => new()
     {

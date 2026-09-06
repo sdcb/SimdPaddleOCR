@@ -9,17 +9,12 @@ using System.Text.Json.Nodes;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using Sdcb.SimdPaddleOCR;
-using Sdcb.SimdPaddleOCR.OnnxSharp;
-using Sdcb.SimdPaddleOCR.Models.ChineseV6Medium;
-using Sdcb.SimdPaddleOCR.Models.ChineseV6Small;
-using Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny;
 using Sdcb.SimdPaddleOCR.Tests;
-using LwPpocrCSharp;
 using ImageSharpImage = SixLabors.ImageSharp.Image;
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
-    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c] [--c-assets <dir>]");
+    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c|openvino] [--c-assets <dir>]");
     Console.WriteLine("       --summarize <file...> [--input <dataset>] [--out-md <path>]");
     return args.Length == 0 ? 2 : 0;
 }
@@ -52,15 +47,8 @@ if (workers is < 1 or > 16)
     throw new ArgumentException("--workers must be 1..16");
 if (modelType is not ("tiny" or "small" or "medium"))
     throw new ArgumentException("--model must be tiny, small, or medium");
-if (engineName is not ("sharp" or "c"))
-    throw new ArgumentException("--engine must be sharp or c");
-if (engineName == "c")
-{
-    if (!OperatingSystem.IsWindows())
-        throw new PlatformNotSupportedException("--engine c requires Windows (lw_ppocr_c.dll)");
-    if (modelType != "tiny")
-        throw new ArgumentException("--engine c only supports --model tiny");
-}
+if (engineName is not ("sharp" or "c" or "openvino"))
+    throw new ArgumentException("--engine must be sharp, c, or openvino");
 if (inputDir is null || outPath is null)
     throw new ArgumentException("--input and --out are required");
 
@@ -93,153 +81,44 @@ for (int i = 0; i < files.Length; i++)
     decoded[i] = (Path.GetFileName(files[i]), pixels, image.Width, image.Height);
 }
 
-const int cacheEntries = 32;
-List<BenchmarkRow> rows;
-double wsLoaded;
-double wsPeak;
-JsonObject extra = [];
+using IBenchEngine engine = BenchEngines.Create(engineName, modelType, workers, cAssetsDir);
+double wsLoaded = WorkingSetMb();
+double wsPeak = wsLoaded;
+Console.WriteLine(engine.LoadedMessage(wsLoaded));
 
-if (engineName == "c")
+List<BenchmarkRow> rows = [];
+for (int index = 0; index < decoded.Length; index++)
 {
-    CAssets.EnsureAsync(cAssetsDir).GetAwaiter().GetResult();
-    CAssets.CopyDll(cAssetsDir);
-    string dictPath = CAssets.WriteDictionary(cAssetsDir);
-    extra["cAssets"] = cAssetsDir;
-    extra["cDll"] = CAssets.BaseUrl + CAssets.DllName;
-    extra["cDet"] = CAssets.BaseUrl + CAssets.DetName;
-    extra["cCls"] = CAssets.BaseUrl + CAssets.ClsName;
-    extra["cRec"] = CAssets.BaseUrl + CAssets.RecName;
-    extra["cDict"] = dictPath;
-
-    using NativeOcr engine = new(
-        CAssets.DetPath(cAssetsDir),
-        CAssets.ClsPath(cAssetsDir),
-        CAssets.RecPath(cAssetsDir),
-        dictPath,
-        useDirectionClassification: true,
-        (uint)workers);
-    wsLoaded = WorkingSetMb();
-    wsPeak = wsLoaded;
-    Console.WriteLine($"loaded working_set={wsLoaded:F1} MB engine=c");
-    rows = [];
-    for (int index = 0; index < decoded.Length; index++)
+    var d = decoded[index];
+    Stopwatch sw = Stopwatch.StartNew();
+    BenchEngineOutput result = engine.Run(d.Pixels, d.W, d.H, d.W * 3);
+    sw.Stop();
+    double ws = WorkingSetMb();
+    if (ws > wsPeak) wsPeak = ws;
+    rows.Add(new BenchmarkRow
     {
-        var d = decoded[index];
-        Stopwatch sw = Stopwatch.StartNew();
-        OcrResponse result = engine.RecognizeDecoded(new DecodedBgrImage
-        {
-            Pixels = d.Pixels,
-            Width = d.W,
-            Height = d.H,
-            Stride = d.W * 3,
-        });
-        sw.Stop();
-        double ws = WorkingSetMb();
-        if (ws > wsPeak) wsPeak = ws;
-        rows.Add(new BenchmarkRow
-        {
-            File = d.Name,
-            Width = d.W,
-            Height = d.H,
-            Warmup = index == 0,
-            TotalMs = sw.Elapsed.TotalMilliseconds,
-            Detected = result.detected_count,
-            Lines = result.result.Count,
-            Texts = result.result.Select(x => x.text).ToArray(),
-            Rotations = result.result.Select(x => x.rotation).ToArray(),
-            WorkingSetMb = ws,
-        });
-        Console.WriteLine($"{index + 1}/100 {d.Name} total={sw.Elapsed.TotalMilliseconds:F3} lines={result.result.Count} ws={ws:F1}MB");
-    }
-}
-else
-{
-    var bundle = modelType switch
-    {
-        "tiny" => ChineseV6TinyModels.Default,
-        "small" => ChineseV6SmallModels.Default,
-        "medium" => ChineseV6MediumModels.Default,
-        _ => throw new ArgumentException(modelType),
-    };
-
-    using PaddleOcrAll engine = PaddleOcrAll.Load(bundle, new PaddleOcrOptions
-    {
-        LineWorkerCount = workers,
-        Detector = new PaddleOcrDetectorOptions { MaxSessionCacheEntries = cacheEntries },
-        Recognizer = new PaddleOcrRecognizerOptions { AdaptiveWidth = true, TargetWidth = 320 },
+        File = d.Name,
+        Width = d.W,
+        Height = d.H,
+        Warmup = index == 0,
+        TotalMs = sw.Elapsed.TotalMilliseconds,
+        StageMs = result.StageMs,
+        StageCalls = result.StageCalls,
+        OperatorMs = result.OperatorMs,
+        ConvClassMs = result.ConvClassMs,
+        Detected = result.Detected,
+        Lines = result.Texts.Length,
+        Hash = result.Hash,
+        Texts = result.Texts,
+        Rotations = result.Rotations,
+        WorkingSetMb = ws,
     });
-    PipelineProfiler.Enable(true);
-    InferenceSession.EnableProfiling(true);
-    extra["cacheEntries"] = cacheEntries;
-    extra["effectiveWorkers"] = engine.EffectiveLineWorkerCount;
-    wsLoaded = WorkingSetMb();
-    wsPeak = wsLoaded;
-    Console.WriteLine($"loaded working_set={wsLoaded:F1} MB engine=sharp workers={engine.EffectiveLineWorkerCount}/{workers} cpu={Environment.ProcessorCount}");
-
-    rows = [];
-    var prev = PipelineProfiler.Snapshot();
-    var prevOp = InferenceSession.ProfileSnapshot();
-    var prevConv = InferenceSession.ConvClassProfileSnapshot();
-    for (int index = 0; index < decoded.Length; index++)
-    {
-        var d = decoded[index];
-        Stopwatch sw = Stopwatch.StartNew();
-        PaddleOcrResult result = engine.Run(d.Pixels, d.W, d.H, d.W * 3);
-        sw.Stop();
-        double ws = WorkingSetMb();
-        if (ws > wsPeak) wsPeak = ws;
-        var cur = PipelineProfiler.Snapshot();
-        var curOp = InferenceSession.ProfileSnapshot();
-        var curConv = InferenceSession.ConvClassProfileSnapshot();
-        var stageMs = new Dictionary<string, double>();
-        var stageCalls = new Dictionary<string, long>();
-        for (int s = 0; s < PipelineProfiler.StageCount; s++)
-        {
-            stageMs[PipelineProfiler.StageNames[s]] = cur[s].Milliseconds - prev[s].Milliseconds;
-            stageCalls[PipelineProfiler.StageNames[s]] = cur[s].Calls - prev[s].Calls;
-        }
-        var ops = new Dictionary<string, BenchmarkMetric>();
-        string[] opNames = Enum.GetNames<OperatorId>();
-        for (int op = 1; op < opNames.Length; op++)
-        {
-            double ms = (curOp[op].Ticks - prevOp[op].Ticks) * 1000.0 / Stopwatch.Frequency;
-            long calls = curOp[op].Calls - prevOp[op].Calls;
-            if (calls > 0)
-                ops[opNames[op]] = new BenchmarkMetric { Ms = ms, Calls = calls };
-        }
-        var conv = new Dictionary<string, BenchmarkMetric>();
-        string[] convNames = ["Conv1x1", "Conv3x3", "Depthwise3x3", "Stride2Conv3x3", "OtherConv"];
-        for (int c = 0; c < 5; c++)
-        {
-            double ms = (curConv[c].Ticks - prevConv[c].Ticks) * 1000.0 / Stopwatch.Frequency;
-            long calls = curConv[c].Calls - prevConv[c].Calls;
-            if (calls > 0)
-                conv[convNames[c]] = new BenchmarkMetric { Ms = ms, Calls = calls };
-        }
-        rows.Add(new BenchmarkRow
-        {
-            File = d.Name,
-            Width = d.W,
-            Height = d.H,
-            Warmup = index == 0,
-            TotalMs = sw.Elapsed.TotalMilliseconds,
-            StageMs = stageMs,
-            StageCalls = stageCalls,
-            OperatorMs = ops,
-            ConvClassMs = conv,
-            Detected = result.DetectedCount,
-            Lines = result.Lines.Length,
-            Hash = $"{result.PackedTextHash:x16}",
-            Texts = result.Lines.Select(x => x.Text).ToArray(),
-            Rotations = result.Lines.Select(x => x.AppliedRotationDegrees).ToArray(),
-            WorkingSetMb = ws,
-        });
-        prev = cur;
-        prevOp = curOp;
-        prevConv = curConv;
-        Console.WriteLine($"{index + 1}/100 {d.Name} total={sw.Elapsed.TotalMilliseconds:F3} det={stageMs["det_graph"]:F2} lines={result.Lines.Length} ws={ws:F1}MB");
-    }
+    string det = result.StageMs is { } stages && stages.TryGetValue("det_graph", out double detMs)
+        ? $" det={detMs:F2}" : "";
+    Console.WriteLine($"{index + 1}/100 {d.Name} total={sw.Elapsed.TotalMilliseconds:F3}{det} lines={result.Texts.Length} ws={ws:F1}MB");
 }
+
+JsonObject extra = engine.Extra;
 
 double wsLast = rows.Count > 0 ? rows[^1].WorkingSetMb : wsLoaded;
 var meta = new JsonObject

@@ -83,6 +83,12 @@ jobs:
             workers: 1
             model: tiny
             engine: c
+          - name: win-x64-tiny-openvino
+            os: windows-2025
+            rid: win-x64
+            workers: 4
+            model: tiny
+            engine: openvino
           - name: win-x86-tiny-4w
             os: windows-2025
             rid: win-x86
