@@ -107,7 +107,7 @@ finally
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Medium` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium) | PP-OCRv6 medium；`ChineseV6MediumModels.Default` |
 | `Sdcb.SimdPaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.TextLineOrientation) | PP-LCNet 文本行方向 CLS，被三个中文模型包传递引用 |
 
-每个 `IPaddleOcrModelProvider` 提供 `Name`、`Kind`、`Format`、语言和版本元数据以及 `OpenRead()` / `OpenReadAsync()`。完整 OCR 组合由 `PaddleOcrModelBundle` 表达（DET、REC、字典和可选 CLS）。当前语言代码为 `zh`。单个模型也可被其他推理实现消费，例如 `ChineseV6TinyModel.Detection.OpenReadAsync()`。`Model`、`Detector`、`Classifier`、`Recognizer` 和 `PaddleOcrAll` 均提供 Stream 加载入口；解析完成后不会继续保留完整的 ONNX 原始字节。
+每个 `IPaddleOcrModelProvider` 提供 `Name`、`Kind`、`Format`、语言和版本元数据以及 `OpenRead()` / `OpenReadAsync()`。完整 OCR 组合由 `PaddleOcrModelBundle` 表达（DET、REC、字典和可选 CLS）。当前语言代码为 `zh`。单个模型也可被其他推理实现消费，例如 `ChineseV6TinyModel.Detection.OpenReadAsync()`。`Model`、`PaddleOcrDetector`、`PaddleOcrClassifier`、`PaddleOcrRecognizer` 和 `PaddleOcrAll` 均提供 Stream 加载入口；解析完成后不会继续保留完整的 ONNX 原始字节。
 
 ## 使用本地模型
 

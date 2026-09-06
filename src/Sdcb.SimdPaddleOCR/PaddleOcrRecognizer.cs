@@ -7,7 +7,7 @@ using Sdcb.SimdPaddleOCR.Kernels;
 namespace Sdcb.SimdPaddleOCR;
 
 /// <summary>Pure managed PP-OCR CTC recognizer accepting BGR crop memory.</summary>
-public sealed class Recognizer : IDisposable
+public sealed class PaddleOcrRecognizer : IDisposable
 {
     private readonly Model _model;
     private readonly string[] _labels;
@@ -20,43 +20,43 @@ public sealed class Recognizer : IDisposable
     private int _pooledCount;
     private bool _disposed;
 
-    public Recognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8, PaddleOcrRecognizerOptions? options = null)
+    public PaddleOcrRecognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8, PaddleOcrRecognizerOptions? options = null)
         : this(model, dictionaryUtf8, options, ownsModel: false)
     {
     }
 
-    public Recognizer(Model model, Stream dictionaryUtf8, PaddleOcrRecognizerOptions? options = null)
+    public PaddleOcrRecognizer(Model model, Stream dictionaryUtf8, PaddleOcrRecognizerOptions? options = null)
         : this(model, ReadDictionary(dictionaryUtf8), options, ownsModel: false)
     {
     }
 
     /// <summary>Loads a recognizer model and dictionary from streams.</summary>
-    public Recognizer(Stream model, Stream dictionaryUtf8, PaddleOcrRecognizerOptions? options = null)
+    public PaddleOcrRecognizer(Stream model, Stream dictionaryUtf8, PaddleOcrRecognizerOptions? options = null)
         : this(LoadOwned(model, dictionaryUtf8), options)
     {
     }
 
     /// <summary>Loads a recognizer model from a stream while accepting an in-memory dictionary.</summary>
-    public Recognizer(Stream model, ReadOnlySpan<byte> dictionaryUtf8,
+    public PaddleOcrRecognizer(Stream model, ReadOnlySpan<byte> dictionaryUtf8,
         PaddleOcrRecognizerOptions? options = null)
         : this(Model.Load(model ?? throw new ArgumentNullException(nameof(model))),
             dictionaryUtf8, options, ownsModel: true)
     {
     }
 
-    private Recognizer((Model Model, byte[] Dictionary) loaded,
+    private PaddleOcrRecognizer((Model Model, byte[] Dictionary) loaded,
         PaddleOcrRecognizerOptions? options)
         : this(loaded.Model, loaded.Dictionary, options, ownsModel: true)
     {
     }
 
-    private Recognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8,
+    private PaddleOcrRecognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8,
         PaddleOcrRecognizerOptions? options, bool ownsModel)
         : this(model, dictionaryUtf8, options, ownsModel, intraOpThreads: 0)
     {
     }
 
-    internal Recognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8,
+    internal PaddleOcrRecognizer(Model model, ReadOnlySpan<byte> dictionaryUtf8,
         PaddleOcrRecognizerOptions? options, bool ownsModel, int intraOpThreads)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
@@ -126,7 +126,7 @@ public sealed class Recognizer : IDisposable
     public PaddleOcrRecognitionResult Recognize(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride = 0)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(Recognizer));
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
         if (sourceStride == 0) sourceStride = checked(sourceWidth * 3);
         if ((long)sourceWidth * sourceHeight > _options.MaxImagePixels)
             throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
@@ -182,7 +182,7 @@ public sealed class Recognizer : IDisposable
 
     private InferenceSession RentSession(int batch, int width)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(Recognizer));
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
         int volume = checked(batch * 3 * 48 * width);
         InferenceSession? session = TryTakeBestFit(volume);
         return session ?? _compiled.CreateRequest();
@@ -237,7 +237,7 @@ public sealed class Recognizer : IDisposable
         int[] widths, int[] heights, ReadOnlySpan<int> lineIndices, int targetWidth,
         PaddleOcrRecognitionResult[] results)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(Recognizer));
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
         int n = lineIndices.Length;
         bool profile = PipelineProfiler.Enabled;
         long t = profile ? PipelineProfiler.Now() : 0;

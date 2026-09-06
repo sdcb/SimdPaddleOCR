@@ -6,7 +6,7 @@ using Sdcb.SimdPaddleOCR.OnnxSharp;
 namespace Sdcb.SimdPaddleOCR;
 
 /// <summary>Pure managed DB detector. The caller supplies packed BGR bytes.</summary>
-public sealed class Detector : IDisposable
+public sealed class PaddleOcrDetector : IDisposable
 {
     private static bool s_profileEnabled;
     private static readonly long[] s_profileTicks = new long[3];
@@ -21,18 +21,18 @@ public sealed class Detector : IDisposable
     private int _pooledCount;
     private bool _disposed;
 
-    public Detector(Model model, PaddleOcrDetectorOptions? options = null, int intraOpThreads = 1)
+    public PaddleOcrDetector(Model model, PaddleOcrDetectorOptions? options = null, int intraOpThreads = 1)
         : this(model, options, intraOpThreads, ownsModel: false)
     {
     }
 
     /// <summary>Loads a detector model from a stream without retaining the serialized payload.</summary>
-    public Detector(Stream model, PaddleOcrDetectorOptions? options = null, int intraOpThreads = 1)
+    public PaddleOcrDetector(Stream model, PaddleOcrDetectorOptions? options = null, int intraOpThreads = 1)
         : this(Model.Load(model ?? throw new ArgumentNullException(nameof(model))), options, intraOpThreads, ownsModel: true)
     {
     }
 
-    private Detector(Model model, PaddleOcrDetectorOptions? options, int intraOpThreads, bool ownsModel)
+    private PaddleOcrDetector(Model model, PaddleOcrDetectorOptions? options, int intraOpThreads, bool ownsModel)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
         _ownsModel = ownsModel;
@@ -100,7 +100,7 @@ public sealed class Detector : IDisposable
     public PaddleOcrDetectionResult Detect(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride = 0)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(Detector));
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrDetector));
         if (sourceStride == 0) sourceStride = checked(sourceWidth * 3);
         int originalWidth = sourceWidth, originalHeight = sourceHeight;
         if ((long)sourceWidth * sourceHeight > _options.MaxImagePixels)
@@ -174,7 +174,7 @@ public sealed class Detector : IDisposable
 
     private InferenceSession RentSession()
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(Detector));
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrDetector));
         if (_sessions.TryTake(out InferenceSession? session))
         {
             Interlocked.Decrement(ref _pooledCount);

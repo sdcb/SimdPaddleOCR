@@ -9,7 +9,7 @@ namespace Sdcb.SimdPaddleOCR;
 /// mutable per-worker state. The input shape is fixed, so pooled sessions need
 /// no reshaping.
 /// </summary>
-public sealed class Classifier : IDisposable
+public sealed class PaddleOcrClassifier : IDisposable
 {
     private const int InputWidth = 160, InputHeight = 80;
     private readonly CompiledModel _compiled;
@@ -19,18 +19,18 @@ public sealed class Classifier : IDisposable
     private readonly PaddleOcrClassifierOptions _options;
     private bool _disposed;
 
-    public Classifier(Model model, PaddleOcrClassifierOptions? options = null)
+    public PaddleOcrClassifier(Model model, PaddleOcrClassifierOptions? options = null)
         : this(model, options, ownsModel: false)
     {
     }
 
     /// <summary>Loads a classifier model from a stream without retaining the serialized payload.</summary>
-    public Classifier(Stream model, PaddleOcrClassifierOptions? options = null)
+    public PaddleOcrClassifier(Stream model, PaddleOcrClassifierOptions? options = null)
         : this(Model.Load(model ?? throw new ArgumentNullException(nameof(model))), options, ownsModel: true)
     {
     }
 
-    private Classifier(Model model, PaddleOcrClassifierOptions? options, bool ownsModel)
+    private PaddleOcrClassifier(Model model, PaddleOcrClassifierOptions? options, bool ownsModel)
     {
         if (model is null) throw new ArgumentNullException(nameof(model));
         try
@@ -55,7 +55,7 @@ public sealed class Classifier : IDisposable
     public PaddleOcrClassificationResult Classify(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride = 0)
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(Classifier));
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrClassifier));
         if (sourceStride == 0) sourceStride = checked(sourceWidth * 3);
         if ((long)sourceWidth * sourceHeight > _options.MaxImagePixels)
             throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
@@ -88,7 +88,7 @@ public sealed class Classifier : IDisposable
 
     private InferenceSession RentSession()
     {
-        if (_disposed) throw new ObjectDisposedException(nameof(Classifier));
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrClassifier));
         if (_sessions.TryTake(out InferenceSession? session))
         {
             Interlocked.Decrement(ref _pooledCount);

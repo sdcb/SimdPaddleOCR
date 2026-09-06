@@ -107,7 +107,7 @@ finally
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Medium` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium) | PP-OCRv6 medium; `ChineseV6MediumModels.Default` |
 | `Sdcb.SimdPaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.TextLineOrientation) | PP-LCNet text-line orientation CLS, transitively referenced by the three Chinese model packages |
 
-Each `IPaddleOcrModelProvider` exposes `Name`, `Kind`, `Format`, language and version metadata, plus `OpenRead()` / `OpenReadAsync()`. A full OCR set is a `PaddleOcrModelBundle` (DET, REC, dictionary, and optional CLS). The current language code is `zh`. Individual models can also be consumed by other inference implementations, for example `ChineseV6TinyModel.Detection.OpenReadAsync()`. `Model`, `Detector`, `Classifier`, `Recognizer`, and `PaddleOcrAll` all accept Stream load entry points; after parsing they do not keep the full raw ONNX bytes.
+Each `IPaddleOcrModelProvider` exposes `Name`, `Kind`, `Format`, language and version metadata, plus `OpenRead()` / `OpenReadAsync()`. A full OCR set is a `PaddleOcrModelBundle` (DET, REC, dictionary, and optional CLS). The current language code is `zh`. Individual models can also be consumed by other inference implementations, for example `ChineseV6TinyModel.Detection.OpenReadAsync()`. `Model`, `PaddleOcrDetector`, `PaddleOcrClassifier`, `PaddleOcrRecognizer`, and `PaddleOcrAll` all accept Stream load entry points; after parsing they do not keep the full raw ONNX bytes.
 
 ## Local models
 

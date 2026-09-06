@@ -22,9 +22,9 @@ public sealed class PaddleOcrAll : IDisposable
 {
     private static bool s_profileEnabled;
     private static readonly long[] s_profileTicks = new long[6];
-    private readonly Detector _detector;
-    private readonly Classifier? _classifier;
-    private readonly Recognizer _recognizer;
+    private readonly PaddleOcrDetector _detector;
+    private readonly PaddleOcrClassifier? _classifier;
+    private readonly PaddleOcrRecognizer _recognizer;
     private readonly PaddleOcrOptions _options;
     private readonly int _lineWorkers;
     private readonly List<byte[]> _cropBuffers = [];
@@ -112,10 +112,10 @@ public sealed class PaddleOcrAll : IDisposable
         if (_options.UseDirectionClassification && classifierModel is null)
             throw new ArgumentNullException(nameof(classifierModel));
         _lineWorkers = Parallelism.ResolveLineWorkers(_options.LineWorkerCount);
-        _detector = new Detector(detectorModel ?? throw new ArgumentNullException(nameof(detectorModel)), _options.Detector,
+        _detector = new PaddleOcrDetector(detectorModel ?? throw new ArgumentNullException(nameof(detectorModel)), _options.Detector,
             ResolveDetectorIntraThreads(_options));
-        _classifier = classifierModel is null ? null : new Classifier(classifierModel, _options.Classifier);
-        _recognizer = new Recognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)),
+        _classifier = classifierModel is null ? null : new PaddleOcrClassifier(classifierModel, _options.Classifier);
+        _recognizer = new PaddleOcrRecognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)),
             dictionaryUtf8, _options.Recognizer, ownsModel: false,
             Parallelism.ResolveRecognizerIntraOp(_lineWorkers));
     }
@@ -376,7 +376,7 @@ public sealed class PaddleOcrAll : IDisposable
         int[] bytes, int[] widths, int[] heights, uint[] labels, float[] clsScores,
         int[] rotations, int[] recWidths)
     {
-        Classifier? classifier = _classifier;
+        PaddleOcrClassifier? classifier = _classifier;
         for (int i = first; i < count; i += stride)
         {
             ReadOnlySpan<byte> crop = cropBuffer.AsSpan(offsets[i], bytes[i]);
@@ -418,14 +418,14 @@ public sealed class PaddleOcrAll : IDisposable
         int[] offsets, int[] bytes, int[] widths, int[] heights, PaddleOcrDetectionBox[] boxes,
         PaddleOcrLine[] lines)
     {
-        Classifier? classifier = _classifier;
-        Recognizer recognizer = _recognizer;
+        PaddleOcrClassifier? classifier = _classifier;
+        PaddleOcrRecognizer recognizer = _recognizer;
         for (int i = first; i < count; i += stride)
             ProcessOne(i, classifier, recognizer, cropBuffer, offsets, bytes, widths, heights,
                 boxes, lines);
     }
 
-    private void ProcessOne(int i, Classifier? classifier, Recognizer recognizer, byte[] cropBuffer,
+    private void ProcessOne(int i, PaddleOcrClassifier? classifier, PaddleOcrRecognizer recognizer, byte[] cropBuffer,
         int[] offsets, int[] bytes, int[] widths, int[] heights, PaddleOcrDetectionBox[] boxes,
         PaddleOcrLine[] lines)
     {
