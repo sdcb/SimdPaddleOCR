@@ -261,11 +261,23 @@ internal static partial class Conv1x1
 #endif
     }
 
+    internal static bool FusesResidualInPackedEight(int outputChannels, int inputChannels,
+        int packedOc8Length)
+    {
+#if NETSTANDARD2_0
+        return false;
+#else
+        return Avx512F.IsSupported && outputChannels >= 8 && (outputChannels & 7) == 0 &&
+            packedOc8Length == checked(outputChannels * inputChannels);
+#endif
+    }
+
     /// <summary>Runs a 1x1 convolution from C's [block4, input, lane] packed weights.</summary>
     internal static unsafe bool TryPacked(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels,
-        int intraOpThreads = 1, PackedConv1x1Int8? packedInt8 = null)
+        int intraOpThreads = 1, PackedConv1x1Int8? packedInt8 = null,
+        ReadOnlySpan<float> packedOc8 = default, ReadOnlySpan<float> residual = default)
     {
         #if !NETSTANDARD2_0
         if (AvxVnni.IsSupported && packedInt8 is not null &&
@@ -280,8 +292,52 @@ internal static partial class Conv1x1
         #endif
 
 
-        // Packed [block4, ic, lane]: 16-OC×ZMM spills on Zen 5; prefer 8-OC / 4-OC.
+        // Packed [block8, ic, 8] for AVX-512 8-OC; [block4, ic, 4] otherwise.
         #if !NETSTANDARD2_0
+        if (Avx512F.IsSupported && outputChannels >= 8 && (outputChannels & 7) == 0 &&
+            packedOc8.Length == checked(outputChannels * inputChannels))
+        {
+            int plane = checked(height * width), blocks8 = outputChannels / 8;
+            if (intraOpThreads > 1 && batch == 1 && blocks8 >= 2 &&
+                (long)outputChannels * inputChannels * plane >= 1_000_000)
+            {
+                int workers = Math.Min(intraOpThreads, blocks8);
+                bool hasResidual = residual.Length == output.Length;
+                fixed (float* inputPtr = input, weightsPtr = packedOc8,
+                    biasPtr = bias, outputPtr = output, residualPtr = residual)
+                {
+                    nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                        biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr,
+                        residualAddress = (nint)residualPtr;
+                    int inputLength = input.Length, weightsLength = packedOc8.Length,
+                        biasLength = bias.Length, outputLength = output.Length;
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int beginBlock = blocks8 * worker / workers, endBlock = blocks8 * (worker + 1) / workers;
+                        if (endBlock <= beginBlock) return;
+                        int shardCout = (endBlock - beginBlock) * 8;
+                        int shardPlane = shardCout * plane;
+                        ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                        ReadOnlySpan<float> weightSpan = new ReadOnlySpan<float>((void*)weightsAddress, weightsLength)
+                            .Slice(beginBlock * inputChannels * 8, (endBlock - beginBlock) * inputChannels * 8);
+                        ReadOnlySpan<float> biasSpan = biasLength == 0 ? []
+                            : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(beginBlock * 8, (endBlock - beginBlock) * 8);
+                        Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
+                            .Slice(beginBlock * 8 * plane, shardPlane);
+                        ReadOnlySpan<float> residualSpan = hasResidual
+                            ? new ReadOnlySpan<float>((void*)residualAddress, outputLength)
+                                .Slice(beginBlock * 8 * plane, shardPlane)
+                            : default;
+                        Conv1x1PackedEightOutputsAvx512Unsafe(inSpan, weightSpan, biasSpan, outSpan, 1,
+                            inputChannels, height, width, shardCout, residualSpan);
+                    });
+                }
+                return true;
+            }
+            Conv1x1PackedEightOutputsAvx512Unsafe(input, packedOc8, bias, output, batch,
+                inputChannels, height, width, outputChannels, residual);
+            return true;
+        }
         if (Avx512F.IsSupported && outputChannels >= 4 && (outputChannels & 3) == 0)
         {
             int plane = checked(height * width), blocks = outputChannels / 4;
@@ -310,9 +366,6 @@ internal static partial class Conv1x1
                         if ((shardCout & 15) == 0 && inputChannels <= 64)
                             Conv1x1PackedSixteenOutputsAvx512Unsafe(inSpan, weightSpan, biasSpan, outSpan, 1,
                                 inputChannels, height, width, shardCout);
-                        else if ((shardCout & 7) == 0)
-                            Conv1x1PackedEightOutputsAvx512Unsafe(inSpan, weightSpan, biasSpan, outSpan, 1,
-                                inputChannels, height, width, shardCout);
                         else
                             Conv1x1PackedAvx512Unsafe(inSpan, weightSpan, biasSpan, outSpan, 1, inputChannels,
                                 height, width, shardCout);
@@ -324,12 +377,6 @@ internal static partial class Conv1x1
             {
                 // 16-OC helps when ic is modest (input reuse beats spill cost).
                 Conv1x1PackedSixteenOutputsAvx512Unsafe(input, packedWeights, bias, output, batch,
-                    inputChannels, height, width, outputChannels);
-                return true;
-            }
-            if ((outputChannels & 7) == 0)
-            {
-                Conv1x1PackedEightOutputsAvx512Unsafe(input, packedWeights, bias, output, batch,
                     inputChannels, height, width, outputChannels);
                 return true;
             }

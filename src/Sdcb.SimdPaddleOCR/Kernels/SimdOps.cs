@@ -137,18 +137,24 @@ internal static class SimdOps
         ref Vector512<float> a5, ref Vector512<float> a6, ref Vector512<float> a7,
         Vector512<float> value, float* weights)
     {
-        a0 = AddMul512(a0, value, weights[0]); a1 = AddMul512(a1, value, weights[1]);
-        a2 = AddMul512(a2, value, weights[2]); a3 = AddMul512(a3, value, weights[3]);
-        a4 = AddMul512(a4, value, weights[4]); a5 = AddMul512(a5, value, weights[5]);
-        a6 = AddMul512(a6, value, weights[6]); a7 = AddMul512(a7, value, weights[7]);
+        a0 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 0), a0);
+        a1 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 1), a1);
+        a2 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 2), a2);
+        a3 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 3), a3);
+        a4 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 4), a4);
+        a5 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 5), a5);
+        a6 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 6), a6);
+        a7 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 7), a7);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static unsafe void AddFourPacked512(ref Vector512<float> a0, ref Vector512<float> a1,
         ref Vector512<float> a2, ref Vector512<float> a3, Vector512<float> value, float* weights)
     {
-        a0 = AddMul512(a0, value, weights[0]); a1 = AddMul512(a1, value, weights[1]);
-        a2 = AddMul512(a2, value, weights[2]); a3 = AddMul512(a3, value, weights[3]);
+        a0 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 0), a0);
+        a1 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 1), a1);
+        a2 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 2), a2);
+        a3 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(weights + 3), a3);
     }
 
     /// <summary>

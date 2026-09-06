@@ -148,6 +148,24 @@ public sealed class CompiledModel
                 StretchLastUse(nodes[i].Inputs[0], i + 2);
                 _fusedSkip[i] = 2;
                 i += 2;
+                continue;
+            }
+            if (MatchConvBiasResidualAdd(nodes, i))
+            {
+                StretchLastUse(nodes[i].Inputs[0], i + 2);
+                uint biasOut = nodes[i + 1].Outputs[0];
+                uint skip = nodes[i + 2].Inputs[0] == biasOut ? nodes[i + 2].Inputs[1] : nodes[i + 2].Inputs[0];
+                StretchLastUse(skip, i + 2);
+                _fusedSkip[i] = 2;
+                i += 2;
+                continue;
+            }
+            if (MatchConvBiasAdd(nodes, i))
+            {
+                StretchLastUse(nodes[i].Inputs[0], i + 1);
+                _fusedSkip[i] = 1;
+                i += 1;
+                continue;
             }
         }
     }
@@ -217,6 +235,44 @@ public sealed class CompiledModel
             Contains(multiply.Inputs, conv.Outputs[0]) &&
             !HasConsumerAfter(conv.Outputs[0], i + 2) &&
             !HasConsumerAfter(hardSigmoid.Outputs[0], i + 2);
+    }
+
+    private bool MatchConvBiasAdd(NodeRecord[] nodes, int i)
+    {
+        if (i + 1 >= nodes.Length) return false;
+        NodeRecord conv = nodes[i], add = nodes[i + 1];
+        if (conv.Operator != OperatorId.Conv || add.Operator != OperatorId.Add ||
+            conv.Inputs.Length != 2 || conv.Outputs.Length != 1 ||
+            add.Inputs.Length != 2 || add.Outputs.Length != 1 ||
+            !Contains(add.Inputs, conv.Outputs[0]) ||
+            HasConsumerAfter(conv.Outputs[0], i + 1))
+            return false;
+        uint bias = add.Inputs[0] == conv.Outputs[0] ? add.Inputs[1] : add.Inputs[0];
+        return IsChannelBiasConstant(bias, conv.Inputs[1]);
+    }
+
+    private bool MatchConvBiasResidualAdd(NodeRecord[] nodes, int i)
+    {
+        if (i + 2 >= nodes.Length || !MatchConvBiasAdd(nodes, i)) return false;
+        NodeRecord biasAdd = nodes[i + 1], residualAdd = nodes[i + 2];
+        if (residualAdd.Operator != OperatorId.Add || residualAdd.Inputs.Length != 2 ||
+            residualAdd.Outputs.Length != 1 ||
+            !Contains(residualAdd.Inputs, biasAdd.Outputs[0]) ||
+            HasConsumerAfter(biasAdd.Outputs[0], i + 2))
+            return false;
+        uint skip = residualAdd.Inputs[0] == biasAdd.Outputs[0]
+            ? residualAdd.Inputs[1] : residualAdd.Inputs[0];
+        return skip != nodes[i].Outputs[0] && !IsChannelBiasConstant(skip, nodes[i].Inputs[1]);
+    }
+
+    private bool IsChannelBiasConstant(uint tensorIndex, uint weightIndex)
+    {
+        TensorRecord tensor = _model.Tensors[checked((int)tensorIndex)];
+        if ((tensor.Flags & Model.TensorConstant) == 0 || tensor.Rank != 4 ||
+            tensor.Dimensions[0] != 1 || tensor.Dimensions[2] != 1 || tensor.Dimensions[3] != 1)
+            return false;
+        TensorRecord weight = _model.Tensors[checked((int)weightIndex)];
+        return weight.Rank >= 1 && tensor.Dimensions[1] == weight.Dimensions[0];
     }
 
     private bool MatchConvTransposeBiasActivation(NodeRecord[] nodes, int i)

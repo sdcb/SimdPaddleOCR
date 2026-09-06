@@ -412,31 +412,31 @@ internal static partial class Conv1x1
     [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedEightOutputsAvx512Unsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
-        int batch, int inputChannels, int height, int width, int outputChannels)
+        int batch, int inputChannels, int height, int width, int outputChannels,
+        ReadOnlySpan<float> residual = default)
     {
-        int plane = checked(height * width), blocks = outputChannels / 4;
-        // Tile spatial so input stays hot across 8-OC blocks. REC hot shapes
-        // (ic=192/384, plane~600–1500) are only ~0.5MB — below the old 1MB gate —
-        // so without tiling each of the cout/8 passes re-streams the full plane.
+        int plane = checked(height * width), blocks = outputChannels / 8;
+        // Rec activations often fit in Zen 5 L2 (~0.5–1.5MB). Tiny spatial
+        // tiles were meant to keep a panel in L1, but they re-stream packed
+        // weights once per tile and lose the 8-OC reuse that the outer block
+        // loop is built for. Only tile when the input plane itself exceeds L2.
         int tileSpatial = plane;
-        if (blocks > 2 && plane > 64)
+        if (blocks > 1 && (long)inputChannels * plane * 4 > 524_288)
         {
-            // Aim for ~32KB of input per tile so the active panel plus the
-            // two packed OC weight blocks remains near Zen 5's L1D capacity.
-            int target = Math.Max(16, 32768 / (Math.Max(1, inputChannels) * 4));
-            tileSpatial = Math.Max(16, Math.Min(plane, target) & ~15);
+            int target = Math.Max(64, 262144 / Math.Max(1, inputChannels) / 4);
+            tileSpatial = Math.Max(64, Math.Min(plane, target) & ~15);
         }
-        else if (blocks > 2 && (long)inputChannels * plane * 4 > 1_048_576)
-            tileSpatial = Math.Max(64, 24576 / Math.Max(1, inputChannels) & ~15);
+        bool hasResidual = residual.Length == output.Length;
         fixed (float* inputPtr = input, weightsPtr = packedWeights, biasPtr = bias, outputPtr = output)
+        fixed (float* residualPtr = residual)
         {
             for (int b = 0; b < batch; b++)
                 for (int tileStart = 0; tileStart < plane; tileStart += tileSpatial)
                 {
                     int tileEnd = Math.Min(plane, tileStart + tileSpatial);
-                    for (int block = 0; block < blocks; block += 2)
+                    for (int block = 0; block < blocks; block++)
                     {
-                        int co = block * 4;
+                        int co = block * 8;
                         float* output0 = outputPtr + (b * outputChannels + co) * plane;
                         float* output1 = output0 + plane, output2 = output1 + plane, output3 = output2 + plane;
                         float* output4 = output3 + plane, output5 = output4 + plane;
@@ -449,8 +449,7 @@ internal static partial class Conv1x1
                         Vector512<float> bias5 = Vector512.Create(biasPtr == null ? 0f : biasPtr[co + 5]);
                         Vector512<float> bias6 = Vector512.Create(biasPtr == null ? 0f : biasPtr[co + 6]);
                         Vector512<float> bias7 = Vector512.Create(biasPtr == null ? 0f : biasPtr[co + 7]);
-                        float* firstWeights = weightsPtr + block * inputChannels * 4;
-                        float* secondWeights = firstWeights + inputChannels * 4;
+                        float* blockWeights = weightsPtr + block * inputChannels * 8;
                         int inputBatch = b * inputChannels * plane;
                         int spatial = tileStart;
                         for (; spatial <= tileEnd - 16; spatial += 16)
@@ -458,84 +457,94 @@ internal static partial class Conv1x1
                             Vector512<float> a0 = bias0, a1 = bias1, a2 = bias2, a3 = bias3;
                             Vector512<float> a4 = bias4, a5 = bias5, a6 = bias6, a7 = bias7;
                             float* inputChannel = inputPtr + inputBatch + spatial;
-                            float* w0 = firstWeights, w4 = secondWeights;
+                            float* w = blockWeights;
                             int ci = 0;
-                            // Hot REC planes (~600–1500): unroll ci by 4, keep 8 ZMM accs,
-                            // explicit FMA for Zen 5 throughput on ic=192/384↔oc=384/192.
                             for (; ci <= inputChannels - 4; ci += 4)
                             {
                                 Vector512<float> v0 = Avx512F.LoadVector512(inputChannel);
                                 Vector512<float> v1 = Avx512F.LoadVector512(inputChannel + plane);
                                 Vector512<float> v2 = Avx512F.LoadVector512(inputChannel + plane * 2);
                                 Vector512<float> v3 = Avx512F.LoadVector512(inputChannel + plane * 3);
-                                a0 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 0), a0);
-                                a1 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 1), a1);
-                                a2 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 2), a2);
-                                a3 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 3), a3);
-                                a4 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 0), a4);
-                                a5 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 1), a5);
-                                a6 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 2), a6);
-                                a7 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 3), a7);
-                                a0 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 4), a0);
-                                a1 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 5), a1);
-                                a2 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 6), a2);
-                                a3 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 7), a3);
-                                a4 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 4), a4);
-                                a5 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 5), a5);
-                                a6 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 6), a6);
-                                a7 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 7), a7);
-                                a0 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w0 + 8), a0);
-                                a1 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w0 + 9), a1);
-                                a2 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w0 + 10), a2);
-                                a3 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w0 + 11), a3);
-                                a4 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w4 + 8), a4);
-                                a5 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w4 + 9), a5);
-                                a6 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w4 + 10), a6);
-                                a7 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w4 + 11), a7);
-                                a0 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w0 + 12), a0);
-                                a1 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w0 + 13), a1);
-                                a2 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w0 + 14), a2);
-                                a3 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w0 + 15), a3);
-                                a4 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w4 + 12), a4);
-                                a5 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w4 + 13), a5);
-                                a6 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w4 + 14), a6);
-                                a7 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w4 + 15), a7);
-                                inputChannel += plane * 4; w0 += 16; w4 += 16;
+                                a0 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 0), a0);
+                                a1 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 1), a1);
+                                a2 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 2), a2);
+                                a3 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 3), a3);
+                                a4 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 4), a4);
+                                a5 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 5), a5);
+                                a6 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 6), a6);
+                                a7 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 7), a7);
+                                a0 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 8), a0);
+                                a1 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 9), a1);
+                                a2 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 10), a2);
+                                a3 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 11), a3);
+                                a4 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 12), a4);
+                                a5 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 13), a5);
+                                a6 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 14), a6);
+                                a7 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 15), a7);
+                                a0 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 16), a0);
+                                a1 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 17), a1);
+                                a2 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 18), a2);
+                                a3 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 19), a3);
+                                a4 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 20), a4);
+                                a5 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 21), a5);
+                                a6 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 22), a6);
+                                a7 = Avx512F.FusedMultiplyAdd(v2, BroadcastWeight512(w + 23), a7);
+                                a0 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 24), a0);
+                                a1 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 25), a1);
+                                a2 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 26), a2);
+                                a3 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 27), a3);
+                                a4 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 28), a4);
+                                a5 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 29), a5);
+                                a6 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 30), a6);
+                                a7 = Avx512F.FusedMultiplyAdd(v3, BroadcastWeight512(w + 31), a7);
+                                inputChannel += plane * 4; w += 32;
                             }
                             for (; ci <= inputChannels - 2; ci += 2)
                             {
                                 Vector512<float> v0 = Avx512F.LoadVector512(inputChannel);
                                 Vector512<float> v1 = Avx512F.LoadVector512(inputChannel + plane);
-                                a0 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 0), a0);
-                                a1 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 1), a1);
-                                a2 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 2), a2);
-                                a3 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w0 + 3), a3);
-                                a4 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 0), a4);
-                                a5 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 1), a5);
-                                a6 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 2), a6);
-                                a7 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w4 + 3), a7);
-                                a0 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 4), a0);
-                                a1 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 5), a1);
-                                a2 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 6), a2);
-                                a3 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w0 + 7), a3);
-                                a4 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 4), a4);
-                                a5 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 5), a5);
-                                a6 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 6), a6);
-                                a7 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w4 + 7), a7);
-                                inputChannel += plane * 2; w0 += 8; w4 += 8;
+                                a0 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 0), a0);
+                                a1 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 1), a1);
+                                a2 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 2), a2);
+                                a3 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 3), a3);
+                                a4 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 4), a4);
+                                a5 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 5), a5);
+                                a6 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 6), a6);
+                                a7 = Avx512F.FusedMultiplyAdd(v0, BroadcastWeight512(w + 7), a7);
+                                a0 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 8), a0);
+                                a1 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 9), a1);
+                                a2 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 10), a2);
+                                a3 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 11), a3);
+                                a4 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 12), a4);
+                                a5 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 13), a5);
+                                a6 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 14), a6);
+                                a7 = Avx512F.FusedMultiplyAdd(v1, BroadcastWeight512(w + 15), a7);
+                                inputChannel += plane * 2; w += 16;
                             }
                             for (; ci < inputChannels; ci++)
                             {
                                 Vector512<float> value = Avx512F.LoadVector512(inputChannel);
-                                a0 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w0 + 0), a0);
-                                a1 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w0 + 1), a1);
-                                a2 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w0 + 2), a2);
-                                a3 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w0 + 3), a3);
-                                a4 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w4 + 0), a4);
-                                a5 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w4 + 1), a5);
-                                a6 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w4 + 2), a6);
-                                a7 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w4 + 3), a7);
-                                inputChannel += plane; w0 += 4; w4 += 4;
+                                a0 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 0), a0);
+                                a1 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 1), a1);
+                                a2 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 2), a2);
+                                a3 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 3), a3);
+                                a4 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 4), a4);
+                                a5 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 5), a5);
+                                a6 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 6), a6);
+                                a7 = Avx512F.FusedMultiplyAdd(value, BroadcastWeight512(w + 7), a7);
+                                inputChannel += plane; w += 8;
+                            }
+                            if (hasResidual)
+                            {
+                                float* residual0 = residualPtr + (b * outputChannels + co) * plane;
+                                a0 = Avx512F.Add(a0, Avx512F.LoadVector512(residual0 + spatial));
+                                a1 = Avx512F.Add(a1, Avx512F.LoadVector512(residual0 + plane + spatial));
+                                a2 = Avx512F.Add(a2, Avx512F.LoadVector512(residual0 + plane * 2 + spatial));
+                                a3 = Avx512F.Add(a3, Avx512F.LoadVector512(residual0 + plane * 3 + spatial));
+                                a4 = Avx512F.Add(a4, Avx512F.LoadVector512(residual0 + plane * 4 + spatial));
+                                a5 = Avx512F.Add(a5, Avx512F.LoadVector512(residual0 + plane * 5 + spatial));
+                                a6 = Avx512F.Add(a6, Avx512F.LoadVector512(residual0 + plane * 6 + spatial));
+                                a7 = Avx512F.Add(a7, Avx512F.LoadVector512(residual0 + plane * 7 + spatial));
                             }
                             Avx512F.Store(output0 + spatial, a0); Avx512F.Store(output1 + spatial, a1);
                             Avx512F.Store(output2 + spatial, a2); Avx512F.Store(output3 + spatial, a3);
@@ -549,13 +558,25 @@ internal static partial class Conv1x1
                             float a4 = biasPtr == null ? 0f : biasPtr[co + 4], a5 = biasPtr == null ? 0f : biasPtr[co + 5];
                             float a6 = biasPtr == null ? 0f : biasPtr[co + 6], a7 = biasPtr == null ? 0f : biasPtr[co + 7];
                             float* inputChannel = inputPtr + inputBatch + spatial;
-                            float* w0 = firstWeights, w4 = secondWeights;
+                            float* w = blockWeights;
                             for (int ci = 0; ci < inputChannels; ci++)
                             {
                                 float value = *inputChannel;
-                                a0 += value * w0[0]; a1 += value * w0[1]; a2 += value * w0[2]; a3 += value * w0[3];
-                                a4 += value * w4[0]; a5 += value * w4[1]; a6 += value * w4[2]; a7 += value * w4[3];
-                                inputChannel += plane; w0 += 4; w4 += 4;
+                                a0 += value * w[0]; a1 += value * w[1]; a2 += value * w[2]; a3 += value * w[3];
+                                a4 += value * w[4]; a5 += value * w[5]; a6 += value * w[6]; a7 += value * w[7];
+                                inputChannel += plane; w += 8;
+                            }
+                            if (hasResidual)
+                            {
+                                float* residual0 = residualPtr + (b * outputChannels + co) * plane;
+                                a0 += residual0[spatial];
+                                a1 += residual0[plane + spatial];
+                                a2 += residual0[plane * 2 + spatial];
+                                a3 += residual0[plane * 3 + spatial];
+                                a4 += residual0[plane * 4 + spatial];
+                                a5 += residual0[plane * 5 + spatial];
+                                a6 += residual0[plane * 6 + spatial];
+                                a7 += residual0[plane * 7 + spatial];
                             }
                             output0[spatial] = a0; output1[spatial] = a1; output2[spatial] = a2; output3[spatial] = a3;
                             output4[spatial] = a4; output5[spatial] = a5; output6[spatial] = a6; output7[spatial] = a7;

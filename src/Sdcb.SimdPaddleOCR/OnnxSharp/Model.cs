@@ -55,7 +55,8 @@ public sealed class Model : IDisposable
     }
 
     // Pack kinds mirror the loops previously in CompiledModel, plus OC-major 1x1.
-    internal const int PackMatMul = 0, PackConv3x3 = 1, PackConv1x1 = 2, PackConv1x1Oc16 = 3;
+    internal const int PackMatMul = 0, PackConv3x3 = 1, PackConv1x1 = 2, PackConv1x1Oc16 = 3,
+        PackConv1x1Oc8 = 4;
 
     /// <summary>
     /// Returns the packed weights for a node's weight input, computing and
@@ -184,6 +185,22 @@ public sealed class Model : IDisposable
             return null;
         if (dims.Length != 4 || dims[2] != 1 || dims[3] != 1)
             return null;
+
+        if (packKind == PackConv1x1Oc8)
+        {
+            // Layout [block8][ic][8]: one cache line of 8-OC weights per IC so
+            // AVX-512 PackedEight broadcasts do not straddle two 4-OC blocks.
+            if (dims[0] < 8 || (dims[0] & 7) != 0) return null;
+            int outputChannels = dims[0], inputChannels = dims[1];
+            float[] packedOc8 = new float[checked(outputChannels * inputChannels)];
+            int blocks8 = outputChannels / 8;
+            for (int block = 0; block < blocks8; block++)
+                for (int ci = 0; ci < inputChannels; ci++)
+                    for (int lane = 0; lane < 8; lane++)
+                        packedOc8[(block * inputChannels + ci) * 8 + lane] =
+                            w[(block * 8 + lane) * inputChannels + ci];
+            return packedOc8;
+        }
 
         if (packKind == PackConv1x1Oc16)
         {
