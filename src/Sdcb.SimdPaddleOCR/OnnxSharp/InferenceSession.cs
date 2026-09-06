@@ -633,6 +633,15 @@ public sealed class InferenceSession : IDisposable
                 if (s_profileEnabled) AddProfile((int)OperatorId.ConvTranspose, started, ni);
                 return skip;
             }
+            if (TryExecuteConvBiasResidualAdd(ni))
+            {
+                if (s_profileEnabled)
+                {
+                    AddProfile((int)OperatorId.Conv, started, ni);
+                    AddConvClassProfile(_model.Nodes[ni], started);
+                }
+                return skip;
+            }
             throw new InvalidOperationException($"Compiled 3-node fusion failed at node {ni}.");
         }
         if (skip == 1)
@@ -645,6 +654,15 @@ public sealed class InferenceSession : IDisposable
             if (TryExecuteHardSwish(ni))
             {
                 if (s_profileEnabled) AddProfile((int)OperatorId.Mul, started, ni);
+                return skip;
+            }
+            if (TryExecuteConvBiasAdd(ni))
+            {
+                if (s_profileEnabled)
+                {
+                    AddProfile((int)OperatorId.Conv, started, ni);
+                    AddConvClassProfile(_model.Nodes[ni], started);
+                }
                 return skip;
             }
             throw new InvalidOperationException($"Compiled 2-node fusion failed at node {ni}.");
@@ -675,19 +693,8 @@ public sealed class InferenceSession : IDisposable
             case OperatorId.HardSigmoid: { float alpha = F32(p, 4), beta = F32(p, 8); SimdKernels.HardSigmoid(x.Data, o.Data, alpha, beta); break; }
             case OperatorId.BatchNormalization: BatchNorm(x, node, o); break;
             case OperatorId.Conv:
-                // Pack lookup by this node (not first weight-index match) so 1x1
-                // packing is not skipped when a shared weight appears earlier.
-                float[]? packed = _model.GetPackedWeights(node, Model.PackConv1x1);
-                float[]? packedOc16 = _model.GetPackedWeights(node, Model.PackConv1x1Oc16);
-                float[]? packed3x3 = _model.GetPackedWeights(node, Model.PackConv3x3);
-                // Disabled after the full small-model gate: quantization changed
-                // texts and was slower than the AVX-512 float kernel.
-                const bool EnableInt8VnniConv1x1 = false;
-                PackedConv1x1Int8? packedInt8 = EnableInt8VnniConv1x1
-                    ? _model.GetPackedConv1x1Int8(node)
-                    : null;
-                Conv(x, _tensors[node.Inputs[1]], node.Inputs.Length > 2 ? _tensors[node.Inputs[2]] : null,
-                    p, o, _intraOpThreads, packed, packed3x3, packedOc16, packedInt8); break;
+                ExecuteConv(node, o, node.Inputs.Length > 2 ? _tensors[node.Inputs[2]] : null);
+                break;
             case OperatorId.ConvTranspose: ConvTranspose(x, _tensors[node.Inputs[1]], node.Inputs.Length > 2 ? _tensors[node.Inputs[2]] : null, p, o, _intraOpThreads); break;
             case OperatorId.ReduceMean: ReduceMean(x, p, o); break;
             case OperatorId.AveragePool: Pool(x, p, o, false); break;
@@ -753,6 +760,95 @@ public sealed class InferenceSession : IDisposable
     {
         TensorValue tensor = _tensors[checked((int)tensorIndex)];
         return tensor.IsConstant && tensor.Length == 1 && tensor.Data[0] == expected;
+    }
+
+    private void ExecuteConv(NodeRecord conv, TensorValue output, TensorValue? bias,
+        ReadOnlySpan<float> residual = default)
+    {
+        ReadOnlySpan<byte> p = _model.GetParameters(conv);
+        TensorValue x = _tensors[conv.Inputs[0]];
+        float[]? packed = _model.GetPackedWeights(conv, Model.PackConv1x1);
+        float[]? packedOc16 = _model.GetPackedWeights(conv, Model.PackConv1x1Oc16);
+        float[]? packedOc8 = _model.GetPackedWeights(conv, Model.PackConv1x1Oc8);
+        float[]? packed3x3 = _model.GetPackedWeights(conv, Model.PackConv3x3);
+        // Disabled after the full small-model gate: quantization changed
+        // texts and was slower than the AVX-512 float kernel.
+        const bool EnableInt8VnniConv1x1 = false;
+        PackedConv1x1Int8? packedInt8 = EnableInt8VnniConv1x1
+            ? _model.GetPackedConv1x1Int8(conv)
+            : null;
+        Conv(x, _tensors[conv.Inputs[1]], bias, p, output, _intraOpThreads,
+            packed, packed3x3, packedOc16, packedInt8, packedOc8, residual);
+    }
+
+    private bool TryExecuteConvBiasAdd(int index)
+    {
+        if (index + 1 >= _model.Nodes.Length) return false;
+        NodeRecord conv = _model.Nodes[index], add = _model.Nodes[index + 1];
+        if (conv.Operator != OperatorId.Conv || add.Operator != OperatorId.Add ||
+            conv.Inputs.Length != 2 || conv.Outputs.Length != 1 ||
+            add.Inputs.Length != 2 || add.Outputs.Length != 1 ||
+            (add.Inputs[0] != conv.Outputs[0] && add.Inputs[1] != conv.Outputs[0]) ||
+            HasConsumerAfter(conv.Outputs[0], index + 1))
+            return false;
+        uint biasIndex = add.Inputs[0] == conv.Outputs[0] ? add.Inputs[1] : add.Inputs[0];
+        TensorValue convOutput = _tensors[conv.Outputs[0]];
+        TensorValue addOutput = _tensors[add.Outputs[0]];
+        TensorValue bias = _tensors[biasIndex];
+        if (!bias.IsConstant || convOutput.IsConstant || addOutput.IsConstant ||
+            convOutput.Length == 0 || convOutput.Length != addOutput.Length ||
+            addOutput.Shape.Length != 4 || bias.Length != addOutput.Shape[1] ||
+            _tensors[conv.Inputs[0]].Overlaps(addOutput))
+            return false;
+        convOutput.ShareStorageWith(addOutput);
+        ExecuteConv(conv, addOutput, bias);
+        return true;
+    }
+
+    private bool TryExecuteConvBiasResidualAdd(int index)
+    {
+        if (index + 2 >= _model.Nodes.Length) return false;
+        NodeRecord conv = _model.Nodes[index], biasAdd = _model.Nodes[index + 1],
+            residualAdd = _model.Nodes[index + 2];
+        if (conv.Operator != OperatorId.Conv || biasAdd.Operator != OperatorId.Add ||
+            residualAdd.Operator != OperatorId.Add ||
+            conv.Inputs.Length != 2 || conv.Outputs.Length != 1 ||
+            biasAdd.Inputs.Length != 2 || biasAdd.Outputs.Length != 1 ||
+            residualAdd.Inputs.Length != 2 || residualAdd.Outputs.Length != 1 ||
+            (biasAdd.Inputs[0] != conv.Outputs[0] && biasAdd.Inputs[1] != conv.Outputs[0]) ||
+            (residualAdd.Inputs[0] != biasAdd.Outputs[0] && residualAdd.Inputs[1] != biasAdd.Outputs[0]) ||
+            HasConsumerAfter(conv.Outputs[0], index + 1) ||
+            HasConsumerAfter(biasAdd.Outputs[0], index + 2))
+            return false;
+        uint biasIndex = biasAdd.Inputs[0] == conv.Outputs[0] ? biasAdd.Inputs[1] : biasAdd.Inputs[0];
+        uint skipIndex = residualAdd.Inputs[0] == biasAdd.Outputs[0]
+            ? residualAdd.Inputs[1] : residualAdd.Inputs[0];
+        TensorValue convOutput = _tensors[conv.Outputs[0]];
+        TensorValue biasAddOutput = _tensors[biasAdd.Outputs[0]];
+        TensorValue destination = _tensors[residualAdd.Outputs[0]];
+        TensorValue bias = _tensors[biasIndex];
+        TensorValue residual = _tensors[skipIndex];
+        if (!bias.IsConstant || convOutput.IsConstant || destination.IsConstant ||
+            convOutput.Length == 0 || convOutput.Length != destination.Length ||
+            residual.Length != destination.Length ||
+            destination.Shape.Length != 4 || bias.Length != destination.Shape[1])
+            return false;
+        TensorValue input = _tensors[conv.Inputs[0]];
+        float[]? packedOc8 = _model.GetPackedWeights(conv, Model.PackConv1x1Oc8);
+        int oc = destination.Shape[1], ic = input.Shape[1];
+        if (packedOc8 is not null &&
+            Conv1x1.FusesResidualInPackedEight(oc, ic, packedOc8.Length) &&
+            !input.Overlaps(destination) && !PartialOverlap(residual, destination))
+        {
+            convOutput.ShareStorageWith(destination);
+            biasAddOutput.ShareStorageWith(destination);
+            ExecuteConv(conv, destination, bias, residual.Data);
+            return true;
+        }
+        convOutput.ShareStorageWith(biasAddOutput);
+        ExecuteConv(conv, convOutput, bias);
+        Binary(convOutput, residual, destination, OperatorId.Add, _intraOpThreads);
+        return true;
     }
 
     private bool TryExecuteConvRelu(int index)
@@ -1035,7 +1131,8 @@ public sealed class InferenceSession : IDisposable
 
     private static void Conv(TensorValue x, TensorValue w, TensorValue? bias, ReadOnlySpan<byte> p,
         TensorValue o, int intraOpThreads = 1, float[]? packedWeights = null, float[]? packed3x3 = null,
-        float[]? packedOc16 = null, PackedConv1x1Int8? packedInt8 = null)
+        float[]? packedOc16 = null, PackedConv1x1Int8? packedInt8 = null, float[]? packedOc8 = null,
+        ReadOnlySpan<float> residual = default)
     {
         int[] id = x.Shape; int[] wd = w.Shape; int[] od = o.Shape; int group = checked((int)U32(p, 4)), kh = I32(p, 8), kw = I32(p, 12), sh = I32(p, 16), sw = I32(p, 20), dh = I32(p, 24), dw = I32(p, 28), pt = I32(p, 32), pl = I32(p, 36); int n = id[0], cin = id[1], h = id[2], wi = id[3], cout = od[1], oh = od[2], ow = od[3], cpg = cin / group, opg = cout / group;
         ReadOnlySpan<float> biasData = bias is null ? [] : bias.Data;
@@ -1062,7 +1159,7 @@ public sealed class InferenceSession : IDisposable
             pt == 0 && pl == 0 && I32(p, 40) == 0 && I32(p, 44) == 0 &&
             packedWeights is not null && group == 1 &&
             Conv1x1.TryPacked(x.Data, packedWeights, biasData, o.Data,
-                n, cin, h, wi, cout, intraOpThreads, packedInt8)) return;
+                n, cin, h, wi, cout, intraOpThreads, packedInt8, packedOc8, residual)) return;
         if (kh == 1 && kw == 1 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
             pt == 0 && pl == 0 && I32(p, 40) == 0 && I32(p, 44) == 0 &&
             Conv1x1.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, cout, group, intraOpThreads)) return;

@@ -211,54 +211,29 @@ internal static partial class Conv3x3Packed
                                     int ix = x - 1;
                                     float* row0 = src + (y - 1) * width + ix;
                                     float* row1 = row0 + width, row2 = row1 + width;
-                                    Vector512<float> v0 = Avx512F.LoadVector512(row0), v1 = Avx512F.LoadVector512(row0 + 1), v2 = Avx512F.LoadVector512(row0 + 2);
-                                    float* weights = wc;
-                                    a0 = AddMul512(a0, v0, weights[0]); a1 = AddMul512(a1, v0, weights[1]);
-                                    a2 = AddMul512(a2, v0, weights[2]); a3 = AddMul512(a3, v0, weights[3]);
-                                    a4 = AddMul512(a4, v0, weights[4]); a5 = AddMul512(a5, v0, weights[5]);
-                                    a6 = AddMul512(a6, v0, weights[6]); a7 = AddMul512(a7, v0, weights[7]);
-                                    weights += 8;
-                                    a0 = AddMul512(a0, v1, weights[0]); a1 = AddMul512(a1, v1, weights[1]);
-                                    a2 = AddMul512(a2, v1, weights[2]); a3 = AddMul512(a3, v1, weights[3]);
-                                    a4 = AddMul512(a4, v1, weights[4]); a5 = AddMul512(a5, v1, weights[5]);
-                                    a6 = AddMul512(a6, v1, weights[6]); a7 = AddMul512(a7, v1, weights[7]);
-                                    weights += 8;
-                                    a0 = AddMul512(a0, v2, weights[0]); a1 = AddMul512(a1, v2, weights[1]);
-                                    a2 = AddMul512(a2, v2, weights[2]); a3 = AddMul512(a3, v2, weights[3]);
-                                    a4 = AddMul512(a4, v2, weights[4]); a5 = AddMul512(a5, v2, weights[5]);
-                                    a6 = AddMul512(a6, v2, weights[6]); a7 = AddMul512(a7, v2, weights[7]);
-                                    weights += 8;
+                                    Vector512<float> v0 = Avx512F.LoadVector512(row0);
+                                    Vector512<float> v1 = Avx512F.LoadVector512(row0 + 1);
+                                    Vector512<float> v2 = Avx512F.LoadVector512(row0 + 2);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v0, wc);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v1, wc + 8);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v2, wc + 16);
                                     v0 = Avx512F.LoadVector512(row1); v1 = Avx512F.LoadVector512(row1 + 1); v2 = Avx512F.LoadVector512(row1 + 2);
-                                    a0 = AddMul512(a0, v0, weights[0]); a1 = AddMul512(a1, v0, weights[1]);
-                                    a2 = AddMul512(a2, v0, weights[2]); a3 = AddMul512(a3, v0, weights[3]);
-                                    a4 = AddMul512(a4, v0, weights[4]); a5 = AddMul512(a5, v0, weights[5]);
-                                    a6 = AddMul512(a6, v0, weights[6]); a7 = AddMul512(a7, v0, weights[7]);
-                                    weights += 8;
-                                    a0 = AddMul512(a0, v1, weights[0]); a1 = AddMul512(a1, v1, weights[1]);
-                                    a2 = AddMul512(a2, v1, weights[2]); a3 = AddMul512(a3, v1, weights[3]);
-                                    a4 = AddMul512(a4, v1, weights[4]); a5 = AddMul512(a5, v1, weights[5]);
-                                    a6 = AddMul512(a6, v1, weights[6]); a7 = AddMul512(a7, v1, weights[7]);
-                                    weights += 8;
-                                    a0 = AddMul512(a0, v2, weights[0]); a1 = AddMul512(a1, v2, weights[1]);
-                                    a2 = AddMul512(a2, v2, weights[2]); a3 = AddMul512(a3, v2, weights[3]);
-                                    a4 = AddMul512(a4, v2, weights[4]); a5 = AddMul512(a5, v2, weights[5]);
-                                    a6 = AddMul512(a6, v2, weights[6]); a7 = AddMul512(a7, v2, weights[7]);
-                                    weights += 8;
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v0, wc + 24);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v1, wc + 32);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v2, wc + 40);
                                     v0 = Avx512F.LoadVector512(row2); v1 = Avx512F.LoadVector512(row2 + 1); v2 = Avx512F.LoadVector512(row2 + 2);
-                                    a0 = AddMul512(a0, v0, weights[0]); a1 = AddMul512(a1, v0, weights[1]);
-                                    a2 = AddMul512(a2, v0, weights[2]); a3 = AddMul512(a3, v0, weights[3]);
-                                    a4 = AddMul512(a4, v0, weights[4]); a5 = AddMul512(a5, v0, weights[5]);
-                                    a6 = AddMul512(a6, v0, weights[6]); a7 = AddMul512(a7, v0, weights[7]);
-                                    weights += 8;
-                                    a0 = AddMul512(a0, v1, weights[0]); a1 = AddMul512(a1, v1, weights[1]);
-                                    a2 = AddMul512(a2, v1, weights[2]); a3 = AddMul512(a3, v1, weights[3]);
-                                    a4 = AddMul512(a4, v1, weights[4]); a5 = AddMul512(a5, v1, weights[5]);
-                                    a6 = AddMul512(a6, v1, weights[6]); a7 = AddMul512(a7, v1, weights[7]);
-                                    weights += 8;
-                                    a0 = AddMul512(a0, v2, weights[0]); a1 = AddMul512(a1, v2, weights[1]);
-                                    a2 = AddMul512(a2, v2, weights[2]); a3 = AddMul512(a3, v2, weights[3]);
-                                    a4 = AddMul512(a4, v2, weights[4]); a5 = AddMul512(a5, v2, weights[5]);
-                                    a6 = AddMul512(a6, v2, weights[6]); a7 = AddMul512(a7, v2, weights[7]);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v0, wc + 48);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v1, wc + 56);
+                                    AddEightPacked512(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5,
+                                        ref a6, ref a7, v2, wc + 64);
                                 }
                                 Avx512F.Store(o0 + row + x, a0); Avx512F.Store(o1 + row + x, a1);
                                 Avx512F.Store(o2 + row + x, a2); Avx512F.Store(o3 + row + x, a3);

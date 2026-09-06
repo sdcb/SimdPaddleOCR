@@ -46,8 +46,11 @@ internal static partial class Conv3x3Packed
                             : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(begin * 8, count);
                         Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
                             .Slice(begin * 8 * plane, count * plane);
-                        Try(inSpan, wSpan, bSpan, outSpan, 1, inputChannels,
-                            height, width, count, 1);
+                        // Call the AVX-512 kernel directly. Recursing through
+                        // Try(..., intraOp: 1) treated shards with oc>=64 as
+                        // the single-thread AVX2 16-OC fallback.
+                        Conv3x3EightOutputsPackedAvx512Unsafe(inSpan, wSpan, bSpan, outSpan, 1,
+                            inputChannels, height, width, count);
                     });
                 }
                 return true;
