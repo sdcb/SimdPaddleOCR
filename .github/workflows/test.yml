@@ -138,7 +138,6 @@ jobs:
         with: { name: ocr-dataset, path: dataset }
       - name: Run Windows x64 benchmark suite
         shell: pwsh
-        env: { REPLICA: ${{ matrix.replica }} }
         run: |
           $ErrorActionPreference = 'Stop'
           $base = 'win-x64-tiny'
@@ -159,15 +158,19 @@ jobs:
             if ($c.isa) {
               foreach ($setting in $c.isa.Split(';')) { $parts = $setting.Split('='); Set-Item "Env:$($parts[0])" $parts[1] }
             }
-            $out = "$base-$($c.id)-r$env:REPLICA.json"
+            $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
             $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
             $appArgs = @('--suite','bench','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
-              '--case-id',$c.id,'--replica',$env:REPLICA,'--out',$out)
+              '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
             dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r win-x64 --no-self-contained @runOptions -- @appArgs
           }
       - uses: actions/upload-artifact@v7
         if: always()
-        with: { name: bench-win-x64-r${{ matrix.replica }}, path: win-x64-tiny-*.json, if-no-files-found: warn, retention-days: 30 }
+        with:
+          name: bench-win-x64-r${{ matrix.replica }}
+          path: win-x64-tiny-*.json
+          if-no-files-found: warn
+          retention-days: 30
 
   bench-linux-arm64:
     needs: generate
@@ -184,7 +187,6 @@ jobs:
         with: { name: ocr-dataset, path: dataset }
       - name: Run ARM64 benchmark suite
         shell: pwsh
-        env: { REPLICA: ${{ matrix.replica }} }
         run: |
           $ErrorActionPreference = 'Stop'
           $base = 'linux-arm64-tiny'
@@ -204,10 +206,10 @@ jobs:
                 Set-Item "Env:$($parts[0])" $parts[1]
               }
             }
-            $out = "$base-$($c.id)-r$env:REPLICA.json"
+            $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
             $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
             $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
-              '--case-id',$c.id,'--replica',$env:REPLICA,'--out',$out)
+              '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
             dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-arm64 --no-self-contained @runOptions -- @appArgs
           }
       - uses: actions/upload-artifact@v7
@@ -233,7 +235,6 @@ jobs:
         with: { name: ocr-dataset, path: dataset }
       - name: Run macOS ARM64 worker benchmark
         shell: pwsh
-        env: { REPLICA: ${{ matrix.replica }} }
         run: |
           $ErrorActionPreference = 'Stop'
           $base = 'osx-arm64-tiny'
@@ -242,9 +243,9 @@ jobs:
             @{ id='tiny-4w'; workers=4; model='tiny' }
           )
           foreach ($c in $cases) {
-            $out = "$base-$($c.id)-r$env:REPLICA.json"
+            $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
             $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
-              '--case-id',$c.id,'--replica',$env:REPLICA,'--out',$out)
+              '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
             dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r osx-arm64 --no-self-contained -- @appArgs
           }
       - uses: actions/upload-artifact@v7
