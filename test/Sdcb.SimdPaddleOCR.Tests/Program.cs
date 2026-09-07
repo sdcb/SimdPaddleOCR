@@ -3,6 +3,8 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Runtime.Intrinsics.Arm;
+using System.Runtime.Intrinsics.X86;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -14,7 +16,7 @@ using ImageSharpImage = SixLabors.ImageSharp.Image;
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
-    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c|openvino] [--c-assets <dir>]");
+    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c|openvino] [--suite smoke|bench] [--count N] [--case-id ID] [--replica N] [--c-assets <dir>]");
     Console.WriteLine("       --summarize <file...> [--input <dataset>] [--out-md <path>]");
     return args.Length == 0 ? 2 : 0;
 }
@@ -25,6 +27,10 @@ if (args[0] == "--summarize")
 int workers = 4;
 string modelType = "tiny";
 string engineName = "sharp";
+string suite = "bench";
+int? count = null;
+string caseId = "";
+int replica = 1;
 string? inputDir = null;
 string? outPath = null;
 string cAssetsDir = "c-assets";
@@ -36,6 +42,10 @@ for (int i = 0; i < args.Length; i++)
         case "--workers": workers = int.Parse(Next()); break;
         case "--model": modelType = Next().ToLowerInvariant(); break;
         case "--engine": engineName = Next().ToLowerInvariant(); break;
+        case "--suite": suite = Next().ToLowerInvariant(); break;
+        case "--count": count = int.Parse(Next()); break;
+        case "--case-id": caseId = Next(); break;
+        case "--replica": replica = int.Parse(Next()); break;
         case "--input": inputDir = Next(); break;
         case "--out": outPath = Next(); break;
         case "--c-assets": cAssetsDir = Next(); break;
@@ -49,6 +59,12 @@ if (modelType is not ("tiny" or "small" or "medium"))
     throw new ArgumentException("--model must be tiny, small, or medium");
 if (engineName is not ("sharp" or "c" or "openvino"))
     throw new ArgumentException("--engine must be sharp, c, or openvino");
+if (suite is not ("smoke" or "bench"))
+    throw new ArgumentException("--suite must be smoke or bench");
+if (count is < 1 or > 100)
+    throw new ArgumentException("--count must be 1..100");
+if (replica < 1)
+    throw new ArgumentException("--replica must be >= 1");
 if (inputDir is null || outPath is null)
     throw new ArgumentException("--input and --out are required");
 
@@ -63,6 +79,8 @@ string[] files = Directory.GetFiles(inputDir, "img-*.jpg")
     .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
 if (files.Length != 100)
     throw new InvalidOperationException($"expected 100 JPG files, got {files.Length}");
+if (count is { } limit)
+    files = files.Take(limit).ToArray();
 
 var decoded = new (string Name, byte[] Pixels, int W, int H)[files.Length];
 for (int i = 0; i < files.Length; i++)
@@ -115,7 +133,7 @@ for (int index = 0; index < decoded.Length; index++)
     });
     string det = result.StageMs is { } stages && stages.TryGetValue("det_graph", out double detMs)
         ? $" det={detMs:F2}" : "";
-    Console.WriteLine($"{index + 1}/100 {d.Name} total={sw.Elapsed.TotalMilliseconds:F3}{det} lines={result.Texts.Length} ws={ws:F1}MB");
+    Console.WriteLine($"{index + 1}/{decoded.Length} {d.Name} total={sw.Elapsed.TotalMilliseconds:F3}{det} lines={result.Texts.Length} ws={ws:F1}MB");
 }
 
 JsonObject extra = engine.Extra;
@@ -124,6 +142,9 @@ double wsLast = rows.Count > 0 ? rows[^1].WorkingSetMb : wsLoaded;
 var meta = new JsonObject
 {
     ["mode"] = engineName,
+    ["suite"] = suite,
+    ["caseId"] = caseId,
+    ["replica"] = replica,
     ["model"] = modelType,
     ["workers"] = workers,
     ["rid"] = RuntimeInformation.RuntimeIdentifier,
@@ -148,8 +169,16 @@ SetEnv(meta, "avx512", "DOTNET_EnableAVX512");
 SetEnv(meta, "avx2", "DOTNET_EnableAVX2");
 SetEnv(meta, "avx", "DOTNET_EnableAVX");
 SetEnv(meta, "hwintrinsic", "DOTNET_EnableHWIntrinsic");
+SetEnv(meta, "arm64Sve", "DOTNET_EnableArm64Sve");
+SetEnv(meta, "arm64Sve2", "DOTNET_EnableArm64Sve2");
 meta["vectorCount"] = Vector<float>.Count;
 meta["vectorHardwareAccelerated"] = Vector.IsHardwareAccelerated;
+meta["avxSupported"] = Avx.IsSupported;
+meta["avx2Supported"] = Avx2.IsSupported;
+meta["avx512Supported"] = Avx512F.IsSupported;
+meta["advSimdSupported"] = AdvSimd.IsSupported;
+meta["effectiveIsa"] = EffectiveIsa();
+meta["sampleCount"] = decoded.Length;
 meta["framework"] = RuntimeInformation.FrameworkDescription;
 meta["libraryTfm"] = typeof(PaddleOcrAll).Assembly
     .GetCustomAttribute<TargetFrameworkAttribute>()?.FrameworkName;
@@ -169,6 +198,16 @@ File.WriteAllText(outPath, doc.ToJsonString(new JsonSerializerOptions
 Console.WriteLine($"saved: {outPath}");
 BenchSummary.Print(BenchSummary.Parse(outPath, null, metadataPath));
 return 0;
+
+static string EffectiveIsa()
+{
+    if (Avx512F.IsSupported) return "avx512";
+    if (Avx2.IsSupported) return "avx2";
+    if (Avx.IsSupported) return "avx";
+    if (AdvSimd.IsSupported) return "advsimd";
+    if (Vector.IsHardwareAccelerated) return "vector";
+    return "scalar";
+}
 
 static void SetEnv(JsonObject meta, string name, string env)
 {

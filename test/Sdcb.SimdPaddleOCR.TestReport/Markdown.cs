@@ -25,20 +25,78 @@ static class Markdown
         sb.AppendLine();
         sb.AppendLine($"git `{git}` · generated {ts} · {runs.Count} runs · warmup excluded");
         sb.AppendLine();
-        Section(sb, "All runs", runs);
-        Section(sb, "tiny 4w across platforms", runs.Where(r => r.IsTiny4wDefault).ToList());
-        Section(sb, "x64 SIMD Comparison",
-            runs.Where(r => r.IsLinuxX64Tiny4w).OrderBy(r => r.SimdRank).ToList());
-        Section(sb, "x64 Model Comparison",
-            runs.Where(r => r.IsLinuxX64Model).OrderBy(r => r.ModelRank).ToList());
-        EngineCompare(sb, runs.Where(r => r.IsWinX64TinyEngineCompare).ToList());
-
-        sb.AppendLine("## Details");
+        SmokeSection(sb, "Platform smoke", runs.Where(r => r.IsSmoke).ToList());
+        BenchSections(sb, runs);
+        sb.AppendLine("## Benchmark details");
         sb.AppendLine();
-        foreach (Run run in runs)
+        foreach (Run run in runs.Where(r => r.IsBench).OrderBy(r => r.Rid).ThenBy(r => r.Machine).ThenBy(r => r.Replica).ThenBy(r => r.Label))
             Detail(sb, run);
+
         return sb.ToString();
     }
+
+    private static void SmokeSection(StringBuilder sb, string title, List<Run> runs)
+    {
+        sb.AppendLine($"## {title}");
+        sb.AppendLine();
+        if (runs.Count == 0) { sb.AppendLine("No matching runs."); sb.AppendLine(); return; }
+        sb.AppendLine("| run | RID | engine | model | w | samples | effective ISA | median ms | accuracy | CPU |");
+        sb.AppendLine("| --- | --- | --- | --- | ---: | ---: | --- | ---: | --- | --- |");
+        foreach (Run r in runs.OrderBy(r => r.Rid).ThenBy(r => r.Model).ThenBy(r => r.Label))
+            sb.AppendLine($"| {Cell(r.Label)} | {Cell(r.Rid)} | {Cell(r.Engine)} | {Cell(r.Model)} | {r.Workers} | {r.N} | {Cell(r.EffectiveIsa)} | {r.Median:F1} | {Frac(r.ExactLines, r.TotalLines)} | {Cell(r.CpuName)} |");
+        sb.AppendLine();
+    }
+
+    private static void BenchSections(StringBuilder sb, List<Run> runs)
+    {
+        sb.AppendLine("## Benchmarks");
+        sb.AppendLine();
+        List<IGrouping<string, Run>> groups = runs.Where(r => r.IsBench)
+            .GroupBy(r => r.Rid ?? "unknown", StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase).ToList();
+        if (groups.Count == 0) { sb.AppendLine("No benchmark groups."); sb.AppendLine(); return; }
+        foreach (IGrouping<string, Run> group in groups)
+        {
+            sb.AppendLine($"### {Cell(group.Key)}");
+            sb.AppendLine();
+            sb.AppendLine("All cases in a replica run on the same machine. Ratios are calculated within each replica; absolute values from different CPUs are not pooled.");
+            sb.AppendLine();
+            sb.AppendLine("| replica | case | engine | model | w | effective ISA | median ms | P95 ms | img/s | vs replica baseline | WS loaded | WS peak | Δ WS | CPU |");
+            sb.AppendLine("| ---: | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |");
+            foreach (Run r in group.OrderBy(r => r.Replica).ThenBy(r => r.CaseId).ThenBy(r => r.Label))
+            {
+                Run? baseline = Baseline(group, r.Replica);
+                string ratio = baseline is not null && baseline.Mean > 0
+                    ? (r.Mean / baseline.Mean).ToString("F2", CultureInfo.InvariantCulture) : "—";
+                sb.AppendLine($"| {r.Replica} | {Cell(string.IsNullOrEmpty(r.CaseId) ? r.Label : r.CaseId)} | {Cell(r.Engine)} | {Cell(r.Model)} | {r.Workers} | {Cell(r.EffectiveIsa)} | {r.Median:F1} | {r.P95:F1} | {r.Throughput:F2} | {ratio} | {Mb(r.WsLoaded)} | {Mb(r.WsPeak)} | {Mb(WorkingSetDelta(r))} | {Cell(r.CpuName)} |");
+            }
+            sb.AppendLine();
+            foreach (IGrouping<string, Run> caseGroup in group.GroupBy(r => r.CaseId.Length == 0 ? r.Label : r.CaseId))
+            {
+                double[] ratios = caseGroup.Select(r =>
+                {
+                    Run? baseline = Baseline(group, r.Replica);
+                    return baseline is not null && baseline.Mean > 0 ? r.Mean / baseline.Mean : double.NaN;
+                }).Where(double.IsFinite).OrderBy(x => x).ToArray();
+                double[] memoryDeltas = caseGroup.Select(WorkingSetDelta).Where(v => v.HasValue).Select(v => v!.Value).OrderBy(v => v).ToArray();
+                if (ratios.Length > 1)
+                    sb.AppendLine($"- `{Cell(caseGroup.Key)}` normalized median `{Median(ratios):F2}x`, range `{ratios[0]:F2}–{ratios[^1]:F2}x` ({ratios.Length} replicas); Δ WS median `{(memoryDeltas.Length == 0 ? "—" : Median(memoryDeltas).ToString("F1", CultureInfo.InvariantCulture) + " MB")}`");
+            }
+            sb.AppendLine();
+        }
+    }
+
+    private static double Median(double[] values) => values.Length == 0 ? double.NaN :
+        values.Length % 2 == 1 ? values[values.Length / 2] : (values[values.Length / 2 - 1] + values[values.Length / 2]) / 2;
+
+    private static double? WorkingSetDelta(Run run) =>
+        run.WsLast is { } last && run.WsLoaded is { } loaded ? last - loaded : null;
+
+    private static Run? Baseline(IGrouping<string, Run> group, int replica) => group
+        .Where(x => x.Replica == replica)
+        .OrderBy(x => x.CaseId is "tiny-4w" ? 0 : 1)
+        .ThenBy(x => x.CaseId)
+        .FirstOrDefault();
 
     private static void Section(StringBuilder sb, string title, List<Run> runs)
     {
@@ -54,7 +112,7 @@ static class Markdown
         sb.AppendLine("| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
         foreach (Run r in runs)
         {
-            double? delta = r.WsLast is { } last && r.WsLoaded is { } loaded ? last - loaded : null;
+            double? delta = WorkingSetDelta(r);
             sb.Append($"| {Cell(r.Label)} | {Cell(r.Engine)} | {Cell(r.Rid)} | {Cell(r.Model)} | {r.Workers} | {Cell(r.Simd.Length == 0 ? "default" : r.Simd)} | {r.N}");
             sb.Append($" | {r.Mean:F1} | {r.Median:F1} | {r.P95:F1} | {r.Throughput:F2}");
             sb.Append($" | {Frac(r.ExactLines, r.TotalLines)} | {Frac(r.ExactImages, r.Images)} | {Pct(r.Cer)} | {Pct(r.CharAcc)}");

@@ -15,6 +15,10 @@ on:
       - .github/workflows/test.yml
   workflow_dispatch:
 
+concurrency:
+  group: simdpaddleocr-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unittest:
     runs-on: ubuntu-24.04
@@ -53,166 +57,216 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  bench:
+  smoke-platform:
     needs: generate
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: win-x64-tiny-4w
-            os: windows-2025
-            rid: win-x64
-            workers: 4
-            model: tiny
-          - name: win-x64-tiny-1w
-            os: windows-2025
-            rid: win-x64
-            workers: 1
-            model: tiny
-          - name: win-x64-tiny-4w-c
-            os: windows-2025
-            rid: win-x64
-            workers: 4
-            model: tiny
-            engine: c
-          - name: win-x64-tiny-1w-c
-            os: windows-2025
-            rid: win-x64
-            workers: 1
-            model: tiny
-            engine: c
-          - name: win-x64-tiny-openvino
-            os: windows-2025
-            rid: win-x64
-            workers: 4
-            model: tiny
-            engine: openvino
-          - name: win-x86-tiny-4w
-            os: windows-2025
-            rid: win-x86
-            workers: 4
-            model: tiny
-          - name: win-arm64-tiny-4w
-            os: windows-11-arm
-            rid: win-arm64
-            workers: 4
-            model: tiny
-          - name: linux-x64-tiny-4w
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: tiny
-          - name: linux-arm64-tiny-4w
-            os: ubuntu-24.04-arm
-            rid: linux-arm64
-            workers: 4
-            model: tiny
-          - name: osx-arm64-tiny-4w
-            os: macos-26
-            rid: osx-arm64
-            workers: 4
-            model: tiny
-          - name: osx-x64-tiny-4w
-            os: macos-26-intel
-            rid: osx-x64
-            workers: 4
-            model: tiny
-          - name: linux-x64-tiny-1w
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 1
-            model: tiny
-          - name: linux-x64-small-4w
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: small
-          - name: linux-x64-medium-4w
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: medium
-          - name: linux-x64-tiny-4w-noavx512
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: tiny
-            env: DOTNET_EnableAVX512=0
-          - name: linux-x64-tiny-4w-noavx2
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: tiny
-            env: DOTNET_EnableAVX2=0
-          - name: linux-x64-tiny-4w-noavx
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: tiny
-            env: DOTNET_EnableAVX=0
-          - name: linux-x64-tiny-4w-nohw
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: tiny
-            env: DOTNET_EnableHWIntrinsic=0
-          - name: linux-x64-tiny-4w-ns2
-            os: ubuntu-24.04
-            rid: linux-x64
-            workers: 4
-            model: tiny
-            props: -p:UseNs20Library=true
+          - { name: win-x64,     os: windows-2025,     rid: win-x64 }
+          - { name: win-arm64,   os: windows-11-arm,   rid: win-arm64 }
+          - { name: win-x86,     os: windows-2025,     rid: win-x86 }
+          - { name: linux-x64,   os: ubuntu-24.04,     rid: linux-x64 }
+          - { name: linux-arm64, os: ubuntu-24.04-arm, rid: linux-arm64 }
+          - { name: osx-x64,     os: macos-26-intel,   rid: osx-x64 }
+          - { name: osx-arm64,   os: macos-26,         rid: osx-arm64 }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
+        if: matrix.rid != 'win-x86'
         with:
           dotnet-version: "10.0.x"
       - uses: actions/setup-dotnet@v6
         if: matrix.rid == 'win-x86'
-        with:
-          dotnet-version: "10.0.x"
-          architecture: x86
+        with: { dotnet-version: "10.0.x", architecture: x86 }
       - uses: actions/download-artifact@v8
-        with:
-          name: ocr-dataset
-          path: dataset
-      - if: ${{ matrix.env }}
-        shell: bash
-        run: echo "${{ matrix.env }}" >> "$GITHUB_ENV"
-      - name: Run test
+        with: { name: ocr-dataset, path: dataset }
+      - name: Run platform smoke
         run: >
-          dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained
-          ${{ matrix.props }} --
-          --engine ${{ matrix.engine || 'sharp' }} --workers ${{ matrix.workers }} --model ${{ matrix.model }}
-          --input dataset --out ${{ matrix.name }}.json
+          dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained --
+          --suite smoke --count 3 --engine sharp --workers 4 --model tiny --input dataset
+          --case-id ${{ matrix.name }} --out ${{ matrix.name }}-smoke.json
       - uses: actions/upload-artifact@v7
-        if: ${{ !cancelled() }}
+        if: always()
         with:
-          name: result-${{ matrix.name }}
-          path: ${{ matrix.name }}.json
-          if-no-files-found: error
+          name: smoke-platform-${{ matrix.name }}
+          path: ${{ matrix.name }}-smoke.json
+          if-no-files-found: warn
           retention-days: 30
 
-  report:
-    needs: bench
-    if: ${{ always() && !cancelled() }}
+  smoke-models:
+    needs: generate
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      actions: write
-      contents: read
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: "10.0.x"
+        with: { dotnet-version: "10.0.x" }
       - uses: actions/download-artifact@v8
+        with: { name: ocr-dataset, path: dataset }
+      - name: Run tiny/small/medium smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          for model in tiny small medium; do
+            dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-x64 --no-self-contained -- \
+              --suite smoke --count 3 --engine sharp --workers 4 --model "$model" --input dataset \
+              --case-id "$model" --out "model-$model-smoke.json"
+          done
+      - uses: actions/upload-artifact@v7
+        if: always()
         with:
-          pattern: result-*
-          path: results
-          merge-multiple: true
+          name: smoke-models
+          path: model-*-smoke.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  bench-win-x64:
+    needs: generate
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: { replica: [1, 2, 3] }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with: { dotnet-version: "10.0.x" }
+      - uses: actions/download-artifact@v8
+        with: { name: ocr-dataset, path: dataset }
+      - name: Run Windows x64 benchmark suite
+        shell: pwsh
+        env: { REPLICA: ${{ matrix.replica }} }
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = 'win-x64-tiny'
+          $cases = @(
+            @{ id='tiny-1w';          engine='sharp';    workers=1; model='tiny'; isa='' },
+            @{ id='tiny-4w';          engine='sharp';    workers=4; model='tiny'; isa='' },
+            @{ id='tiny-4w-ns2';      engine='sharp';    workers=4; model='tiny'; isa=''; ns2=$true },
+            @{ id='tiny-4w-noavx512'; engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableAVX512=0' },
+            @{ id='tiny-4w-noavx2';   engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableAVX512=0;DOTNET_EnableAVX2=0' },
+            @{ id='tiny-4w-noavx';    engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableAVX512=0;DOTNET_EnableAVX2=0;DOTNET_EnableAVX=0' },
+            @{ id='tiny-4w-scalar';   engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableHWIntrinsic=0' },
+            @{ id='tiny-c-1w';     engine='c';        workers=1; model='tiny'; isa='' },
+            @{ id='tiny-c-4w';     engine='c';        workers=4; model='tiny'; isa='' },
+            @{ id='tiny-openvino'; engine='openvino'; workers=4; model='tiny'; isa='' }
+          )
+          foreach ($c in $cases) {
+            Remove-Item Env:DOTNET_EnableAVX512,Env:DOTNET_EnableAVX2,Env:DOTNET_EnableAVX,Env:DOTNET_EnableHWIntrinsic -ErrorAction SilentlyContinue
+            if ($c.isa) {
+              foreach ($setting in $c.isa.Split(';')) { $parts = $setting.Split('='); Set-Item "Env:$($parts[0])" $parts[1] }
+            }
+            $out = "$base-$($c.id)-r$env:REPLICA.json"
+            $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
+            $appArgs = @('--suite','bench','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
+              '--case-id',$c.id,'--replica',$env:REPLICA,'--out',$out)
+            dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r win-x64 --no-self-contained @runOptions -- @appArgs
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with: { name: bench-win-x64-r${{ matrix.replica }}, path: win-x64-tiny-*.json, if-no-files-found: warn, retention-days: 30 }
+
+  bench-linux-arm64:
+    needs: generate
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: { replica: [1, 2, 3] }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with: { dotnet-version: "10.0.x" }
+      - uses: actions/download-artifact@v8
+        with: { name: ocr-dataset, path: dataset }
+      - name: Run ARM64 benchmark suite
+        shell: pwsh
+        env: { REPLICA: ${{ matrix.replica }} }
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = 'linux-arm64-tiny'
+          $cases = @(
+            @{ id='tiny-1w';         workers=1; model='tiny'; isa='' },
+            @{ id='tiny-4w';         workers=4; model='tiny'; isa='' },
+            @{ id='tiny-4w-ns2';     workers=4; model='tiny'; isa=''; ns2=$true },
+            @{ id='tiny-4w-scalar';  workers=4; model='tiny'; isa='DOTNET_EnableHWIntrinsic=0' }
+            # Add an explicit AdvSimd case here when that implementation is
+            # available; it will be compared with tiny-4w on this replica.
+          )
+          foreach ($c in $cases) {
+            Remove-Item Env:DOTNET_EnableHWIntrinsic -ErrorAction SilentlyContinue
+            if ($c.isa) {
+              foreach ($setting in $c.isa.Split(';')) {
+                $parts = $setting.Split('=')
+                Set-Item "Env:$($parts[0])" $parts[1]
+              }
+            }
+            $out = "$base-$($c.id)-r$env:REPLICA.json"
+            $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
+            $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
+              '--case-id',$c.id,'--replica',$env:REPLICA,'--out',$out)
+            dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-arm64 --no-self-contained @runOptions -- @appArgs
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-linux-arm64-r${{ matrix.replica }}
+          path: linux-arm64-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  bench-osx-arm64:
+    needs: generate
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: { replica: [1, 2, 3] }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with: { dotnet-version: "10.0.x" }
+      - uses: actions/download-artifact@v8
+        with: { name: ocr-dataset, path: dataset }
+      - name: Run macOS ARM64 worker benchmark
+        shell: pwsh
+        env: { REPLICA: ${{ matrix.replica }} }
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = 'osx-arm64-tiny'
+          $cases = @(
+            @{ id='tiny-1w'; workers=1; model='tiny' },
+            @{ id='tiny-4w'; workers=4; model='tiny' }
+          )
+          foreach ($c in $cases) {
+            $out = "$base-$($c.id)-r$env:REPLICA.json"
+            $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
+              '--case-id',$c.id,'--replica',$env:REPLICA,'--out',$out)
+            dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r osx-arm64 --no-self-contained -- @appArgs
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-osx-arm64-r${{ matrix.replica }}
+          path: osx-arm64-tiny-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  report:
+    needs: [smoke-platform, smoke-models, bench-win-x64, bench-linux-arm64, bench-osx-arm64]
+    if: always() && !cancelled()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: { actions: write, contents: read }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with: { dotnet-version: "10.0.x" }
+      - uses: actions/download-artifact@v8
+        with: { pattern: '*', path: results, merge-multiple: true }
       - name: Build markdown report
         run: |
           dotnet run --project test/Sdcb.SimdPaddleOCR.TestReport -c Release -- --in results --out results/report.md
@@ -226,9 +280,11 @@ jobs:
       - name: Delete individual result artifacts
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          ids=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
-            --jq '.artifacts[] | select(.name | startswith("result-")) | .id')
-          for id in $ids; do
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"
-          done
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select((.name | startswith("bench-")) or (.name | startswith("smoke-"))) | .id' \
+            | while read -r id; do
+                [ -n "$id" ] && gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}"
+              done

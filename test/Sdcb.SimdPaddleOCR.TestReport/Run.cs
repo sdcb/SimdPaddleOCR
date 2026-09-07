@@ -8,6 +8,11 @@ sealed class Run
     public required string Label { get; init; }
     public required string SortKey { get; init; }
     public string? Rid { get; init; }
+    public string Suite { get; init; } = "bench";
+    public string CaseId { get; init; } = "";
+    public int Replica { get; init; } = 1;
+    public string EffectiveIsa { get; init; } = "";
+    public string Machine { get; init; } = "";
     public string Engine { get; init; } = "sharp";
     public string? Os { get; init; }
     public string? Model { get; init; }
@@ -37,21 +42,23 @@ sealed class Run
     public Dictionary<string, double> Conv { get; init; } = [];
 
     public bool IsSharp => Engine is "sharp" or "";
+    public bool IsBench => Suite == "bench";
+    public bool IsSmoke => Suite == "smoke";
     public bool IsC => Engine == "c";
     public bool IsOpenVino => Engine == "openvino";
 
     public bool IsTiny4wDefault =>
-        IsSharp && Model == "tiny" && Workers == 4 && Simd.Length == 0;
+        IsBench && IsSharp && Model == "tiny" && Workers == 4 && Simd.Length == 0;
 
     public bool IsLinuxX64Tiny4w =>
-        IsSharp && Rid == "linux-x64" && Model == "tiny" && Workers == 4;
+        IsBench && IsSharp && Rid == "linux-x64" && Model == "tiny" && Workers == 4;
 
     public bool IsLinuxX64Model =>
-        IsSharp && Rid == "linux-x64" && Workers == 4 && Simd.Length == 0 &&
+        IsBench && IsSharp && Rid == "linux-x64" && Workers == 4 && Simd.Length == 0 &&
         Model is "tiny" or "small" or "medium";
 
     public bool IsWinX64TinyEngineCompare =>
-        Rid == "win-x64" && Model == "tiny" && Simd.Length == 0 &&
+        IsBench && Rid == "win-x64" && Model == "tiny" && Simd.Length == 0 &&
         ((IsSharp || IsC) && Workers is 1 or 4 || IsOpenVino);
 
     public int SimdRank => Simd switch
@@ -133,10 +140,16 @@ sealed class Run
         string engine = meta?["mode"]?.GetValue<string>() ?? "sharp";
         if (engine.Length == 0) engine = "sharp";
         string model = meta?["model"]?.GetValue<string>() ?? "";
+        string suite = meta?["suite"]?.GetValue<string>() ?? "bench";
+        string caseId = meta?["caseId"]?.GetValue<string>() ?? "";
+        int replica = meta?["replica"]?.GetValue<int>() ?? 1;
+        string effectiveIsa = meta?["effectiveIsa"]?.GetValue<string>() ?? "";
         int? workers = meta?["workers"]?.GetValue<int>();
         string simd = SimdLabel(meta);
         string label = FormatLabel(rid, engine, model, workers, simd)
             ?? System.IO.Path.GetFileNameWithoutExtension(path);
+        if (!string.IsNullOrEmpty(caseId)) label += $" [{caseId}]";
+        if (replica > 1) label += $" r{replica}";
 
         int? exactLines = null, totalLines = null, exactImg = null, images = null;
         double? cer = null, charAcc = null;
@@ -161,6 +174,11 @@ sealed class Run
             Label = label,
             SortKey = $"{rid}|{engine}|{model}|{workers}|{simd}|{label}",
             Rid = string.IsNullOrEmpty(rid) ? null : rid,
+            Suite = suite,
+            CaseId = caseId,
+            Replica = replica,
+            EffectiveIsa = effectiveIsa,
+            Machine = meta?["machine"]?.GetValue<string>() ?? "",
             Engine = engine,
             Os = meta?["os"]?.GetValue<string>(),
             Model = string.IsNullOrEmpty(model) ? null : model,
