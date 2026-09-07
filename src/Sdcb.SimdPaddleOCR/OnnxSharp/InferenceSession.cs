@@ -687,9 +687,15 @@ public sealed class InferenceSession : IDisposable
         ReadOnlySpan<byte> p = _model.GetParameters(node); TensorValue o = _tensors[node.Outputs[0]]; TensorValue x = _tensors[node.Inputs[0]];
         switch (node.Operator)
         {
-            case OperatorId.Add: case OperatorId.Mul: case OperatorId.Div: case OperatorId.Sub: Binary(x, _tensors[node.Inputs[1]], o, node.Operator, _intraOpThreads); break;
+            case OperatorId.Add: Binary<AddOp>(x, _tensors[node.Inputs[1]], o, _intraOpThreads); break;
+            case OperatorId.Sub: Binary<SubOp>(x, _tensors[node.Inputs[1]], o, _intraOpThreads); break;
+            case OperatorId.Mul: Binary<MulOp>(x, _tensors[node.Inputs[1]], o, _intraOpThreads); break;
+            case OperatorId.Div: Binary<DivOp>(x, _tensors[node.Inputs[1]], o, _intraOpThreads); break;
             case OperatorId.Pow: BinaryPow(x, _tensors[node.Inputs[1]], o); break;
-            case OperatorId.Relu: case OperatorId.Sigmoid: case OperatorId.Erf: case OperatorId.Sqrt: SimdKernels.UnaryParallel(x.Data, o.Data, node.Operator, _intraOpThreads); break;
+            case OperatorId.Relu: SimdKernels.ReluParallel(x.Data, o.Data, _intraOpThreads); break;
+            case OperatorId.Sigmoid: SimdKernels.SigmoidParallel(x.Data, o.Data, _intraOpThreads); break;
+            case OperatorId.Erf: SimdKernels.ErfParallel(x.Data, o.Data, _intraOpThreads); break;
+            case OperatorId.Sqrt: SimdKernels.SqrtParallel(x.Data, o.Data, _intraOpThreads); break;
             case OperatorId.HardSigmoid: { float alpha = F32(p, 4), beta = F32(p, 8); SimdKernels.HardSigmoid(x.Data, o.Data, alpha, beta); break; }
             case OperatorId.BatchNormalization: BatchNorm(x, node, o); break;
             case OperatorId.Conv:
@@ -847,7 +853,7 @@ public sealed class InferenceSession : IDisposable
         }
         convOutput.ShareStorageWith(biasAddOutput);
         ExecuteConv(conv, convOutput, bias);
-        Binary(convOutput, residual, destination, OperatorId.Add, _intraOpThreads);
+        Binary<AddOp>(convOutput, residual, destination, _intraOpThreads);
         return true;
     }
 
@@ -872,7 +878,7 @@ public sealed class InferenceSession : IDisposable
         // consumer of the convolution result, so no live value is overwritten.
         convOutput.ShareStorageWith(reluOutput);
         ExecuteNode(conv);
-        SimdKernels.Unary(reluOutput.Data, reluOutput.Data, OperatorId.Relu);
+        SimdKernels.Relu(reluOutput.Data, reluOutput.Data);
         return true;
     }
 
@@ -961,8 +967,8 @@ public sealed class InferenceSession : IDisposable
             {
                 Span<float> values = reluOutput.Data.Slice((batch * channels + channel) * plane, plane);
                 float addend = bias.Data[channel];
-                SimdKernels.BinaryRightScalar(values, addend, values, OperatorId.Add);
-                SimdKernels.Unary(values, values, OperatorId.Relu);
+                SimdKernels.Add(values, addend, values);
+                SimdKernels.Relu(values, values);
             }
         return true;
     }
@@ -995,8 +1001,8 @@ public sealed class InferenceSession : IDisposable
             for (int channel = 0; channel < channels; channel++)
             {
                 Span<float> values = sigmoidOutput.Data.Slice((batch * channels + channel) * plane, plane);
-                SimdKernels.BinaryRightScalar(values, bias.Data[channel], values, OperatorId.Add);
-                SimdKernels.Unary(values, values, OperatorId.Sigmoid);
+                SimdKernels.Add(values, bias.Data[channel], values);
+                SimdKernels.Sigmoid(values, values);
             }
         return true;
     }
@@ -1027,7 +1033,7 @@ public sealed class InferenceSession : IDisposable
             // Write the planned destination, not the input buffer. Aliasing
             // output onto input disagrees with PlanWorkspace, which may reuse
             // the input range after this node while the output is still live.
-            SimdKernels.Unary(source.Data, destination.Data, OperatorId.Relu);
+            SimdKernels.Relu(source.Data, destination.Data);
             return true;
         }
         if (node.Operator is not (OperatorId.Add or OperatorId.Mul or OperatorId.Div or OperatorId.Sub) ||
@@ -1038,21 +1044,22 @@ public sealed class InferenceSession : IDisposable
         return true;
     }
 
-    private static void Binary(TensorValue a, TensorValue b, TensorValue o, OperatorId op, int intraOpThreads = 1)
+    private static void Binary<TOp>(TensorValue a, TensorValue b, TensorValue o, int intraOpThreads = 1)
+        where TOp : struct, IBinaryOp
     {
         if (b.Length == 1 && a.Length == o.Length)
         {
-            SimdKernels.BinaryRightScalar(a.Data, b.Data[0], o.Data, op);
+            SimdKernels.ElementwiseScalar<TOp>(a.Data, b.Data[0], o.Data);
             return;
         }
-        if (a.Length == o.Length && b.Length == o.Length) { SimdKernels.BinaryParallel(a.Data, b.Data, o.Data, op, intraOpThreads); return; }
-        int[] ad = a.Shape; int[] bd = b.Shape; int[] od = o.Shape; int rank = od.Length; Span<int> coord = stackalloc int[8];
+        if (a.Length == o.Length && b.Length == o.Length) { SimdKernels.ElementwiseParallel<TOp>(a.Data, b.Data, o.Data, intraOpThreads); return; }
+        int[] ad = a.Shape; int[] bd = b.Shape; int[] od = o.Shape; int rank = od.Length;
         if (rank == 4 && ad.Length == 4 && bd.Length == 4 && od.Length == 4 &&
             ad[0] == od[0] && ad[1] == od[1] && ad[2] == od[2] && ad[3] == od[3] &&
             bd[0] == 1 && bd[1] == ad[1] && bd[2] == 1 && bd[3] == 1)
         {
             int plane = ad[2] * ad[3];
-            SimdKernels.BinaryChannelBroadcast(a.Data, b.Data, o.Data, ad[0], ad[1], plane, op);
+            SimdKernels.ElementwiseChannel<TOp>(a.Data, b.Data, o.Data, ad[0], ad[1], plane);
             return;
         }
         // Fast path for the ubiquitous trailing-channel bias: [N,C] or
@@ -1063,10 +1070,11 @@ public sealed class InferenceSession : IDisposable
         {
             int channel = bd[0], outer = checked(o.Length / channel);
             for (int block = 0; block < outer; block++)
-                SimdKernels.Binary(a.Data.Slice(block * channel, channel), b.Data,
-                    o.Data.Slice(block * channel, channel), op);
+                SimdKernels.Elementwise<TOp>(a.Data.Slice(block * channel, channel), b.Data,
+                    o.Data.Slice(block * channel, channel));
             return;
         }
+        TOp op = default;
         ReadOnlySpan<float> aData = a.Data, bData = b.Data;
         Span<float> oData = o.Data;
         for (int index = 0; index < oData.Length; index++)
@@ -1079,10 +1087,7 @@ public sealed class InferenceSession : IDisposable
                 if (aa >= 0 && ad[aa] != 1) ao += c * Stride(ad, aa);
                 if (bb >= 0 && bd[bb] != 1) bo += c * Stride(bd, bb);
             }
-            oData[index] = op == OperatorId.Add ? aData[ao] + bData[bo]
-                : op == OperatorId.Mul ? aData[ao] * bData[bo]
-                : op == OperatorId.Sub ? aData[ao] - bData[bo]
-                : aData[ao] / bData[bo];
+            oData[index] = op.Apply(aData[ao], bData[bo]);
         }
     }
     private static int Stride(int[] d, int axis) { int s = 1; for (int i = axis + 1; i < d.Length; i++) s *= d[i]; return s; }
