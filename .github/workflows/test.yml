@@ -149,7 +149,7 @@ jobs:
           $hostInfo = "machine=$env:COMPUTERNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$cpu memory=$memoryGb GB memorySpeed=$memorySpeedText"
           Write-Output "Benchmark host: $hostInfo"
           Write-Output "::notice title=Benchmark host::$hostInfo"
-          $base = 'win-x64-simd-tiny'
+          $base = 'win-x64-simd'
           $cases = @(
             @{ id='tiny-4w';          engine='sharp';    workers=4; model='tiny'; isa='' },
             @{ id='tiny-4w-ns2';      engine='sharp';    workers=4; model='tiny'; isa=''; ns2=$true },
@@ -177,7 +177,7 @@ jobs:
         if: always()
         with:
           name: bench-win-x64-simd-r${{ matrix.replica }}
-          path: win-x64-simd-tiny-*.json
+          path: win-x64-simd-*.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -207,7 +207,7 @@ jobs:
           $hostInfo = "machine=$env:COMPUTERNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$cpu memory=$memoryGb GB memorySpeed=$memorySpeedText"
           Write-Output "Benchmark host: $hostInfo"
           Write-Output "::notice title=Benchmark host::$hostInfo"
-          $base = 'win-x64-engines-tiny'
+          $base = 'win-x64-engines'
           $cases = @(
             @{ id='tiny-1w';      engine='sharp';    workers=1; model='tiny' },
             @{ id='tiny-4w';      engine='sharp';    workers=4; model='tiny' },
@@ -229,7 +229,7 @@ jobs:
         if: always()
         with:
           name: bench-win-x64-engines-r${{ matrix.replica }}
-          path: win-x64-engines-tiny-*.json
+          path: win-x64-engines-*.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -267,7 +267,7 @@ jobs:
           $hostInfo = "machine=$env:HOSTNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$($cpu.Trim()) memory=$memoryGb GB memorySpeed=$memorySpeed"
           Write-Output "Benchmark host: $hostInfo"
           Write-Output "::notice title=Benchmark host::$hostInfo"
-          $base = 'linux-arm64-tiny'
+          $base = 'linux-arm64'
           $cases = @(
             @{ id='tiny-1w';         workers=1; model='tiny'; isa='' },
             @{ id='tiny-4w';         workers=4; model='tiny'; isa='' },
@@ -337,7 +337,7 @@ jobs:
           $hostInfo = "machine=$env:HOSTNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$cpu memory=$memoryGb GB memorySpeed=$memorySpeed"
           Write-Output "Benchmark host: $hostInfo"
           Write-Output "::notice title=Benchmark host::$hostInfo"
-          $base = 'osx-arm64-tiny'
+          $base = 'osx-arm64'
           $cases = @(
             @{ id='tiny-1w'; workers=1; model='tiny' },
             @{ id='tiny-4w'; workers=4; model='tiny' }
@@ -356,7 +356,7 @@ jobs:
         if: always()
         with:
           name: bench-osx-arm64-r${{ matrix.replica }}
-          path: osx-arm64-tiny-*.json
+          path: osx-arm64-*.json
           if-no-files-found: warn
           retention-days: 30
 
