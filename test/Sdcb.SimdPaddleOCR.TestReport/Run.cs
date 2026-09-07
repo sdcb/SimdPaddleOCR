@@ -8,7 +8,8 @@ sealed class Run
     public required string Label { get; init; }
     public required string SortKey { get; init; }
     public string? Rid { get; init; }
-    public string Suite { get; init; } = "bench";
+    public bool Benchmark { get; init; } = true;
+    public string BenchmarkKind { get; init; } = "simd";
     public string CaseId { get; init; } = "";
     public int Replica { get; init; } = 1;
     public string EffectiveIsa { get; init; } = "";
@@ -42,24 +43,12 @@ sealed class Run
     public Dictionary<string, double> Conv { get; init; } = [];
 
     public bool IsSharp => Engine is "sharp" or "";
-    public bool IsBench => Suite == "bench";
-    public bool IsSmoke => Suite == "smoke";
+    public bool IsBenchmark => Benchmark;
+    public bool IsSmoke => !Benchmark;
+    public bool IsSimdBenchmark => IsBenchmark && BenchmarkKind == "simd";
+    public bool IsEngineBenchmark => IsBenchmark && BenchmarkKind == "engine";
     public bool IsC => Engine == "c";
     public bool IsOpenVino => Engine == "openvino";
-
-    public bool IsTiny4wDefault =>
-        IsBench && IsSharp && Model == "tiny" && Workers == 4 && Simd.Length == 0;
-
-    public bool IsLinuxX64Tiny4w =>
-        IsBench && IsSharp && Rid == "linux-x64" && Model == "tiny" && Workers == 4;
-
-    public bool IsLinuxX64Model =>
-        IsBench && IsSharp && Rid == "linux-x64" && Workers == 4 && Simd.Length == 0 &&
-        Model is "tiny" or "small" or "medium";
-
-    public bool IsWinX64TinyEngineCompare =>
-        IsBench && Rid == "win-x64" && Model == "tiny" && Simd.Length == 0 &&
-        ((IsSharp || IsC) && Workers is 1 or 4 || IsOpenVino);
 
     public int SimdRank => Simd switch
     {
@@ -140,7 +129,9 @@ sealed class Run
         string engine = meta?["mode"]?.GetValue<string>() ?? "sharp";
         if (engine.Length == 0) engine = "sharp";
         string model = meta?["model"]?.GetValue<string>() ?? "";
-        string suite = meta?["suite"]?.GetValue<string>() ?? "bench";
+        bool benchmark = meta?["benchmark"]?.GetValue<bool>() ??
+            !string.Equals(meta?["suite"]?.GetValue<string>(), "smoke", StringComparison.OrdinalIgnoreCase);
+        string benchmarkKind = meta?["benchmarkKind"]?.GetValue<string>()?.ToLowerInvariant() ?? "simd";
         string caseId = meta?["caseId"]?.GetValue<string>() ?? "";
         int replica = meta?["replica"]?.GetValue<int>() ?? 1;
         string effectiveIsa = meta?["effectiveIsa"]?.GetValue<string>() ?? "";
@@ -174,7 +165,8 @@ sealed class Run
             Label = label,
             SortKey = $"{rid}|{engine}|{model}|{workers}|{simd}|{label}",
             Rid = string.IsNullOrEmpty(rid) ? null : rid,
-            Suite = suite,
+            Benchmark = benchmark,
+            BenchmarkKind = benchmarkKind,
             CaseId = caseId,
             Replica = replica,
             EffectiveIsa = effectiveIsa,

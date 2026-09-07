@@ -26,10 +26,12 @@ static class Markdown
         sb.AppendLine($"git `{git}` · generated {ts} · {runs.Count} runs · warmup excluded");
         sb.AppendLine();
         SmokeSection(sb, "Platform smoke", runs.Where(r => r.IsSmoke).ToList());
-        BenchSections(sb, runs);
+        BenchSections(sb, "SIMD / ISA benchmarks", runs.Where(r => r.IsSimdBenchmark).ToList());
+        BenchSections(sb, "Engine comparison benchmarks", runs.Where(r => r.IsEngineBenchmark).ToList());
+        EngineCompare(sb, runs.Where(r => r.IsEngineBenchmark && r.Rid == "win-x64" && r.Model == "tiny").ToList());
         sb.AppendLine("## Benchmark details");
         sb.AppendLine();
-        foreach (Run run in runs.Where(r => r.IsBench).OrderBy(r => r.Rid).ThenBy(r => r.Machine).ThenBy(r => r.Replica).ThenBy(r => r.Label))
+        foreach (Run run in runs.Where(r => r.IsBenchmark).OrderBy(r => r.Rid).ThenBy(r => r.Machine).ThenBy(r => r.Replica).ThenBy(r => r.Label))
             Detail(sb, run);
 
         return sb.ToString();
@@ -47,11 +49,11 @@ static class Markdown
         sb.AppendLine();
     }
 
-    private static void BenchSections(StringBuilder sb, List<Run> runs)
+    private static void BenchSections(StringBuilder sb, string title, List<Run> runs)
     {
-        sb.AppendLine("## Benchmarks");
+        sb.AppendLine($"## {title}");
         sb.AppendLine();
-        List<IGrouping<string, Run>> groups = runs.Where(r => r.IsBench)
+        List<IGrouping<string, Run>> groups = runs.Where(r => r.IsBenchmark)
             .GroupBy(r => r.Rid ?? "unknown", StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase).ToList();
         if (groups.Count == 0) { sb.AppendLine("No benchmark groups."); sb.AppendLine(); return; }
@@ -152,7 +154,7 @@ static class Markdown
         sb.AppendLine("## C# vs C vs OpenVINO (win-x64 tiny)");
         sb.AppendLine();
         var groups = runs
-            .Where(r => r.IsSharp || r.IsC)
+            .Where(r => r.Rid == "win-x64" && r.Model == "tiny" && (r.IsSharp || r.IsC))
             .GroupBy(r => r.Workers)
             .OrderBy(g => g.Key)
             .Select(g => (
@@ -162,7 +164,7 @@ static class Markdown
             .Where(p => p.Sharp is not null || p.C is not null)
             .ToList();
         Run? openvino = runs
-            .Where(r => r.IsOpenVino)
+            .Where(r => r.Rid == "win-x64" && r.Model == "tiny" && r.IsOpenVino)
             .OrderByDescending(r => r.Workers == 4)
             .ThenBy(r => r.Workers)
             .FirstOrDefault();

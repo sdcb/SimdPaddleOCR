@@ -86,7 +86,7 @@ jobs:
       - name: Run platform smoke
         run: >
           dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained --
-          --suite smoke --count 3 --engine sharp --workers 4 --model tiny --input dataset
+          --smoke --count 3 --engine sharp --workers 4 --model tiny --input dataset
           --case-id ${{ matrix.name }} --out ${{ matrix.name }}-smoke.json
       - uses: actions/upload-artifact@v7
         if: always()
@@ -112,7 +112,7 @@ jobs:
           set -euo pipefail
           for model in tiny small medium; do
             dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-x64 --no-self-contained -- \
-              --suite smoke --count 3 --engine sharp --workers 4 --model "$model" --input dataset \
+              --smoke --count 3 --engine sharp --workers 4 --model "$model" --input dataset \
               --case-id "$model" --out "model-$model-smoke.json"
           done
       - uses: actions/upload-artifact@v7
@@ -123,7 +123,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  bench-win-x64:
+  bench-win-x64-simd:
     needs: generate
     runs-on: windows-2025
     timeout-minutes: 60
@@ -151,16 +151,12 @@ jobs:
           Write-Output "::notice title=Benchmark host::$hostInfo"
           $base = 'win-x64-tiny'
           $cases = @(
-            @{ id='tiny-1w';          engine='sharp';    workers=1; model='tiny'; isa='' },
             @{ id='tiny-4w';          engine='sharp';    workers=4; model='tiny'; isa='' },
             @{ id='tiny-4w-ns2';      engine='sharp';    workers=4; model='tiny'; isa=''; ns2=$true },
             @{ id='tiny-4w-noavx512'; engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableAVX512=0' },
             @{ id='tiny-4w-noavx2';   engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableAVX512=0;DOTNET_EnableAVX2=0' },
             @{ id='tiny-4w-noavx';    engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableAVX512=0;DOTNET_EnableAVX2=0;DOTNET_EnableAVX=0' },
-            @{ id='tiny-4w-scalar';   engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableHWIntrinsic=0' },
-            @{ id='tiny-c-1w';     engine='c';        workers=1; model='tiny'; isa='' },
-            @{ id='tiny-c-4w';     engine='c';        workers=4; model='tiny'; isa='' },
-            @{ id='tiny-openvino'; engine='openvino'; workers=4; model='tiny'; isa='' }
+            @{ id='tiny-4w-scalar';   engine='sharp';    workers=4; model='tiny'; isa='DOTNET_EnableHWIntrinsic=0' }
           )
           foreach ($c in $cases) {
             Write-Output "::group::benchmark case $($c.id) (replica ${{ matrix.replica }})"
@@ -171,7 +167,7 @@ jobs:
               }
               $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
               $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
-              $appArgs = @('--suite','bench','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
+              $appArgs = @('--benchmark','--benchmark-kind','simd','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
                 '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
               dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r win-x64 --no-self-contained @runOptions -- @appArgs
             }
@@ -180,7 +176,59 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: bench-win-x64-r${{ matrix.replica }}
+          name: bench-win-x64-simd-r${{ matrix.replica }}
+          path: win-x64-tiny-*.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  bench-win-x64-engines:
+    needs: generate
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix: { replica: [1, 2, 3] }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-dotnet@v6
+        with: { dotnet-version: "10.0.x" }
+      - uses: actions/download-artifact@v8
+        with: { name: ocr-dataset, path: dataset }
+      - name: Run Windows x64 engine comparison
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name -ErrorAction SilentlyContinue)
+          if ($cpu) { $cpu = $cpu.Trim() } else { $cpu = 'unknown' }
+          $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+          $memoryGb = if ($cs -and $cs.TotalPhysicalMemory) { [math]::Round($cs.TotalPhysicalMemory / 1GB, 1) } else { 'unknown' }
+          $memorySpeed = (Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue | Where-Object { $_.Speed -gt 0 } | Measure-Object -Property Speed -Average).Average
+          $memorySpeedText = if ($memorySpeed) { "$([math]::Round($memorySpeed)) MHz" } else { 'unknown' }
+          $hostInfo = "machine=$env:COMPUTERNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$cpu memory=$memoryGb GB memorySpeed=$memorySpeedText"
+          Write-Output "Benchmark host: $hostInfo"
+          Write-Output "::notice title=Benchmark host::$hostInfo"
+          $base = 'win-x64-tiny'
+          $cases = @(
+            @{ id='tiny-1w';      engine='sharp';    workers=1; model='tiny' },
+            @{ id='tiny-4w';      engine='sharp';    workers=4; model='tiny' },
+            @{ id='tiny-c-1w';    engine='c';        workers=1; model='tiny' },
+            @{ id='tiny-c-4w';    engine='c';        workers=4; model='tiny' },
+            @{ id='tiny-openvino'; engine='openvino'; workers=4; model='tiny' }
+          )
+          foreach ($c in $cases) {
+            Write-Output "::group::benchmark case $($c.id) (replica ${{ matrix.replica }})"
+            try {
+              $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
+              $appArgs = @('--benchmark','--benchmark-kind','engine','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
+                '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
+              dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r win-x64 --no-self-contained -- @appArgs
+            }
+            finally { Write-Output '::endgroup::' }
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-win-x64-engines-r${{ matrix.replica }}
           path: win-x64-tiny-*.json
           if-no-files-found: warn
           retention-days: 30
@@ -240,7 +288,7 @@ jobs:
               }
               $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
               $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
-              $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
+              $appArgs = @('--benchmark','--benchmark-kind','simd','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
                 '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
               dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-arm64 --no-self-contained @runOptions -- @appArgs
             }
@@ -298,7 +346,7 @@ jobs:
             Write-Output "::group::benchmark case $($c.id) (replica ${{ matrix.replica }})"
             try {
               $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
-              $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
+              $appArgs = @('--benchmark','--benchmark-kind','simd','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
                 '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
               dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r osx-arm64 --no-self-contained -- @appArgs
             }
@@ -313,7 +361,7 @@ jobs:
           retention-days: 30
 
   report:
-    needs: [smoke-platform, smoke-models, bench-win-x64, bench-linux-arm64, bench-osx-arm64]
+    needs: [smoke-platform, smoke-models, bench-win-x64-simd, bench-win-x64-engines, bench-linux-arm64, bench-osx-arm64]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     timeout-minutes: 15

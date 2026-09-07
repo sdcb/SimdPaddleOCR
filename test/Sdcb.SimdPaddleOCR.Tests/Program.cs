@@ -16,7 +16,7 @@ using ImageSharpImage = SixLabors.ImageSharp.Image;
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
-    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c|openvino] [--suite smoke|bench] [--count N] [--case-id ID] [--replica N] [--c-assets <dir>]");
+    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c|openvino] [--smoke|--benchmark] [--benchmark-kind simd|engine] [--count N] [--case-id ID] [--replica N] [--c-assets <dir>]");
     Console.WriteLine("       --summarize <file...> [--input <dataset>] [--out-md <path>]");
     return args.Length == 0 ? 2 : 0;
 }
@@ -27,7 +27,8 @@ if (args[0] == "--summarize")
 int workers = 4;
 string modelType = "tiny";
 string engineName = "sharp";
-string suite = "bench";
+bool benchmark = true;
+string benchmarkKind = "simd";
 int? count = null;
 string caseId = "";
 int replica = 1;
@@ -42,7 +43,9 @@ for (int i = 0; i < args.Length; i++)
         case "--workers": workers = int.Parse(Next()); break;
         case "--model": modelType = Next().ToLowerInvariant(); break;
         case "--engine": engineName = Next().ToLowerInvariant(); break;
-        case "--suite": suite = Next().ToLowerInvariant(); break;
+        case "--smoke": benchmark = false; break;
+        case "--benchmark": benchmark = true; break;
+        case "--benchmark-kind": benchmarkKind = Next().ToLowerInvariant(); break;
         case "--count": count = int.Parse(Next()); break;
         case "--case-id": caseId = Next(); break;
         case "--replica": replica = int.Parse(Next()); break;
@@ -59,8 +62,8 @@ if (modelType is not ("tiny" or "small" or "medium"))
     throw new ArgumentException("--model must be tiny, small, or medium");
 if (engineName is not ("sharp" or "c" or "openvino"))
     throw new ArgumentException("--engine must be sharp, c, or openvino");
-if (suite is not ("smoke" or "bench"))
-    throw new ArgumentException("--suite must be smoke or bench");
+if (benchmarkKind is not ("simd" or "engine"))
+    throw new ArgumentException("--benchmark-kind must be simd or engine");
 if (count is < 1 or > 100)
     throw new ArgumentException("--count must be 1..100");
 if (replica < 1)
@@ -142,7 +145,8 @@ double wsLast = rows.Count > 0 ? rows[^1].WorkingSetMb : wsLoaded;
 var meta = new JsonObject
 {
     ["mode"] = engineName,
-    ["suite"] = suite,
+    ["benchmark"] = benchmark,
+    ["benchmarkKind"] = benchmarkKind,
     ["caseId"] = caseId,
     ["replica"] = replica,
     ["model"] = modelType,
