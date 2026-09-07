@@ -140,6 +140,15 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name -ErrorAction SilentlyContinue)
+          if ($cpu) { $cpu = $cpu.Trim() } else { $cpu = 'unknown' }
+          $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+          $memoryGb = if ($cs -and $cs.TotalPhysicalMemory) { [math]::Round($cs.TotalPhysicalMemory / 1GB, 1) } else { 'unknown' }
+          $memorySpeed = (Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue | Where-Object { $_.Speed -gt 0 } | Measure-Object -Property Speed -Average).Average
+          $memorySpeedText = if ($memorySpeed) { "$([math]::Round($memorySpeed)) MHz" } else { 'unknown' }
+          $hostInfo = "machine=$env:COMPUTERNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$cpu memory=$memoryGb GB memorySpeed=$memorySpeedText"
+          Write-Output "Benchmark host: $hostInfo"
+          Write-Output "::notice title=Benchmark host::$hostInfo"
           $base = 'win-x64-tiny'
           $cases = @(
             @{ id='tiny-1w';          engine='sharp';    workers=1; model='tiny'; isa='' },
@@ -154,15 +163,19 @@ jobs:
             @{ id='tiny-openvino'; engine='openvino'; workers=4; model='tiny'; isa='' }
           )
           foreach ($c in $cases) {
-            Remove-Item Env:DOTNET_EnableAVX512,Env:DOTNET_EnableAVX2,Env:DOTNET_EnableAVX,Env:DOTNET_EnableHWIntrinsic -ErrorAction SilentlyContinue
-            if ($c.isa) {
-              foreach ($setting in $c.isa.Split(';')) { $parts = $setting.Split('='); Set-Item "Env:$($parts[0])" $parts[1] }
+            Write-Output "::group::benchmark case $($c.id) (replica ${{ matrix.replica }})"
+            try {
+              Remove-Item Env:DOTNET_EnableAVX512,Env:DOTNET_EnableAVX2,Env:DOTNET_EnableAVX,Env:DOTNET_EnableHWIntrinsic -ErrorAction SilentlyContinue
+              if ($c.isa) {
+                foreach ($setting in $c.isa.Split(';')) { $parts = $setting.Split('='); Set-Item "Env:$($parts[0])" $parts[1] }
+              }
+              $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
+              $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
+              $appArgs = @('--suite','bench','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
+                '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
+              dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r win-x64 --no-self-contained @runOptions -- @appArgs
             }
-            $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
-            $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
-            $appArgs = @('--suite','bench','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
-              '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
-            dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r win-x64 --no-self-contained @runOptions -- @appArgs
+            finally { Write-Output '::endgroup::' }
           }
       - uses: actions/upload-artifact@v7
         if: always()
@@ -189,6 +202,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $cpu = if (Get-Command lscpu -ErrorAction SilentlyContinue) {
+            (& lscpu 2>$null | Select-String '^Model name:|^Model:|^Hardware:|^Architecture:' | Select-Object -First 1).Line
+          } else {
+            (Get-Content /proc/cpuinfo -ErrorAction SilentlyContinue | Select-String '^model name|^Hardware|^CPU part' | Select-Object -First 1).Line
+          }
+          if ([string]::IsNullOrWhiteSpace($cpu)) { $cpu = 'unknown' }
+          $memoryLine = Get-Content /proc/meminfo -ErrorAction SilentlyContinue | Select-String '^MemTotal:' | Select-Object -First 1
+          $memoryKb = if ($memoryLine -and $memoryLine.Line -match '^MemTotal:\s*([0-9]+)') { $Matches[1] } else { $null }
+          $memoryGb = if ($memoryKb) { [math]::Round(([double]$memoryKb / 1MB), 1) } else { 'unknown' }
+          $memorySpeed = 'unknown'
+          if (Get-Command dmidecode -ErrorAction SilentlyContinue) {
+            $speedLine = & dmidecode --type memory 2>$null | Select-String 'Configured Memory Speed:|Speed:' | Select-Object -First 1
+            if ($speedLine -and $speedLine.Line -match '([0-9]+) MT/s') { $memorySpeed = "$($Matches[1]) MT/s" }
+          }
+          $hostInfo = "machine=$env:HOSTNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$($cpu.Trim()) memory=$memoryGb GB memorySpeed=$memorySpeed"
+          Write-Output "Benchmark host: $hostInfo"
+          Write-Output "::notice title=Benchmark host::$hostInfo"
           $base = 'linux-arm64-tiny'
           $cases = @(
             @{ id='tiny-1w';         workers=1; model='tiny'; isa='' },
@@ -199,18 +229,22 @@ jobs:
             # available; it will be compared with tiny-4w on this replica.
           )
           foreach ($c in $cases) {
-            Remove-Item Env:DOTNET_EnableHWIntrinsic -ErrorAction SilentlyContinue
-            if ($c.isa) {
-              foreach ($setting in $c.isa.Split(';')) {
-                $parts = $setting.Split('=')
-                Set-Item "Env:$($parts[0])" $parts[1]
+            Write-Output "::group::benchmark case $($c.id) (replica ${{ matrix.replica }})"
+            try {
+              Remove-Item Env:DOTNET_EnableHWIntrinsic -ErrorAction SilentlyContinue
+              if ($c.isa) {
+                foreach ($setting in $c.isa.Split(';')) {
+                  $parts = $setting.Split('=')
+                  Set-Item "Env:$($parts[0])" $parts[1]
+                }
               }
+              $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
+              $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
+              $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
+                '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
+              dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-arm64 --no-self-contained @runOptions -- @appArgs
             }
-            $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
-            $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
-            $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
-              '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
-            dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-arm64 --no-self-contained @runOptions -- @appArgs
+            finally { Write-Output '::endgroup::' }
           }
       - uses: actions/upload-artifact@v7
         if: always()
@@ -237,16 +271,38 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $cpu = (& sysctl -n machdep.cpu.brand_string 2>$null)
+          if ([string]::IsNullOrWhiteSpace($cpu) -and (Get-Command system_profiler -ErrorAction SilentlyContinue)) {
+            $cpu = (& system_profiler SPHardwareDataType 2>$null | Select-String 'Chip:|Processor Name:' | Select-Object -First 1).Line
+            if ($cpu -match ':\s*(.+)$') { $cpu = $Matches[1] }
+          }
+          if ($cpu) { $cpu = $cpu.Trim() }
+          if ([string]::IsNullOrWhiteSpace($cpu)) { $cpu = 'unknown' }
+          $memoryBytes = (& sysctl -n hw.memsize 2>$null)
+          if ($memoryBytes) { $memoryBytes = $memoryBytes.Trim() }
+          $memoryGb = if ($memoryBytes -match '^[0-9]+$') { [math]::Round(([double]$memoryBytes / 1GB), 1) } else { 'unknown' }
+          $memorySpeed = 'unknown'
+          if (Get-Command system_profiler -ErrorAction SilentlyContinue) {
+            $speedLine = & system_profiler SPMemoryDataType 2>$null | Select-String 'Speed:' | Select-Object -First 1
+            if ($speedLine -and $speedLine.Line -match 'Speed:\s*(.+)$') { $memorySpeed = $Matches[1].Trim() }
+          }
+          $hostInfo = "machine=$env:HOSTNAME os=$([System.Environment]::OSVersion.VersionString) logicalCpu=$([System.Environment]::ProcessorCount) cpu=$cpu memory=$memoryGb GB memorySpeed=$memorySpeed"
+          Write-Output "Benchmark host: $hostInfo"
+          Write-Output "::notice title=Benchmark host::$hostInfo"
           $base = 'osx-arm64-tiny'
           $cases = @(
             @{ id='tiny-1w'; workers=1; model='tiny' },
             @{ id='tiny-4w'; workers=4; model='tiny' }
           )
           foreach ($c in $cases) {
-            $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
-            $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
-              '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
-            dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r osx-arm64 --no-self-contained -- @appArgs
+            Write-Output "::group::benchmark case $($c.id) (replica ${{ matrix.replica }})"
+            try {
+              $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
+              $appArgs = @('--suite','bench','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
+                '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
+              dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r osx-arm64 --no-self-contained -- @appArgs
+            }
+            finally { Write-Output '::endgroup::' }
           }
       - uses: actions/upload-artifact@v7
         if: always()
