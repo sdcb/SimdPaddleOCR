@@ -131,7 +131,13 @@ sealed class Run
         string model = meta?["model"]?.GetValue<string>() ?? "";
         bool benchmark = meta?["benchmark"]?.GetValue<bool>() ??
             !string.Equals(meta?["suite"]?.GetValue<string>(), "smoke", StringComparison.OrdinalIgnoreCase);
-        string benchmarkKind = meta?["benchmarkKind"]?.GetValue<string>()?.ToLowerInvariant() ?? "simd";
+        string? metadataKind = meta?["benchmarkKind"]?.GetValue<string>()?.ToLowerInvariant();
+        string fileName = System.IO.Path.GetFileName(path);
+        string benchmarkKind = metadataKind is "simd" or "engine"
+            ? metadataKind
+            : fileName.Contains("-engines-", StringComparison.OrdinalIgnoreCase)
+                ? "engine"
+                : "simd";
         string caseId = meta?["caseId"]?.GetValue<string>() ?? "";
         int replica = meta?["replica"]?.GetValue<int>() ?? 1;
         string effectiveIsa = meta?["effectiveIsa"]?.GetValue<string>() ?? "";

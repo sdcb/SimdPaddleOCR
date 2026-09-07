@@ -53,7 +53,7 @@ static class Markdown
     {
         sb.AppendLine($"## {title}");
         sb.AppendLine();
-        List<IGrouping<string, Run>> groups = runs.Where(r => r.IsBenchmark)
+        List<IGrouping<string, Run>> groups = runs
             .GroupBy(r => r.Rid ?? "unknown", StringComparer.OrdinalIgnoreCase)
             .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase).ToList();
         if (groups.Count == 0) { sb.AppendLine("No benchmark groups."); sb.AppendLine(); return; }
