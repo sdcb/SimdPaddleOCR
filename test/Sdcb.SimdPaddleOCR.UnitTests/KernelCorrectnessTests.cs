@@ -43,6 +43,27 @@ public class KernelCorrectnessTests
         AssertClose(expected, actual);
     }
 
+    [Fact]
+    public void ConvTranspose2x2_VectorMatchesReference()
+    {
+        const int batch = 1, ic = 3, oc = 5, ih = 6, iw = 7;
+        int oh = ih * 2, ow = iw * 2;
+        float[] input = Ramp(batch * ic * ih * iw, 0.04f);
+        float[] weights = Ramp(ic * oc * 4, -0.03f);
+        float[] bias = Ramp(oc, 0.02f);
+
+        float[] expected = new float[batch * oc * oh * ow];
+        ConvTranspose2x2Ref(input, weights, bias, expected, batch, ic, ih, iw, oc);
+
+        float[] actual = new float[expected.Length];
+        Assert.True(ConvTranspose.Try(input, weights, bias, actual, batch, ic, ih, iw, oc));
+        AssertClose(expected, actual);
+
+        float[] vectorActual = new float[expected.Length];
+        Assert.True(ConvTranspose.TryVector(input, weights, bias, vectorActual, batch, ic, ih, iw, oc, 1));
+        AssertClose(expected, vectorActual);
+    }
+
     internal static float[] Ramp(int length, float scale)
     {
         float[] values = new float[length];
@@ -100,5 +121,37 @@ public class KernelCorrectnessTests
                                 }
                         output[((b * outputChannels + co) * outputPlane) + oy * outputWidth + ox] = sum;
                     }
+    }
+
+    internal static void ConvTranspose2x2Ref(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+        ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
+        int inputHeight, int inputWidth, int outputChannels)
+    {
+        int inputPlane = inputHeight * inputWidth;
+        int outputWidth = inputWidth * 2, outputHeight = inputHeight * 2;
+        int outputPlane = outputHeight * outputWidth;
+        for (int b = 0; b < batch; b++)
+            for (int co = 0; co < outputChannels; co++)
+            {
+                int dstBase = (b * outputChannels + co) * outputPlane;
+                float initial = bias.IsEmpty ? 0f : bias[co];
+                for (int i = 0; i < outputPlane; i++)
+                    output[dstBase + i] = initial;
+                for (int ci = 0; ci < inputChannels; ci++)
+                {
+                    int srcBase = (b * inputChannels + ci) * inputPlane;
+                    int wb = (ci * outputChannels + co) * 4;
+                    for (int iy = 0; iy < inputHeight; iy++)
+                        for (int ix = 0; ix < inputWidth; ix++)
+                        {
+                            float v = input[srcBase + iy * inputWidth + ix];
+                            int ox = ix * 2, oy = iy * 2;
+                            output[dstBase + oy * outputWidth + ox] += v * weights[wb];
+                            output[dstBase + oy * outputWidth + ox + 1] += v * weights[wb + 1];
+                            output[dstBase + (oy + 1) * outputWidth + ox] += v * weights[wb + 2];
+                            output[dstBase + (oy + 1) * outputWidth + ox + 1] += v * weights[wb + 3];
+                        }
+                }
+            }
     }
 }

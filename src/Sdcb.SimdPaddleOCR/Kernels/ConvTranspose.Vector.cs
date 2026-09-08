@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 #endif
 using System.Threading.Tasks;
@@ -146,6 +147,18 @@ internal static partial class ConvTranspose
         }
         if (width == 4)
         {
+#if !NETSTANDARD2_0
+            if (AdvSimd.Arm64.IsSupported)
+            {
+                Vector128<float> v = Unsafe.BitCast<Vector<float>, Vector128<float>>(values);
+                Vector128<float> z = Vector128<float>.Zero;
+                evenLow = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipLow(v, z));
+                evenHigh = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipHigh(v, z));
+                oddLow = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipLow(z, v));
+                oddHigh = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipHigh(z, v));
+                return;
+            }
+#endif
             evenLowRef = source;
             Unsafe.Add(ref evenLowRef, 2) = Unsafe.Add(ref source, 1);
             Unsafe.Add(ref oddLowRef, 1) = source;
