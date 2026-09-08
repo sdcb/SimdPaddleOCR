@@ -93,13 +93,38 @@ internal static partial class SimdKernels
             Vector128<float> packed = Unsafe.BitCast<Vector<float>, Vector128<float>>(value);
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(ErfVectorAdvSimd(packed));
         }
-        if (Sse.IsSupported && Vector<float>.Count == 4)
+        else if (Sse.IsSupported && Vector<float>.Count == 4)
         {
             Vector128<float> packed = Unsafe.BitCast<Vector<float>, Vector128<float>>(value);
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(ErfVectorSse(packed));
         }
+        else
 #endif
-        return ErfVectorNumerics(value);
+        {
+            Vector<float> abs = Vector.Abs(value);
+            Vector<float> sq = abs * abs;
+            // Feature-map values are spatially correlated, so many vectors stay
+            // entirely inside one approximation interval. Mixed vectors still
+            // evaluate all three polynomials, matching the AVX/SSE blend.
+            if (Vector.LessThanAll(abs, VecErfOne))
+                return VecCopySign(ErfPolySmall(abs, sq), value);
+            else if (Vector.GreaterThanOrEqualAll(abs, VecErfFour))
+                return VecCopySign(VecErfOne, value);
+            else if (Vector.GreaterThanOrEqualAll(abs, VecErfOne) && Vector.LessThanAll(abs, VecErfTwo))
+                return VecCopySign(ErfPolyMiddle(abs), value);
+            else if (Vector.GreaterThanOrEqualAll(abs, VecErfTwo) && Vector.LessThanAll(abs, VecErfFour))
+                return VecCopySign(ErfPolyLarge(abs), value);
+            else
+            {
+                Vector<float> small = ErfPolySmall(abs, sq);
+                Vector<float> middle = ErfPolyMiddle(abs);
+                Vector<float> large = ErfPolyLarge(abs);
+                Vector<float> result = Vector.ConditionalSelect(Vector.LessThan(abs, VecErfTwo), middle, large);
+                result = Vector.ConditionalSelect(Vector.LessThan(abs, VecErfOne), small, result);
+                result = Vector.ConditionalSelect(Vector.GreaterThanOrEqual(abs, VecErfFour), VecErfOne, result);
+                return VecCopySign(result, value);
+            }
+        }
     }
 
     private static readonly Vector<float> VecErfOne = new(1f);
@@ -141,31 +166,6 @@ internal static partial class SimdKernels
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector<float> VecCopySign(Vector<float> magnitude, Vector<float> signSource) =>
         Vector.ConditionalSelect(Vector.LessThan(signSource, Vector<float>.Zero), -magnitude, magnitude);
-
-    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
-    private static Vector<float> ErfVectorNumerics(Vector<float> value)
-    {
-        Vector<float> abs = Vector.Abs(value);
-        Vector<float> sq = abs * abs;
-        // Feature-map values are spatially correlated, so many vectors stay
-        // entirely inside one approximation interval. Mixed vectors still
-        // evaluate all three polynomials, matching the AVX/SSE blend.
-        if (Vector.LessThanAll(abs, VecErfOne))
-            return VecCopySign(ErfPolySmall(abs, sq), value);
-        if (Vector.GreaterThanOrEqualAll(abs, VecErfFour))
-            return VecCopySign(VecErfOne, value);
-        if (Vector.GreaterThanOrEqualAll(abs, VecErfOne) && Vector.LessThanAll(abs, VecErfTwo))
-            return VecCopySign(ErfPolyMiddle(abs), value);
-        if (Vector.GreaterThanOrEqualAll(abs, VecErfTwo) && Vector.LessThanAll(abs, VecErfFour))
-            return VecCopySign(ErfPolyLarge(abs), value);
-        Vector<float> small = ErfPolySmall(abs, sq);
-        Vector<float> middle = ErfPolyMiddle(abs);
-        Vector<float> large = ErfPolyLarge(abs);
-        Vector<float> result = Vector.ConditionalSelect(Vector.LessThan(abs, VecErfTwo), middle, large);
-        result = Vector.ConditionalSelect(Vector.LessThan(abs, VecErfOne), small, result);
-        result = Vector.ConditionalSelect(Vector.GreaterThanOrEqual(abs, VecErfFour), VecErfOne, result);
-        return VecCopySign(result, value);
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector<float> ErfPolySmall(Vector<float> a, Vector<float> s)

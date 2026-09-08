@@ -251,8 +251,11 @@ internal static class SimdOps
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(
                 AdvSimd.FusedMultiplyAdd(acc, val, AdvSimd.DuplicateToVector128(weight)));
         }
+        else
 #endif
-        return accumulator + value * new Vector<float>(weight);
+        {
+            return accumulator + value * new Vector<float>(weight);
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -266,8 +269,11 @@ internal static class SimdOps
             Vector128<float> w = Unsafe.BitCast<Vector<float>, Vector128<float>>(weight);
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.FusedMultiplyAdd(acc, val, w));
         }
+        else
 #endif
-        return accumulator + value * weight;
+        {
+            return accumulator + value * weight;
+        }
     }
 
     [MethodImpl(MethodImplCompat.AggressiveOptimization)]
@@ -289,39 +295,43 @@ internal static class SimdOps
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(
                 AdvSimd.Arm64.UnzipEven(first, second));
         }
-        if (Sse.IsSupported && Vector<float>.Count == 4)
+        else if (Sse.IsSupported && Vector<float>.Count == 4)
         {
             Vector128<float> first = Vector128.LoadUnsafe(ref source);
             Vector128<float> second = Vector128.LoadUnsafe(ref Unsafe.Add(ref source, 4));
             Vector128<float> even = Sse.Shuffle(first, second, 0x88);
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(even);
         }
+        else
 #endif
-        Vector<float> value = default;
-        ref float d = ref Unsafe.As<Vector<float>, float>(ref value);
-        int width = Vector<float>.Count;
-        if (width == 8)
         {
-            Unsafe.Add(ref d, 0) = source;
-            Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
-            Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
-            Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
-            Unsafe.Add(ref d, 4) = Unsafe.Add(ref source, 8);
-            Unsafe.Add(ref d, 5) = Unsafe.Add(ref source, 10);
-            Unsafe.Add(ref d, 6) = Unsafe.Add(ref source, 12);
-            Unsafe.Add(ref d, 7) = Unsafe.Add(ref source, 14);
+            Vector<float> value = default;
+            ref float d = ref Unsafe.As<Vector<float>, float>(ref value);
+            int width = Vector<float>.Count;
+            if (width == 8)
+            {
+                Unsafe.Add(ref d, 0) = source;
+                Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
+                Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
+                Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
+                Unsafe.Add(ref d, 4) = Unsafe.Add(ref source, 8);
+                Unsafe.Add(ref d, 5) = Unsafe.Add(ref source, 10);
+                Unsafe.Add(ref d, 6) = Unsafe.Add(ref source, 12);
+                Unsafe.Add(ref d, 7) = Unsafe.Add(ref source, 14);
+            }
+            else if (width == 4)
+            {
+                Unsafe.Add(ref d, 0) = source;
+                Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
+                Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
+                Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
+            }
+            else
+            {
+                for (int lane = 0; lane < width; lane++)
+                    Unsafe.Add(ref d, lane) = Unsafe.Add(ref source, lane * 2);
+            }
             return value;
         }
-        if (width == 4)
-        {
-            Unsafe.Add(ref d, 0) = source;
-            Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
-            Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
-            Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
-            return value;
-        }
-        for (int lane = 0; lane < width; lane++)
-            Unsafe.Add(ref d, lane) = Unsafe.Add(ref source, lane * 2);
-        return value;
     }
 }

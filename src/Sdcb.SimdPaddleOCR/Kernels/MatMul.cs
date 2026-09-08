@@ -20,37 +20,29 @@ internal static partial class MatMul
     internal static bool Try(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         Span<float> output, int batch, int rows, int inner, int columns, float[]? packedWeights = null)
     {
-        #if !NETSTANDARD2_0
+#if !NETSTANDARD2_0
         if (Avx512F.IsSupported && packedWeights is not null &&
             rows >= 8 && (rows & 7) == 0 && inner >= 64 && columns >= 1024)
         {
             // Eight-row packed tile: one ZMM weight load feeds eight FMA chains.
             MatMulRows16PackedAvx512(input, weights, packedWeights, output,
                 batch, rows, inner, columns);
-            return true;
         }
         else if (Avx.IsSupported)
         {
             if (packedWeights is not null && rows >= 4 && (rows & 3) == 0 && inner >= 64 && columns >= 1024)
-            {
                 MatMulRows4Packed(input, weights, packedWeights, output, batch, rows, inner, columns);
-                return true;
-            }
-            if (rows >= 4)
-            {
+            else if (rows >= 4)
                 MatMulRows4(input, weights, output, batch, rows, inner, columns);
-                return true;
-            }
-            MatMulRows1(input, weights, output, batch, 0, rows, inner, columns);
-            return true;
+            else
+                MatMulRows1(input, weights, output, batch, 0, rows, inner, columns);
         }
         else
 #endif
-        if (Vector.IsHardwareAccelerated)
-        {
-            return TryVector(input, weights, output, batch, rows, inner, columns, packedWeights);
-        }
-        MatMulScalar(input, weights, output, batch, rows, inner, columns);
+            if (Vector.IsHardwareAccelerated)
+                TryVector(input, weights, output, batch, rows, inner, columns, packedWeights);
+            else
+                MatMulScalar(input, weights, output, batch, rows, inner, columns);
         return true;
     }
 }

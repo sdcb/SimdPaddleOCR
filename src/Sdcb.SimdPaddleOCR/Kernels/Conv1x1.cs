@@ -19,7 +19,7 @@ internal static partial class Conv1x1
     {
         // Zen 5: prefer 4-OC / 8-OC × Vector512 spatial-16. Avoid 16-OC ZMM
         // tiles (register spills). Prefer FourOutputs; use Eight when aligned.
-        #if !NETSTANDARD2_0
+#if !NETSTANDARD2_0
         if (Avx512F.IsSupported)
         {
             int inputPerGroup = inputChannels / groups;
@@ -48,58 +48,56 @@ internal static partial class Conv1x1
                         Try(inSpan, w, b, outSpan, 1, inputChannels, height, width, count, 1);
                     });
                 }
-                return true;
             }
-            if (outputPerGroup >= 4 && (outputPerGroup & 3) == 0)
+            else if (outputPerGroup >= 4 && (outputPerGroup & 3) == 0)
             {
                 // Prefer 8-OC spatial-16; else 4-OC dual-spatial. Avoid 16-OC ZMM.
                 if ((outputPerGroup & 7) == 0)
-                {
                     Conv1x1EightOutputsAvx512(input, weights, bias, output, batch, inputChannels, height, width,
                         outputChannels, groups, inputPerGroup, outputPerGroup, plane);
-                    return true;
-                }
-                Conv1x1FourOutputsAvx512(input, weights, bias, output, batch, inputChannels, height, width,
-                    outputChannels, groups, inputPerGroup, outputPerGroup, plane);
-                return true;
+                else
+                    Conv1x1FourOutputsAvx512(input, weights, bias, output, batch, inputChannels, height, width,
+                        outputChannels, groups, inputPerGroup, outputPerGroup, plane);
             }
-            for (int b = 0; b < batch; b++)
+            else
             {
-                int inputBatch = b * inputChannels * plane;
-                int outputBatch = b * outputChannels * plane;
-                for (int g = 0; g < groups; g++)
+                for (int b = 0; b < batch; b++)
                 {
-                    int inputGroup = inputBatch + g * inputPerGroup * plane;
-                    int outputGroup = outputBatch + g * outputPerGroup * plane;
-                    for (int co = 0; co < outputPerGroup; co++)
+                    int inputBatch = b * inputChannels * plane;
+                    int outputBatch = b * outputChannels * plane;
+                    for (int g = 0; g < groups; g++)
                     {
-                        int globalCo = g * outputPerGroup + co;
-                        int outputOffset = outputGroup + co * plane;
-                        float initial = bias.IsEmpty ? 0f : bias[globalCo];
-                        Vector512<float> initialVector = Vector512.Create(initial);
-                        int spatial = 0;
-                        for (; spatial <= plane - 16; spatial += 16)
-                            Store512(output, outputOffset + spatial, initialVector);
-                        for (; spatial < plane; spatial++) output[outputOffset + spatial] = initial;
-                        int weightBase = globalCo * inputPerGroup;
-                        for (int ci = 0; ci < inputPerGroup; ci++)
+                        int inputGroup = inputBatch + g * inputPerGroup * plane;
+                        int outputGroup = outputBatch + g * outputPerGroup * plane;
+                        for (int co = 0; co < outputPerGroup; co++)
                         {
-                            ReadOnlySpan<float> inputChannel = input.Slice(inputGroup + ci * plane, plane);
-                            float weight = weights[weightBase + ci];
-                            spatial = 0;
+                            int globalCo = g * outputPerGroup + co;
+                            int outputOffset = outputGroup + co * plane;
+                            float initial = bias.IsEmpty ? 0f : bias[globalCo];
+                            Vector512<float> initialVector = Vector512.Create(initial);
+                            int spatial = 0;
                             for (; spatial <= plane - 16; spatial += 16)
+                                Store512(output, outputOffset + spatial, initialVector);
+                            for (; spatial < plane; spatial++) output[outputOffset + spatial] = initial;
+                            int weightBase = globalCo * inputPerGroup;
+                            for (int ci = 0; ci < inputPerGroup; ci++)
                             {
-                                Vector512<float> value = Load512(inputChannel, spatial);
-                                Vector512<float> current = Load512(output, outputOffset + spatial);
-                                Store512(output, outputOffset + spatial, AddMul512(current, value, weight));
+                                ReadOnlySpan<float> inputChannel = input.Slice(inputGroup + ci * plane, plane);
+                                float weight = weights[weightBase + ci];
+                                spatial = 0;
+                                for (; spatial <= plane - 16; spatial += 16)
+                                {
+                                    Vector512<float> value = Load512(inputChannel, spatial);
+                                    Vector512<float> current = Load512(output, outputOffset + spatial);
+                                    Store512(output, outputOffset + spatial, AddMul512(current, value, weight));
+                                }
+                                for (; spatial < plane; spatial++)
+                                    output[outputOffset + spatial] += inputChannel[spatial] * weight;
                             }
-                            for (; spatial < plane; spatial++)
-                                output[outputOffset + spatial] += inputChannel[spatial] * weight;
                         }
                     }
                 }
             }
-            return true;
         }
         else if (Avx.IsSupported)
         {
@@ -129,74 +127,77 @@ internal static partial class Conv1x1
                         Try(inSpan, w, b, outSpan, 1, inputChannels, height, width, count, 1);
                     });
                 }
-                return true;
             }
-            if ((outputPerGroup & 15) == 0 && outputPerGroup >= 16)
+            else if ((outputPerGroup & 15) == 0 && outputPerGroup >= 16)
             {
                 Conv1x1SixteenOutputs(input, weights, bias, output, batch, inputChannels, height, width,
                     outputChannels, groups, inputPerGroup, outputPerGroup, plane);
-                return true;
             }
-            if ((outputPerGroup & 7) == 0 && outputPerGroup >= 8)
+            else if ((outputPerGroup & 7) == 0 && outputPerGroup >= 8)
             {
                 Conv1x1EightOutputs(input, weights, bias, output, batch, inputChannels, height, width,
                     outputChannels, groups, inputPerGroup, outputPerGroup, plane);
-                return true;
             }
-            if (outputPerGroup >= 4)
+            else if (outputPerGroup >= 4)
             {
                 Conv1x1FourOutputs(input, weights, bias, output, batch, inputChannels, height, width,
                     outputChannels, groups, inputPerGroup, outputPerGroup, plane);
-                return true;
             }
-            for (int b = 0; b < batch; b++)
+            else
             {
-                int inputBatch = b * inputChannels * plane;
-                int outputBatch = b * outputChannels * plane;
-                for (int g = 0; g < groups; g++)
+                for (int b = 0; b < batch; b++)
                 {
-                    int inputGroup = inputBatch + g * inputPerGroup * plane;
-                    int outputGroup = outputBatch + g * outputPerGroup * plane;
-                    for (int co = 0; co < outputPerGroup; co++)
+                    int inputBatch = b * inputChannels * plane;
+                    int outputBatch = b * outputChannels * plane;
+                    for (int g = 0; g < groups; g++)
                     {
-                        int globalCo = g * outputPerGroup + co;
-                        int outputOffset = outputGroup + co * plane;
-                        float initial = bias.IsEmpty ? 0f : bias[globalCo];
-                        Vector256<float> initialVector = Vector256.Create(initial);
-                        int spatial = 0;
-                        for (; spatial <= plane - 8; spatial += 8)
-                            Store(output, outputOffset + spatial, initialVector);
-                        for (; spatial < plane; spatial++) output[outputOffset + spatial] = initial;
-
-                        int weightBase = globalCo * inputPerGroup;
-                        for (int ci = 0; ci < inputPerGroup; ci++)
+                        int inputGroup = inputBatch + g * inputPerGroup * plane;
+                        int outputGroup = outputBatch + g * outputPerGroup * plane;
+                        for (int co = 0; co < outputPerGroup; co++)
                         {
-                            ReadOnlySpan<float> inputChannel = input.Slice(inputGroup + ci * plane, plane);
-                            float weight = weights[weightBase + ci];
-                            spatial = 0;
+                            int globalCo = g * outputPerGroup + co;
+                            int outputOffset = outputGroup + co * plane;
+                            float initial = bias.IsEmpty ? 0f : bias[globalCo];
+                            Vector256<float> initialVector = Vector256.Create(initial);
+                            int spatial = 0;
                             for (; spatial <= plane - 8; spatial += 8)
+                                Store(output, outputOffset + spatial, initialVector);
+                            for (; spatial < plane; spatial++) output[outputOffset + spatial] = initial;
+
+                            int weightBase = globalCo * inputPerGroup;
+                            for (int ci = 0; ci < inputPerGroup; ci++)
                             {
-                                Vector256<float> value = Load(inputChannel, spatial);
-                                Vector256<float> current = Load(output, outputOffset + spatial);
-                                Store(output, outputOffset + spatial, AddMul(current, value, weight));
+                                ReadOnlySpan<float> inputChannel = input.Slice(inputGroup + ci * plane, plane);
+                                float weight = weights[weightBase + ci];
+                                spatial = 0;
+                                for (; spatial <= plane - 8; spatial += 8)
+                                {
+                                    Vector256<float> value = Load(inputChannel, spatial);
+                                    Vector256<float> current = Load(output, outputOffset + spatial);
+                                    Store(output, outputOffset + spatial, AddMul(current, value, weight));
+                                }
+                                for (; spatial < plane; spatial++)
+                                    output[outputOffset + spatial] += inputChannel[spatial] * weight;
                             }
-                            for (; spatial < plane; spatial++)
-                                output[outputOffset + spatial] += inputChannel[spatial] * weight;
                         }
                     }
                 }
             }
-            return true;
         }
         else
 #endif
-        if (Vector.IsHardwareAccelerated)
         {
-            return TryVector(input, weights, bias, output, batch, inputChannels,
-                height, width, outputChannels, groups, intraOpThreads);
+            if (Vector.IsHardwareAccelerated)
+            {
+                TryVector(input, weights, bias, output, batch, inputChannels,
+                    height, width, outputChannels, groups, intraOpThreads);
+            }
+            else
+            {
+                Conv1x1Scalar(input, weights, bias, output, batch, inputChannels, height, width,
+                    outputChannels, groups, intraOpThreads);
+            }
         }
-        Conv1x1Scalar(input, weights, bias, output, batch, inputChannels, height, width,
-            outputChannels, groups, intraOpThreads);
         return true;
     }
 
@@ -252,22 +253,23 @@ internal static partial class Conv1x1
                             inputChannels, height, width, shardCout, coutPadded, beginOc);
                     });
                 }
-                return true;
             }
-
-            Conv1x1OcMajorAvx512Unsafe(input, packedOc16, bias, output, batch,
-                inputChannels, height, width, outputChannels, coutPadded, 0);
-            return true;
+            else
+            {
+                Conv1x1OcMajorAvx512Unsafe(input, packedOc16, bias, output, batch,
+                    inputChannels, height, width, outputChannels, coutPadded, 0);
+            }
         }
+        else
 #endif
-
-        if (Vector.IsHardwareAccelerated)
-        {
-            Conv1x1OcMajorVector(input, packedOc16, bias, output, batch,
-                inputChannels, height, width, outputChannels, coutPadded, 0);
-            return true;
-        }
-        return false;
+            if (Vector.IsHardwareAccelerated)
+            {
+                Conv1x1OcMajorVector(input, packedOc16, bias, output, batch,
+                    inputChannels, height, width, outputChannels, coutPadded, 0);
+            }
+            else
+                return false;
+        return true;
     }
 
     internal static bool FusesResidualInPackedEight(int outputChannels, int inputChannels,
@@ -288,22 +290,18 @@ internal static partial class Conv1x1
         int intraOpThreads = 1, PackedConv1x1Int8? packedInt8 = null,
         ReadOnlySpan<float> packedOc8 = default, ReadOnlySpan<float> residual = default)
     {
-        #if !NETSTANDARD2_0
+        // Packed [block8, ic, 8] for AVX-512 8-OC; [block4, ic, 4] otherwise.
+#if !NETSTANDARD2_0
         if (AvxVnni.IsSupported && packedInt8 is not null &&
             inputChannels >= 192 && (inputChannels & 3) == 0 && (outputChannels & 7) == 0 &&
             packedInt8.Weights.Length == checked(inputChannels * outputChannels) &&
-            packedInt8.Scales.Length == outputChannels && packedInt8.Sums.Length == outputChannels)
-        {
-            if (Conv1x1PackedEightOutputsInt8VnniUnsafe(input, packedInt8, bias, output,
+            packedInt8.Scales.Length == outputChannels && packedInt8.Sums.Length == outputChannels &&
+            Conv1x1PackedEightOutputsInt8VnniUnsafe(input, packedInt8, bias, output,
                 batch, inputChannels, height, width, outputChannels, intraOpThreads))
-                return true;
+        {
+            // Int8 VNNI kernel already wrote the output.
         }
-        #endif
-
-
-        // Packed [block8, ic, 8] for AVX-512 8-OC; [block4, ic, 4] otherwise.
-        #if !NETSTANDARD2_0
-        if (Avx512F.IsSupported && outputChannels >= 8 && (outputChannels & 7) == 0 &&
+        else if (Avx512F.IsSupported && outputChannels >= 8 && (outputChannels & 7) == 0 &&
             packedOc8.Length == checked(outputChannels * inputChannels))
         {
             int plane = checked(height * width), blocks8 = outputChannels / 8;
@@ -341,13 +339,14 @@ internal static partial class Conv1x1
                             inputChannels, height, width, shardCout, residualSpan);
                     });
                 }
-                return true;
             }
-            Conv1x1PackedEightOutputsAvx512Unsafe(input, packedOc8, bias, output, batch,
-                inputChannels, height, width, outputChannels, residual);
-            return true;
+            else
+            {
+                Conv1x1PackedEightOutputsAvx512Unsafe(input, packedOc8, bias, output, batch,
+                    inputChannels, height, width, outputChannels, residual);
+            }
         }
-        if (Avx512F.IsSupported && outputChannels >= 4 && (outputChannels & 3) == 0)
+        else if (Avx512F.IsSupported && outputChannels >= 4 && (outputChannels & 3) == 0)
         {
             int plane = checked(height * width), blocks = outputChannels / 4;
             if (intraOpThreads > 1 && batch == 1 && blocks >= 2 &&
@@ -380,18 +379,18 @@ internal static partial class Conv1x1
                                 height, width, shardCout);
                     });
                 }
-                return true;
             }
-            if ((outputChannels & 15) == 0 && inputChannels <= 64)
+            else if ((outputChannels & 15) == 0 && inputChannels <= 64)
             {
                 // 16-OC helps when ic is modest (input reuse beats spill cost).
                 Conv1x1PackedSixteenOutputsAvx512Unsafe(input, packedWeights, bias, output, batch,
                     inputChannels, height, width, outputChannels);
-                return true;
             }
-            Conv1x1PackedAvx512Unsafe(input, packedWeights, bias, output, batch, inputChannels,
-                height, width, outputChannels);
-            return true;
+            else
+            {
+                Conv1x1PackedAvx512Unsafe(input, packedWeights, bias, output, batch, inputChannels,
+                    height, width, outputChannels);
+            }
         }
         else if (Avx.IsSupported && outputChannels >= 4 && (outputChannels & 3) == 0)
         {
@@ -421,43 +420,43 @@ internal static partial class Conv1x1
                             height, width, (endBlock - beginBlock) * 4);
                     });
                 }
-                return true;
             }
-            if ((outputChannels & 15) == 0)
+            else if ((outputChannels & 15) == 0)
             {
                 Conv1x1PackedSixteenOutputsUnsafe(input, packedWeights, bias, output, batch,
                     inputChannels, height, width, outputChannels);
-                return true;
             }
-            if ((outputChannels & 7) == 0)
+            else if ((outputChannels & 7) == 0)
             {
                 Conv1x1PackedEightOutputsUnsafe(input, packedWeights, bias, output, batch,
                     inputChannels, height, width, outputChannels);
-                return true;
             }
-            Conv1x1PackedUnsafe(input, packedWeights, bias, output, batch, inputChannels,
-                height, width, outputChannels);
-            return true;
+            else
+            {
+                Conv1x1PackedUnsafe(input, packedWeights, bias, output, batch, inputChannels,
+                    height, width, outputChannels);
+            }
         }
         else
 #endif
-        if (Vector.IsHardwareAccelerated && outputChannels >= 8 && (outputChannels & 7) == 0 &&
-            packedOc8.Length == checked(outputChannels * inputChannels))
-        {
-            return TryPackedEightVector(input, packedOc8, bias, output, batch, inputChannels,
-                height, width, outputChannels, intraOpThreads);
-        }
-        if (Vector.IsHardwareAccelerated && outputChannels >= 4 && (outputChannels & 3) == 0)
-        {
-            return TryPackedVector(input, packedWeights, bias, output, batch, inputChannels,
-                height, width, outputChannels, intraOpThreads);
-        }
-        if (outputChannels >= 4 && (outputChannels & 3) == 0)
-        {
-            Conv1x1PackedScalar(input, packedWeights, bias, output, batch, inputChannels,
-                height, width, outputChannels, intraOpThreads);
-            return true;
-        }
-        return false;
+            if (Vector.IsHardwareAccelerated && outputChannels >= 8 && (outputChannels & 7) == 0 &&
+                packedOc8.Length == checked(outputChannels * inputChannels))
+            {
+                TryPackedEightVector(input, packedOc8, bias, output, batch, inputChannels,
+                    height, width, outputChannels, intraOpThreads);
+            }
+            else if (Vector.IsHardwareAccelerated && outputChannels >= 4 && (outputChannels & 3) == 0)
+            {
+                TryPackedVector(input, packedWeights, bias, output, batch, inputChannels,
+                    height, width, outputChannels, intraOpThreads);
+            }
+            else if (outputChannels >= 4 && (outputChannels & 3) == 0)
+            {
+                Conv1x1PackedScalar(input, packedWeights, bias, output, batch, inputChannels,
+                    height, width, outputChannels, intraOpThreads);
+            }
+            else
+                return false;
+        return true;
     }
 }

@@ -42,13 +42,16 @@ internal static partial class ConvTranspose
                         batch, inputChannels, inputHeight, inputWidth, outputChannels, begin, end);
                 });
             }
-            return true;
         }
-        ConvTranspose2x2Stride2RangeVector(input, weights, bias, output, batch, inputChannels,
-            inputHeight, inputWidth, outputChannels, 0, outputChannels);
+        else
+        {
+            ConvTranspose2x2Stride2RangeVector(input, weights, bias, output, batch, inputChannels,
+                inputHeight, inputWidth, outputChannels, 0, outputChannels);
+        }
         return true;
     }
 
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void ConvTranspose2x2Stride2RangeVector(ReadOnlySpan<float> input,
         ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output, int batch,
         int inputChannels, int inputHeight, int inputWidth, int outputChannels,
@@ -83,8 +86,74 @@ internal static partial class ConvTranspose
                             for (; ix <= inputWidth - widthLanes; ix += widthLanes)
                             {
                                 Vector<float> values = VectorLoad(src + inputRow + ix);
-                                ExpandTranspose2x(values, out Vector<float> evenLow, out Vector<float> evenHigh,
-                                    out Vector<float> oddLow, out Vector<float> oddHigh);
+                                Vector<float> evenLow = default, evenHigh = default, oddLow = default, oddHigh = default;
+                                ref float source = ref Unsafe.As<Vector<float>, float>(ref values);
+                                ref float evenLowRef = ref Unsafe.As<Vector<float>, float>(ref evenLow);
+                                ref float evenHighRef = ref Unsafe.As<Vector<float>, float>(ref evenHigh);
+                                ref float oddLowRef = ref Unsafe.As<Vector<float>, float>(ref oddLow);
+                                ref float oddHighRef = ref Unsafe.As<Vector<float>, float>(ref oddHigh);
+                                if (widthLanes == 8)
+                                {
+                                    evenLowRef = source;
+                                    Unsafe.Add(ref evenLowRef, 2) = Unsafe.Add(ref source, 1);
+                                    Unsafe.Add(ref evenLowRef, 4) = Unsafe.Add(ref source, 2);
+                                    Unsafe.Add(ref evenLowRef, 6) = Unsafe.Add(ref source, 3);
+                                    Unsafe.Add(ref oddLowRef, 1) = source;
+                                    Unsafe.Add(ref oddLowRef, 3) = Unsafe.Add(ref source, 1);
+                                    Unsafe.Add(ref oddLowRef, 5) = Unsafe.Add(ref source, 2);
+                                    Unsafe.Add(ref oddLowRef, 7) = Unsafe.Add(ref source, 3);
+                                    evenHighRef = Unsafe.Add(ref source, 4);
+                                    Unsafe.Add(ref evenHighRef, 2) = Unsafe.Add(ref source, 5);
+                                    Unsafe.Add(ref evenHighRef, 4) = Unsafe.Add(ref source, 6);
+                                    Unsafe.Add(ref evenHighRef, 6) = Unsafe.Add(ref source, 7);
+                                    Unsafe.Add(ref oddHighRef, 1) = Unsafe.Add(ref source, 4);
+                                    Unsafe.Add(ref oddHighRef, 3) = Unsafe.Add(ref source, 5);
+                                    Unsafe.Add(ref oddHighRef, 5) = Unsafe.Add(ref source, 6);
+                                    Unsafe.Add(ref oddHighRef, 7) = Unsafe.Add(ref source, 7);
+                                }
+                                else if (widthLanes == 4)
+                                {
+#if !NETSTANDARD2_0
+                                    if (AdvSimd.Arm64.IsSupported)
+                                    {
+                                        Vector128<float> v = Unsafe.BitCast<Vector<float>, Vector128<float>>(values);
+                                        Vector128<float> z = Vector128<float>.Zero;
+                                        evenLow = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipLow(v, z));
+                                        evenHigh = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipHigh(v, z));
+                                        oddLow = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipLow(z, v));
+                                        oddHigh = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipHigh(z, v));
+                                    }
+                                    else
+#endif
+                                    {
+                                        evenLowRef = source;
+                                        Unsafe.Add(ref evenLowRef, 2) = Unsafe.Add(ref source, 1);
+                                        Unsafe.Add(ref oddLowRef, 1) = source;
+                                        Unsafe.Add(ref oddLowRef, 3) = Unsafe.Add(ref source, 1);
+                                        evenHighRef = Unsafe.Add(ref source, 2);
+                                        Unsafe.Add(ref evenHighRef, 2) = Unsafe.Add(ref source, 3);
+                                        Unsafe.Add(ref oddHighRef, 1) = Unsafe.Add(ref source, 2);
+                                        Unsafe.Add(ref oddHighRef, 3) = Unsafe.Add(ref source, 3);
+                                    }
+                                }
+                                else
+                                {
+                                    for (int lane = 0; lane < widthLanes; lane++)
+                                    {
+                                        float expandedValue = Unsafe.Add(ref source, lane);
+                                        int expanded = lane * 2;
+                                        if (expanded < widthLanes)
+                                        {
+                                            Unsafe.Add(ref evenLowRef, expanded) = expandedValue;
+                                            Unsafe.Add(ref oddLowRef, expanded + 1) = expandedValue;
+                                        }
+                                        else
+                                        {
+                                            Unsafe.Add(ref evenHighRef, expanded - widthLanes) = expandedValue;
+                                            Unsafe.Add(ref oddHighRef, expanded - widthLanes + 1) = expandedValue;
+                                        }
+                                    }
+                                }
                                 int ox = ix * 2;
                                 float* row0 = dst + outputRow0 + ox;
                                 float* row1 = dst + outputRow1 + ox;
@@ -109,80 +178,4 @@ internal static partial class ConvTranspose
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static unsafe void AddStore(float* destination, Vector<float> value) =>
         VectorStore(destination, VectorLoad(destination) + value);
-
-    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
-    private static void ExpandTranspose2x(Vector<float> values,
-        out Vector<float> evenLow, out Vector<float> evenHigh,
-        out Vector<float> oddLow, out Vector<float> oddHigh)
-    {
-        evenLow = default;
-        evenHigh = default;
-        oddLow = default;
-        oddHigh = default;
-        ref float source = ref Unsafe.As<Vector<float>, float>(ref values);
-        ref float evenLowRef = ref Unsafe.As<Vector<float>, float>(ref evenLow);
-        ref float evenHighRef = ref Unsafe.As<Vector<float>, float>(ref evenHigh);
-        ref float oddLowRef = ref Unsafe.As<Vector<float>, float>(ref oddLow);
-        ref float oddHighRef = ref Unsafe.As<Vector<float>, float>(ref oddHigh);
-        int width = Vector<float>.Count;
-        if (width == 8)
-        {
-            evenLowRef = source;
-            Unsafe.Add(ref evenLowRef, 2) = Unsafe.Add(ref source, 1);
-            Unsafe.Add(ref evenLowRef, 4) = Unsafe.Add(ref source, 2);
-            Unsafe.Add(ref evenLowRef, 6) = Unsafe.Add(ref source, 3);
-            Unsafe.Add(ref oddLowRef, 1) = source;
-            Unsafe.Add(ref oddLowRef, 3) = Unsafe.Add(ref source, 1);
-            Unsafe.Add(ref oddLowRef, 5) = Unsafe.Add(ref source, 2);
-            Unsafe.Add(ref oddLowRef, 7) = Unsafe.Add(ref source, 3);
-            evenHighRef = Unsafe.Add(ref source, 4);
-            Unsafe.Add(ref evenHighRef, 2) = Unsafe.Add(ref source, 5);
-            Unsafe.Add(ref evenHighRef, 4) = Unsafe.Add(ref source, 6);
-            Unsafe.Add(ref evenHighRef, 6) = Unsafe.Add(ref source, 7);
-            Unsafe.Add(ref oddHighRef, 1) = Unsafe.Add(ref source, 4);
-            Unsafe.Add(ref oddHighRef, 3) = Unsafe.Add(ref source, 5);
-            Unsafe.Add(ref oddHighRef, 5) = Unsafe.Add(ref source, 6);
-            Unsafe.Add(ref oddHighRef, 7) = Unsafe.Add(ref source, 7);
-            return;
-        }
-        if (width == 4)
-        {
-#if !NETSTANDARD2_0
-            if (AdvSimd.Arm64.IsSupported)
-            {
-                Vector128<float> v = Unsafe.BitCast<Vector<float>, Vector128<float>>(values);
-                Vector128<float> z = Vector128<float>.Zero;
-                evenLow = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipLow(v, z));
-                evenHigh = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipHigh(v, z));
-                oddLow = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipLow(z, v));
-                oddHigh = Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.Arm64.ZipHigh(z, v));
-                return;
-            }
-#endif
-            evenLowRef = source;
-            Unsafe.Add(ref evenLowRef, 2) = Unsafe.Add(ref source, 1);
-            Unsafe.Add(ref oddLowRef, 1) = source;
-            Unsafe.Add(ref oddLowRef, 3) = Unsafe.Add(ref source, 1);
-            evenHighRef = Unsafe.Add(ref source, 2);
-            Unsafe.Add(ref evenHighRef, 2) = Unsafe.Add(ref source, 3);
-            Unsafe.Add(ref oddHighRef, 1) = Unsafe.Add(ref source, 2);
-            Unsafe.Add(ref oddHighRef, 3) = Unsafe.Add(ref source, 3);
-            return;
-        }
-        for (int lane = 0; lane < width; lane++)
-        {
-            float value = Unsafe.Add(ref source, lane);
-            int expanded = lane * 2;
-            if (expanded < width)
-            {
-                Unsafe.Add(ref evenLowRef, expanded) = value;
-                Unsafe.Add(ref oddLowRef, expanded + 1) = value;
-            }
-            else
-            {
-                Unsafe.Add(ref evenHighRef, expanded - width) = value;
-                Unsafe.Add(ref oddHighRef, expanded - width + 1) = value;
-            }
-        }
-    }
 }
