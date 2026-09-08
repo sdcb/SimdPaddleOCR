@@ -140,6 +140,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name -ErrorAction SilentlyContinue)
           if ($cpu) { $cpu = $cpu.Trim() } else { $cpu = 'unknown' }
           $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
@@ -166,7 +167,8 @@ jobs:
                 foreach ($setting in $c.isa.Split(';')) { $parts = $setting.Split('='); Set-Item "Env:$($parts[0])" $parts[1] }
               }
               $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
-              $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
+              # dotnet run treats -p as --project; use --property so ns2 does not leak a "-" app arg.
+              $runOptions = if ($c.ns2) { @('--property:UseNs20Library=true') } else { @() }
               $appArgs = @('--benchmark','--benchmark-kind','simd','--engine',$c.engine,'--workers',$c.workers,'--model',$c.model,'--input','dataset',
                 '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
               dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r win-x64 --no-self-contained @runOptions -- @appArgs
@@ -250,6 +252,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $cpu = if (Get-Command lscpu -ErrorAction SilentlyContinue) {
             (& lscpu 2>$null | Select-String '^Model name:|^Model:|^Hardware:|^Architecture:' | Select-Object -First 1).Line
           } else {
@@ -287,7 +290,8 @@ jobs:
                 }
               }
               $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
-              $runOptions = if ($c.ns2) { @('-p:UseNs20Library=true') } else { @() }
+              # dotnet run treats -p as --project; use --property so ns2 does not leak a "-" app arg.
+              $runOptions = if ($c.ns2) { @('--property:UseNs20Library=true') } else { @() }
               $appArgs = @('--benchmark','--benchmark-kind','simd','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
                 '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
               dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-arm64 --no-self-contained @runOptions -- @appArgs
