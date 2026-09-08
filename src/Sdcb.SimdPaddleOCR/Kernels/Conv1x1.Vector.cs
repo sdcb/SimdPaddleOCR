@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 #endif
 using System.Threading.Tasks;
@@ -548,8 +549,24 @@ internal static partial class Conv1x1
                                 {
                                     Vector<float> valueLow = VectorLoad(inputChannel);
                                     Vector<float> valueHigh = VectorLoad(inputChannel + widthLanes);
-                                    VectorAddMulPacked8(ref a0l, ref a1l, ref a2l, ref a3l, ref a4l, ref a5l, ref a6l, ref a7l, valueLow, w);
-                                    VectorAddMulPacked8(ref a0h, ref a1h, ref a2h, ref a3h, ref a4h, ref a5h, ref a6h, ref a7h, valueHigh, w);
+#if !NETSTANDARD2_0
+                                    if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
+                                    {
+                                        VectorAddMulPacked8(ref a0l, ref a1l, ref a2l, ref a3l, ref a4l, ref a5l, ref a6l, ref a7l, valueLow, w);
+                                        VectorAddMulPacked8(ref a0h, ref a1h, ref a2h, ref a3h, ref a4h, ref a5h, ref a6h, ref a7h, valueHigh, w);
+                                    }
+                                    else
+#endif
+                                    {
+                                        a0l = VectorAddMul(a0l, valueLow, w[0]); a0h = VectorAddMul(a0h, valueHigh, w[0]);
+                                        a1l = VectorAddMul(a1l, valueLow, w[1]); a1h = VectorAddMul(a1h, valueHigh, w[1]);
+                                        a2l = VectorAddMul(a2l, valueLow, w[2]); a2h = VectorAddMul(a2h, valueHigh, w[2]);
+                                        a3l = VectorAddMul(a3l, valueLow, w[3]); a3h = VectorAddMul(a3h, valueHigh, w[3]);
+                                        a4l = VectorAddMul(a4l, valueLow, w[4]); a4h = VectorAddMul(a4h, valueHigh, w[4]);
+                                        a5l = VectorAddMul(a5l, valueLow, w[5]); a5h = VectorAddMul(a5h, valueHigh, w[5]);
+                                        a6l = VectorAddMul(a6l, valueLow, w[6]); a6h = VectorAddMul(a6h, valueHigh, w[6]);
+                                        a7l = VectorAddMul(a7l, valueLow, w[7]); a7h = VectorAddMul(a7h, valueHigh, w[7]);
+                                    }
                                     inputChannel += plane;
                                     w += 8;
                                 }
@@ -571,7 +588,17 @@ internal static partial class Conv1x1
                                 for (int ci = 0; ci < inputChannels; ci++)
                                 {
                                     Vector<float> value = VectorLoad(inputChannel);
-                                    VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, w);
+#if !NETSTANDARD2_0
+                                    if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
+                                        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, w);
+                                    else
+#endif
+                                    {
+                                        a0 = VectorAddMul(a0, value, w[0]); a1 = VectorAddMul(a1, value, w[1]);
+                                        a2 = VectorAddMul(a2, value, w[2]); a3 = VectorAddMul(a3, value, w[3]);
+                                        a4 = VectorAddMul(a4, value, w[4]); a5 = VectorAddMul(a5, value, w[5]);
+                                        a6 = VectorAddMul(a6, value, w[6]); a7 = VectorAddMul(a7, value, w[7]);
+                                    }
                                     inputChannel += plane;
                                     w += 8;
                                 }

@@ -337,7 +337,10 @@ internal static class SimdOps
             return;
         }
 #endif
-        VectorAddMulPacked8Generic(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, weights);
+        a0 = VectorAddMul(a0, value, weights[0]); a1 = VectorAddMul(a1, value, weights[1]);
+        a2 = VectorAddMul(a2, value, weights[2]); a3 = VectorAddMul(a3, value, weights[3]);
+        a4 = VectorAddMul(a4, value, weights[4]); a5 = VectorAddMul(a5, value, weights[5]);
+        a6 = VectorAddMul(a6, value, weights[6]); a7 = VectorAddMul(a7, value, weights[7]);
     }
 
     /// <summary>
@@ -376,8 +379,14 @@ internal static class SimdOps
             return;
         }
 #endif
-        VectorAddMulPacked8Generic(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, weights);
-        VectorAddMulPacked8Generic(ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7, other, weights);
+        a0 = VectorAddMul(a0, value, weights[0]); c0 = VectorAddMul(c0, other, weights[0]);
+        a1 = VectorAddMul(a1, value, weights[1]); c1 = VectorAddMul(c1, other, weights[1]);
+        a2 = VectorAddMul(a2, value, weights[2]); c2 = VectorAddMul(c2, other, weights[2]);
+        a3 = VectorAddMul(a3, value, weights[3]); c3 = VectorAddMul(c3, other, weights[3]);
+        a4 = VectorAddMul(a4, value, weights[4]); c4 = VectorAddMul(c4, other, weights[4]);
+        a5 = VectorAddMul(a5, value, weights[5]); c5 = VectorAddMul(c5, other, weights[5]);
+        a6 = VectorAddMul(a6, value, weights[6]); c6 = VectorAddMul(c6, other, weights[6]);
+        a7 = VectorAddMul(a7, value, weights[7]); c7 = VectorAddMul(c7, other, weights[7]);
     }
 
     /// <summary><c>acc[k] += value * weights[k]</c> for four consecutive packed weights.</summary>
@@ -398,28 +407,8 @@ internal static class SimdOps
             return;
         }
 #endif
-        VectorAddMulPacked4Generic(ref a0, ref a1, ref a2, ref a3, value, weights);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe void VectorAddMulPacked8Generic(
-        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
-        ref Vector<float> a4, ref Vector<float> a5, ref Vector<float> a6, ref Vector<float> a7,
-        Vector<float> value, float* weights)
-    {
-        a0 += value * new Vector<float>(weights[0]); a1 += value * new Vector<float>(weights[1]);
-        a2 += value * new Vector<float>(weights[2]); a3 += value * new Vector<float>(weights[3]);
-        a4 += value * new Vector<float>(weights[4]); a5 += value * new Vector<float>(weights[5]);
-        a6 += value * new Vector<float>(weights[6]); a7 += value * new Vector<float>(weights[7]);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static unsafe void VectorAddMulPacked4Generic(
-        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
-        Vector<float> value, float* weights)
-    {
-        a0 += value * new Vector<float>(weights[0]); a1 += value * new Vector<float>(weights[1]);
-        a2 += value * new Vector<float>(weights[2]); a3 += value * new Vector<float>(weights[3]);
+        a0 = VectorAddMul(a0, value, weights[0]); a1 = VectorAddMul(a1, value, weights[1]);
+        a2 = VectorAddMul(a2, value, weights[2]); a3 = VectorAddMul(a3, value, weights[3]);
     }
 
     [MethodImpl(MethodImplCompat.AggressiveOptimization)]

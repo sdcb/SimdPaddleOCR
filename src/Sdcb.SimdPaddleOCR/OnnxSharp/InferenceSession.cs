@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using Sdcb.SimdPaddleOCR.Kernels;
 
@@ -1145,10 +1146,10 @@ public sealed class InferenceSession : IDisposable
         // detector's 16-channel projections that would leave only two tasks
         // at intra-op=4; use the four-channel sharded kernel instead so all
         // worker lanes participate.  Keep the packed path for single-thread
-        // execution and wider projections.
+        // execution, wider projections, and Vector256 (unpacked 4-OC is slower).
         if (group == 1 && kh == 3 && kw == 3 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
             pt == 1 && pl == 1 && I32(p, 40) == 1 && I32(p, 44) == 1 && intraOpThreads > 1 &&
-            cout == 16 && intraOpThreads > cout / 8 && oh == h && ow == wi &&
+            Vector<float>.Count == 4 && cout == 16 && intraOpThreads > cout / 8 && oh == h && ow == wi &&
             Conv3x3.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, cout,
                 intraOpThreads)) return;
         if (group == 1 && kh == 3 && kw == 3 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
@@ -1210,9 +1211,10 @@ public sealed class InferenceSession : IDisposable
         // Packed stride-2 shards by eight-channel blocks. Detector 16-channel
         // projections only yield two tasks at intra-op=4; use the four-channel
         // sharded kernel so all worker lanes participate, matching stride-1.
+        // Vector256 keeps the packed 8-OC kernel: unpacked 4-OC is slower there.
         if (group == 1 && kh == 3 && kw == 3 && sh == 2 && sw == 2 && dh == 1 && dw == 1 &&
             pt == 1 && pl == 1 && I32(p, 40) == 1 && I32(p, 44) == 1 && intraOpThreads > 1 &&
-            cout == 16 && intraOpThreads > cout / 8 &&
+            Vector<float>.Count == 4 && cout == 16 && intraOpThreads > cout / 8 &&
             Conv3x3Stride2.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, oh, ow, cout,
                 intraOpThreads)) return;
         if (group == 1 && kh == 3 && kw == 3 && sh == 2 && sw == 2 && dh == 1 && dw == 1 &&
