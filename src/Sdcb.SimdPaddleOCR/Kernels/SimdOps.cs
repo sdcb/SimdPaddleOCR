@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 #endif
 using System.Threading.Tasks;
@@ -259,6 +260,13 @@ internal static class SimdOps
     internal static Vector<float> VectorLoadStride2(ref float source)
     {
 #if !NETSTANDARD2_0
+        if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
+        {
+            Vector128<float> first = Vector128.LoadUnsafe(ref source);
+            Vector128<float> second = Vector128.LoadUnsafe(ref Unsafe.Add(ref source, 4));
+            return Unsafe.BitCast<Vector128<float>, Vector<float>>(
+                AdvSimd.Arm64.UnzipEven(first, second));
+        }
         if (Sse.IsSupported && Vector<float>.Count == 4)
         {
             Vector128<float> first = Vector128.LoadUnsafe(ref source);

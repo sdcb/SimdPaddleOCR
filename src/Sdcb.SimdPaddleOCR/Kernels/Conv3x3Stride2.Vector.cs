@@ -331,4 +331,139 @@ internal static partial class Conv3x3Stride2
                 }
             }
     }
+
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    internal static unsafe void TryPackedVector(ReadOnlySpan<float> input,
+        ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output, int batch,
+        int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,
+        int outputChannels)
+    {
+        int inputPlane = checked(inputHeight * inputWidth), outputPlane = checked(outputHeight * outputWidth);
+        const int weightsPerInput = 9 * 8;
+        int widthLanes = Vector<float>.Count;
+        fixed (float* inputPtr = input, weightsPtr = packedWeights, biasPtr = bias, outputPtr = output)
+        {
+            for (int b = 0; b < batch; b++)
+                for (int co = 0; co < outputChannels; co += 8)
+                {
+                    float* w = weightsPtr + (co / 8) * inputChannels * weightsPerInput;
+                    float* o0 = outputPtr + (b * outputChannels + co) * outputPlane;
+                    float* o1 = o0 + outputPlane, o2 = o1 + outputPlane, o3 = o2 + outputPlane;
+                    float* o4 = o3 + outputPlane, o5 = o4 + outputPlane, o6 = o5 + outputPlane, o7 = o6 + outputPlane;
+                    float b0 = biasPtr == null ? 0f : biasPtr[co], b1 = biasPtr == null ? 0f : biasPtr[co + 1];
+                    float b2 = biasPtr == null ? 0f : biasPtr[co + 2], b3 = biasPtr == null ? 0f : biasPtr[co + 3];
+                    float b4 = biasPtr == null ? 0f : biasPtr[co + 4], b5 = biasPtr == null ? 0f : biasPtr[co + 5];
+                    float b6 = biasPtr == null ? 0f : biasPtr[co + 6], b7 = biasPtr == null ? 0f : biasPtr[co + 7];
+                    Vector<float> vb0 = new(b0), vb1 = new(b1), vb2 = new(b2), vb3 = new(b3);
+                    Vector<float> vb4 = new(b4), vb5 = new(b5), vb6 = new(b6), vb7 = new(b7);
+                    float* batchInput = inputPtr + b * inputChannels * inputPlane;
+                    for (int oy = 0; oy < outputHeight; oy++)
+                    {
+                        int row = oy * outputWidth, ox = 0;
+                        while (ox < outputWidth)
+                        {
+                            bool vector = oy > 0 && oy * 2 + 1 < inputHeight && ox > 0 &&
+                                ox + widthLanes <= outputWidth &&
+                                (ox + widthLanes - 1) * 2 + 1 < inputWidth;
+                            if (vector)
+                            {
+                                Vector<float> a0 = vb0, a1 = vb1, a2 = vb2, a3 = vb3;
+                                Vector<float> a4 = vb4, a5 = vb5, a6 = vb6, a7 = vb7;
+                                for (int ci = 0; ci < inputChannels; ci++)
+                                {
+                                    float* src = batchInput + ci * inputPlane;
+                                    float* wc = w + ci * weightsPerInput;
+                                    int sourceOffset = ox * 2 - 1;
+                                    float* row0 = src + (oy * 2 - 1) * inputWidth + sourceOffset;
+                                    float* row1 = row0 + inputWidth, row2 = row1 + inputWidth;
+                                    Vector<float> v0 = VectorLoadStride2(row0);
+                                    Vector<float> v1 = VectorLoadStride2(row0 + 1);
+                                    Vector<float> v2 = VectorLoadStride2(row0 + 2);
+                                    float* weights = wc;
+                                    a0 = VectorAddMul(a0, v0, weights[0]); a1 = VectorAddMul(a1, v0, weights[1]);
+                                    a2 = VectorAddMul(a2, v0, weights[2]); a3 = VectorAddMul(a3, v0, weights[3]);
+                                    a4 = VectorAddMul(a4, v0, weights[4]); a5 = VectorAddMul(a5, v0, weights[5]);
+                                    a6 = VectorAddMul(a6, v0, weights[6]); a7 = VectorAddMul(a7, v0, weights[7]);
+                                    weights += 8;
+                                    a0 = VectorAddMul(a0, v1, weights[0]); a1 = VectorAddMul(a1, v1, weights[1]);
+                                    a2 = VectorAddMul(a2, v1, weights[2]); a3 = VectorAddMul(a3, v1, weights[3]);
+                                    a4 = VectorAddMul(a4, v1, weights[4]); a5 = VectorAddMul(a5, v1, weights[5]);
+                                    a6 = VectorAddMul(a6, v1, weights[6]); a7 = VectorAddMul(a7, v1, weights[7]);
+                                    weights += 8;
+                                    a0 = VectorAddMul(a0, v2, weights[0]); a1 = VectorAddMul(a1, v2, weights[1]);
+                                    a2 = VectorAddMul(a2, v2, weights[2]); a3 = VectorAddMul(a3, v2, weights[3]);
+                                    a4 = VectorAddMul(a4, v2, weights[4]); a5 = VectorAddMul(a5, v2, weights[5]);
+                                    a6 = VectorAddMul(a6, v2, weights[6]); a7 = VectorAddMul(a7, v2, weights[7]);
+                                    weights += 8;
+                                    v0 = VectorLoadStride2(row1); v1 = VectorLoadStride2(row1 + 1); v2 = VectorLoadStride2(row1 + 2);
+                                    a0 = VectorAddMul(a0, v0, weights[0]); a1 = VectorAddMul(a1, v0, weights[1]);
+                                    a2 = VectorAddMul(a2, v0, weights[2]); a3 = VectorAddMul(a3, v0, weights[3]);
+                                    a4 = VectorAddMul(a4, v0, weights[4]); a5 = VectorAddMul(a5, v0, weights[5]);
+                                    a6 = VectorAddMul(a6, v0, weights[6]); a7 = VectorAddMul(a7, v0, weights[7]);
+                                    weights += 8;
+                                    a0 = VectorAddMul(a0, v1, weights[0]); a1 = VectorAddMul(a1, v1, weights[1]);
+                                    a2 = VectorAddMul(a2, v1, weights[2]); a3 = VectorAddMul(a3, v1, weights[3]);
+                                    a4 = VectorAddMul(a4, v1, weights[4]); a5 = VectorAddMul(a5, v1, weights[5]);
+                                    a6 = VectorAddMul(a6, v1, weights[6]); a7 = VectorAddMul(a7, v1, weights[7]);
+                                    weights += 8;
+                                    a0 = VectorAddMul(a0, v2, weights[0]); a1 = VectorAddMul(a1, v2, weights[1]);
+                                    a2 = VectorAddMul(a2, v2, weights[2]); a3 = VectorAddMul(a3, v2, weights[3]);
+                                    a4 = VectorAddMul(a4, v2, weights[4]); a5 = VectorAddMul(a5, v2, weights[5]);
+                                    a6 = VectorAddMul(a6, v2, weights[6]); a7 = VectorAddMul(a7, v2, weights[7]);
+                                    weights += 8;
+                                    v0 = VectorLoadStride2(row2); v1 = VectorLoadStride2(row2 + 1); v2 = VectorLoadStride2(row2 + 2);
+                                    a0 = VectorAddMul(a0, v0, weights[0]); a1 = VectorAddMul(a1, v0, weights[1]);
+                                    a2 = VectorAddMul(a2, v0, weights[2]); a3 = VectorAddMul(a3, v0, weights[3]);
+                                    a4 = VectorAddMul(a4, v0, weights[4]); a5 = VectorAddMul(a5, v0, weights[5]);
+                                    a6 = VectorAddMul(a6, v0, weights[6]); a7 = VectorAddMul(a7, v0, weights[7]);
+                                    weights += 8;
+                                    a0 = VectorAddMul(a0, v1, weights[0]); a1 = VectorAddMul(a1, v1, weights[1]);
+                                    a2 = VectorAddMul(a2, v1, weights[2]); a3 = VectorAddMul(a3, v1, weights[3]);
+                                    a4 = VectorAddMul(a4, v1, weights[4]); a5 = VectorAddMul(a5, v1, weights[5]);
+                                    a6 = VectorAddMul(a6, v1, weights[6]); a7 = VectorAddMul(a7, v1, weights[7]);
+                                    weights += 8;
+                                    a0 = VectorAddMul(a0, v2, weights[0]); a1 = VectorAddMul(a1, v2, weights[1]);
+                                    a2 = VectorAddMul(a2, v2, weights[2]); a3 = VectorAddMul(a3, v2, weights[3]);
+                                    a4 = VectorAddMul(a4, v2, weights[4]); a5 = VectorAddMul(a5, v2, weights[5]);
+                                    a6 = VectorAddMul(a6, v2, weights[6]); a7 = VectorAddMul(a7, v2, weights[7]);
+                                }
+                                VectorStore(o0 + row + ox, a0); VectorStore(o1 + row + ox, a1);
+                                VectorStore(o2 + row + ox, a2); VectorStore(o3 + row + ox, a3);
+                                VectorStore(o4 + row + ox, a4); VectorStore(o5 + row + ox, a5);
+                                VectorStore(o6 + row + ox, a6); VectorStore(o7 + row + ox, a7);
+                                ox += widthLanes;
+                            }
+                            else
+                            {
+                                float s0 = b0, s1 = b1, s2 = b2, s3 = b3, s4 = b4, s5 = b5, s6 = b6, s7 = b7;
+                                for (int ci = 0; ci < inputChannels; ci++)
+                                {
+                                    float* src = batchInput + ci * inputPlane;
+                                    float* wc = w + ci * weightsPerInput;
+                                    for (int ky = 0; ky < 3; ky++)
+                                    {
+                                        int iy = oy * 2 - 1 + ky;
+                                        if ((uint)iy >= (uint)inputHeight) continue;
+                                        for (int kx = 0; kx < 3; kx++)
+                                        {
+                                            int ix = ox * 2 - 1 + kx;
+                                            if ((uint)ix >= (uint)inputWidth) continue;
+                                            float value = src[iy * inputWidth + ix];
+                                            float* weights = wc + (ky * 3 + kx) * 8;
+                                            s0 += value * weights[0]; s1 += value * weights[1];
+                                            s2 += value * weights[2]; s3 += value * weights[3];
+                                            s4 += value * weights[4]; s5 += value * weights[5];
+                                            s6 += value * weights[6]; s7 += value * weights[7];
+                                        }
+                                    }
+                                }
+                                o0[row + ox] = s0; o1[row + ox] = s1; o2[row + ox] = s2; o3[row + ox] = s3;
+                                o4[row + ox] = s4; o5[row + ox] = s5; o6[row + ox] = s6; o7[row + ox] = s7;
+                                ox++;
+                            }
+                        }
+                    }
+                }
+        }
+    }
 }

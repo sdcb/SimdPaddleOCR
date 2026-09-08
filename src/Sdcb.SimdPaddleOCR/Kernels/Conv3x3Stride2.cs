@@ -174,16 +174,12 @@ internal static partial class Conv3x3Stride2
         int inputChannels, int inputHeight, int inputWidth, int outputHeight, int outputWidth,
         int outputChannels, int intraOpThreads = 1)
     {
-#if NETSTANDARD2_0
-        return false;
-#else
         if (outputChannels < 8 || (outputChannels & 7) != 0)
             return false;
         int outputPlane = checked(outputHeight * outputWidth);
         int blocks = outputChannels / 8;
         const int weightsPerInput = 9 * 8;
-        if (intraOpThreads > 1 && batch == 1 && blocks >= 2 &&
-            (Avx512F.IsSupported || Avx.IsSupported))
+        if (intraOpThreads > 1 && batch == 1 && blocks >= 2)
         {
             int workers = Math.Min(intraOpThreads, blocks);
             fixed (float* inputPtr = input, weightsPtr = packedWeights,
@@ -212,6 +208,7 @@ internal static partial class Conv3x3Stride2
             return true;
         }
 
+#if !NETSTANDARD2_0
         // 8-OC Avx512; skip 16-OC×ZMM (Zen 5 spills). Workers already intraOp==1.
         if (Avx512F.IsSupported)
         {
@@ -219,7 +216,7 @@ internal static partial class Conv3x3Stride2
                 inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
             return true;
         }
-        else if (Avx.IsSupported)
+        if (Avx.IsSupported)
         {
             if ((outputChannels & 15) == 0)
                 Conv3x3Stride2SixteenOutputsPackedUnsafe(input, packedWeights, bias, output,
@@ -230,7 +227,13 @@ internal static partial class Conv3x3Stride2
                     inputChannels, inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
             return true;
         }
-        return false;
 #endif
+        if (Vector.IsHardwareAccelerated)
+        {
+            TryPackedVector(input, packedWeights, bias, output, batch, inputChannels,
+                inputHeight, inputWidth, outputHeight, outputWidth, outputChannels);
+            return true;
+        }
+        return false;
     }
 }
