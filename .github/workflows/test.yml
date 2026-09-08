@@ -335,13 +335,25 @@ jobs:
           Write-Output "::notice title=Benchmark host::$hostInfo"
           $base = 'osx-arm64'
           $cases = @(
-            @{ id='tiny-1w'; workers=1; model='tiny' },
-            @{ id='tiny-4w'; workers=4; model='tiny' }
+            @{ id='tiny-1w';         workers=1; model='tiny'; isa='' },
+            @{ id='tiny-4w';         workers=4; model='tiny'; isa='' },
+            @{ id='tiny-4w-ns2';     workers=4; model='tiny'; isa=''; ns2=$true },
+            @{ id='tiny-4w-scalar';  workers=4; model='tiny'; isa='DOTNET_EnableHWIntrinsic=0' }
           )
           foreach ($c in $cases) {
             Write-Output "::group::benchmark case $($c.id) (replica ${{ matrix.replica }})"
             try {
+              Remove-Item Env:DOTNET_EnableHWIntrinsic -ErrorAction SilentlyContinue
+              if ($c.isa) {
+                foreach ($setting in $c.isa.Split(';')) {
+                  $parts = $setting.Split('=')
+                  Set-Item "Env:$($parts[0])" $parts[1]
+                }
+              }
               $out = "$base-$($c.id)-r${{ matrix.replica }}.json"
+              # MSBuild reads this env var as a property. Passing -p/--property to
+              # `dotnet run` leaks a "-" into the app args on the CI SDK.
+              $env:UseNs20Library = if ($c.ns2) { 'true' } else { 'false' }
               $appArgs = @('--benchmark','--benchmark-kind','simd','--engine','sharp','--workers',$c.workers,'--model',$c.model,'--input','dataset',
                 '--case-id',$c.id,'--replica','${{ matrix.replica }}','--out',$out)
               dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r osx-arm64 --no-self-contained -- @appArgs
