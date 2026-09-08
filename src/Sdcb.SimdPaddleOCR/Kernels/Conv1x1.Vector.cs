@@ -241,14 +241,10 @@ internal static partial class Conv1x1
                             for (int ci = 0; ci < inputChannels; ci++)
                             {
                                 Vector<float> value = VectorLoad(inputChannel);
-                                a0 = VectorAddMul(a0, value, w0[0]); a1 = VectorAddMul(a1, value, w0[1]);
-                                a2 = VectorAddMul(a2, value, w0[2]); a3 = VectorAddMul(a3, value, w0[3]);
-                                a4 = VectorAddMul(a4, value, w1[0]); a5 = VectorAddMul(a5, value, w1[1]);
-                                a6 = VectorAddMul(a6, value, w1[2]); a7 = VectorAddMul(a7, value, w1[3]);
-                                a8 = VectorAddMul(a8, value, w2[0]); a9 = VectorAddMul(a9, value, w2[1]);
-                                a10 = VectorAddMul(a10, value, w2[2]); a11 = VectorAddMul(a11, value, w2[3]);
-                                a12 = VectorAddMul(a12, value, w3[0]); a13 = VectorAddMul(a13, value, w3[1]);
-                                a14 = VectorAddMul(a14, value, w3[2]); a15 = VectorAddMul(a15, value, w3[3]);
+                                VectorAddMulPacked4(ref a0, ref a1, ref a2, ref a3, value, w0);
+                                VectorAddMulPacked4(ref a4, ref a5, ref a6, ref a7, value, w1);
+                                VectorAddMulPacked4(ref a8, ref a9, ref a10, ref a11, value, w2);
+                                VectorAddMulPacked4(ref a12, ref a13, ref a14, ref a15, value, w3);
                                 inputChannel += plane;
                                 w0 += 4; w1 += 4; w2 += 4; w3 += 4;
                             }
@@ -322,14 +318,8 @@ internal static partial class Conv1x1
                                 {
                                     Vector<float> valueLow = VectorLoad(inputChannel);
                                     Vector<float> valueHigh = VectorLoad(inputChannel + widthLanes);
-                                    a0l = VectorAddMul(a0l, valueLow, weightCursor[0]);
-                                    a0h = VectorAddMul(a0h, valueHigh, weightCursor[0]);
-                                    a1l = VectorAddMul(a1l, valueLow, weightCursor[1]);
-                                    a1h = VectorAddMul(a1h, valueHigh, weightCursor[1]);
-                                    a2l = VectorAddMul(a2l, valueLow, weightCursor[2]);
-                                    a2h = VectorAddMul(a2h, valueHigh, weightCursor[2]);
-                                    a3l = VectorAddMul(a3l, valueLow, weightCursor[3]);
-                                    a3h = VectorAddMul(a3h, valueHigh, weightCursor[3]);
+                                    VectorAddMulPacked4(ref a0l, ref a1l, ref a2l, ref a3l, valueLow, weightCursor);
+                                    VectorAddMulPacked4(ref a0h, ref a1h, ref a2h, ref a3h, valueHigh, weightCursor);
                                     inputChannel += plane;
                                     weightCursor += 4;
                                 }
@@ -350,10 +340,7 @@ internal static partial class Conv1x1
                                 for (int ci = 0; ci < inputChannels; ci++)
                                 {
                                     Vector<float> value = VectorLoad(inputChannel);
-                                    a0 = VectorAddMul(a0, value, weightCursor[0]);
-                                    a1 = VectorAddMul(a1, value, weightCursor[1]);
-                                    a2 = VectorAddMul(a2, value, weightCursor[2]);
-                                    a3 = VectorAddMul(a3, value, weightCursor[3]);
+                                    VectorAddMulPacked4(ref a0, ref a1, ref a2, ref a3, value, weightCursor);
                                     inputChannel += plane;
                                     weightCursor += 4;
                                 }
@@ -522,98 +509,96 @@ internal static partial class Conv1x1
         else
         {
             int dual = widthLanes * 2;
+            int tileSpatial = plane;
+            if (blocks8 > 1 && (long)inputChannels * plane * 8 > 1_048_576)
+                tileSpatial = Math.Max(64, 49152 / inputChannels & ~15);
             fixed (float* inputPtr = input, weightsPtr = packedOc8, biasPtr = bias, outputPtr = output)
             {
                 for (int b = 0; b < batch; b++)
-                    for (int block = 0; block < blocks8; block++)
+                    for (int tileStart = 0; tileStart < plane; tileStart += tileSpatial)
                     {
-                        int co = block * 8;
-                        float* output0 = outputPtr + (b * outputChannels + co) * plane;
-                        float* output1 = output0 + plane, output2 = output1 + plane, output3 = output2 + plane;
-                        float* output4 = output3 + plane, output5 = output4 + plane;
-                        float* output6 = output5 + plane, output7 = output6 + plane;
-                        Vector<float> bias0 = new(biasPtr == null ? 0f : biasPtr[co]);
-                        Vector<float> bias1 = new(biasPtr == null ? 0f : biasPtr[co + 1]);
-                        Vector<float> bias2 = new(biasPtr == null ? 0f : biasPtr[co + 2]);
-                        Vector<float> bias3 = new(biasPtr == null ? 0f : biasPtr[co + 3]);
-                        Vector<float> bias4 = new(biasPtr == null ? 0f : biasPtr[co + 4]);
-                        Vector<float> bias5 = new(biasPtr == null ? 0f : biasPtr[co + 5]);
-                        Vector<float> bias6 = new(biasPtr == null ? 0f : biasPtr[co + 6]);
-                        Vector<float> bias7 = new(biasPtr == null ? 0f : biasPtr[co + 7]);
-                        float* blockWeights = weightsPtr + block * inputChannels * 8;
-                        int inputBatch = b * inputChannels * plane;
-                        int spatial = 0;
-                        for (; spatial <= plane - dual; spatial += dual)
+                        int tileEnd = Math.Min(plane, tileStart + tileSpatial);
+                        for (int block = 0; block < blocks8; block++)
                         {
-                            Vector<float> a0l = bias0, a0h = bias0, a1l = bias1, a1h = bias1;
-                            Vector<float> a2l = bias2, a2h = bias2, a3l = bias3, a3h = bias3;
-                            Vector<float> a4l = bias4, a4h = bias4, a5l = bias5, a5h = bias5;
-                            Vector<float> a6l = bias6, a6h = bias6, a7l = bias7, a7h = bias7;
-                            float* inputChannel = inputPtr + inputBatch + spatial;
-                            float* w = blockWeights;
-                            for (int ci = 0; ci < inputChannels; ci++)
+                            int co = block * 8;
+                            float* output0 = outputPtr + (b * outputChannels + co) * plane;
+                            float* output1 = output0 + plane, output2 = output1 + plane, output3 = output2 + plane;
+                            float* output4 = output3 + plane, output5 = output4 + plane;
+                            float* output6 = output5 + plane, output7 = output6 + plane;
+                            Vector<float> bias0 = new(biasPtr == null ? 0f : biasPtr[co]);
+                            Vector<float> bias1 = new(biasPtr == null ? 0f : biasPtr[co + 1]);
+                            Vector<float> bias2 = new(biasPtr == null ? 0f : biasPtr[co + 2]);
+                            Vector<float> bias3 = new(biasPtr == null ? 0f : biasPtr[co + 3]);
+                            Vector<float> bias4 = new(biasPtr == null ? 0f : biasPtr[co + 4]);
+                            Vector<float> bias5 = new(biasPtr == null ? 0f : biasPtr[co + 5]);
+                            Vector<float> bias6 = new(biasPtr == null ? 0f : biasPtr[co + 6]);
+                            Vector<float> bias7 = new(biasPtr == null ? 0f : biasPtr[co + 7]);
+                            float* blockWeights = weightsPtr + block * inputChannels * 8;
+                            int inputBatch = b * inputChannels * plane;
+                            int spatial = tileStart;
+                            for (; spatial <= tileEnd - dual; spatial += dual)
                             {
-                                Vector<float> valueLow = VectorLoad(inputChannel);
-                                Vector<float> valueHigh = VectorLoad(inputChannel + widthLanes);
-                                a0l = VectorAddMul(a0l, valueLow, w[0]); a0h = VectorAddMul(a0h, valueHigh, w[0]);
-                                a1l = VectorAddMul(a1l, valueLow, w[1]); a1h = VectorAddMul(a1h, valueHigh, w[1]);
-                                a2l = VectorAddMul(a2l, valueLow, w[2]); a2h = VectorAddMul(a2h, valueHigh, w[2]);
-                                a3l = VectorAddMul(a3l, valueLow, w[3]); a3h = VectorAddMul(a3h, valueHigh, w[3]);
-                                a4l = VectorAddMul(a4l, valueLow, w[4]); a4h = VectorAddMul(a4h, valueHigh, w[4]);
-                                a5l = VectorAddMul(a5l, valueLow, w[5]); a5h = VectorAddMul(a5h, valueHigh, w[5]);
-                                a6l = VectorAddMul(a6l, valueLow, w[6]); a6h = VectorAddMul(a6h, valueHigh, w[6]);
-                                a7l = VectorAddMul(a7l, valueLow, w[7]); a7h = VectorAddMul(a7h, valueHigh, w[7]);
-                                inputChannel += plane;
-                                w += 8;
+                                Vector<float> a0l = bias0, a0h = bias0, a1l = bias1, a1h = bias1;
+                                Vector<float> a2l = bias2, a2h = bias2, a3l = bias3, a3h = bias3;
+                                Vector<float> a4l = bias4, a4h = bias4, a5l = bias5, a5h = bias5;
+                                Vector<float> a6l = bias6, a6h = bias6, a7l = bias7, a7h = bias7;
+                                float* inputChannel = inputPtr + inputBatch + spatial;
+                                float* w = blockWeights;
+                                for (int ci = 0; ci < inputChannels; ci++)
+                                {
+                                    Vector<float> valueLow = VectorLoad(inputChannel);
+                                    Vector<float> valueHigh = VectorLoad(inputChannel + widthLanes);
+                                    VectorAddMulPacked8(ref a0l, ref a1l, ref a2l, ref a3l, ref a4l, ref a5l, ref a6l, ref a7l, valueLow, w);
+                                    VectorAddMulPacked8(ref a0h, ref a1h, ref a2h, ref a3h, ref a4h, ref a5h, ref a6h, ref a7h, valueHigh, w);
+                                    inputChannel += plane;
+                                    w += 8;
+                                }
+                                VectorStore(output0 + spatial, a0l); VectorStore(output0 + spatial + widthLanes, a0h);
+                                VectorStore(output1 + spatial, a1l); VectorStore(output1 + spatial + widthLanes, a1h);
+                                VectorStore(output2 + spatial, a2l); VectorStore(output2 + spatial + widthLanes, a2h);
+                                VectorStore(output3 + spatial, a3l); VectorStore(output3 + spatial + widthLanes, a3h);
+                                VectorStore(output4 + spatial, a4l); VectorStore(output4 + spatial + widthLanes, a4h);
+                                VectorStore(output5 + spatial, a5l); VectorStore(output5 + spatial + widthLanes, a5h);
+                                VectorStore(output6 + spatial, a6l); VectorStore(output6 + spatial + widthLanes, a6h);
+                                VectorStore(output7 + spatial, a7l); VectorStore(output7 + spatial + widthLanes, a7h);
                             }
-                            VectorStore(output0 + spatial, a0l); VectorStore(output0 + spatial + widthLanes, a0h);
-                            VectorStore(output1 + spatial, a1l); VectorStore(output1 + spatial + widthLanes, a1h);
-                            VectorStore(output2 + spatial, a2l); VectorStore(output2 + spatial + widthLanes, a2h);
-                            VectorStore(output3 + spatial, a3l); VectorStore(output3 + spatial + widthLanes, a3h);
-                            VectorStore(output4 + spatial, a4l); VectorStore(output4 + spatial + widthLanes, a4h);
-                            VectorStore(output5 + spatial, a5l); VectorStore(output5 + spatial + widthLanes, a5h);
-                            VectorStore(output6 + spatial, a6l); VectorStore(output6 + spatial + widthLanes, a6h);
-                            VectorStore(output7 + spatial, a7l); VectorStore(output7 + spatial + widthLanes, a7h);
-                        }
-                        for (; spatial <= plane - widthLanes; spatial += widthLanes)
-                        {
-                            Vector<float> a0 = bias0, a1 = bias1, a2 = bias2, a3 = bias3;
-                            Vector<float> a4 = bias4, a5 = bias5, a6 = bias6, a7 = bias7;
-                            float* inputChannel = inputPtr + inputBatch + spatial;
-                            float* w = blockWeights;
-                            for (int ci = 0; ci < inputChannels; ci++)
+                            for (; spatial <= tileEnd - widthLanes; spatial += widthLanes)
                             {
-                                Vector<float> value = VectorLoad(inputChannel);
-                                a0 = VectorAddMul(a0, value, w[0]); a1 = VectorAddMul(a1, value, w[1]);
-                                a2 = VectorAddMul(a2, value, w[2]); a3 = VectorAddMul(a3, value, w[3]);
-                                a4 = VectorAddMul(a4, value, w[4]); a5 = VectorAddMul(a5, value, w[5]);
-                                a6 = VectorAddMul(a6, value, w[6]); a7 = VectorAddMul(a7, value, w[7]);
-                                inputChannel += plane;
-                                w += 8;
+                                Vector<float> a0 = bias0, a1 = bias1, a2 = bias2, a3 = bias3;
+                                Vector<float> a4 = bias4, a5 = bias5, a6 = bias6, a7 = bias7;
+                                float* inputChannel = inputPtr + inputBatch + spatial;
+                                float* w = blockWeights;
+                                for (int ci = 0; ci < inputChannels; ci++)
+                                {
+                                    Vector<float> value = VectorLoad(inputChannel);
+                                    VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, w);
+                                    inputChannel += plane;
+                                    w += 8;
+                                }
+                                VectorStore(output0 + spatial, a0); VectorStore(output1 + spatial, a1);
+                                VectorStore(output2 + spatial, a2); VectorStore(output3 + spatial, a3);
+                                VectorStore(output4 + spatial, a4); VectorStore(output5 + spatial, a5);
+                                VectorStore(output6 + spatial, a6); VectorStore(output7 + spatial, a7);
                             }
-                            VectorStore(output0 + spatial, a0); VectorStore(output1 + spatial, a1);
-                            VectorStore(output2 + spatial, a2); VectorStore(output3 + spatial, a3);
-                            VectorStore(output4 + spatial, a4); VectorStore(output5 + spatial, a5);
-                            VectorStore(output6 + spatial, a6); VectorStore(output7 + spatial, a7);
-                        }
-                        for (; spatial < plane; spatial++)
-                        {
-                            float a0 = biasPtr == null ? 0f : biasPtr[co], a1 = biasPtr == null ? 0f : biasPtr[co + 1];
-                            float a2 = biasPtr == null ? 0f : biasPtr[co + 2], a3 = biasPtr == null ? 0f : biasPtr[co + 3];
-                            float a4 = biasPtr == null ? 0f : biasPtr[co + 4], a5 = biasPtr == null ? 0f : biasPtr[co + 5];
-                            float a6 = biasPtr == null ? 0f : biasPtr[co + 6], a7 = biasPtr == null ? 0f : biasPtr[co + 7];
-                            float* inputChannel = inputPtr + inputBatch + spatial;
-                            float* w = blockWeights;
-                            for (int ci = 0; ci < inputChannels; ci++)
+                            for (; spatial < tileEnd; spatial++)
                             {
-                                float value = *inputChannel;
-                                a0 += value * w[0]; a1 += value * w[1]; a2 += value * w[2]; a3 += value * w[3];
-                                a4 += value * w[4]; a5 += value * w[5]; a6 += value * w[6]; a7 += value * w[7];
-                                inputChannel += plane;
-                                w += 8;
+                                float a0 = biasPtr == null ? 0f : biasPtr[co], a1 = biasPtr == null ? 0f : biasPtr[co + 1];
+                                float a2 = biasPtr == null ? 0f : biasPtr[co + 2], a3 = biasPtr == null ? 0f : biasPtr[co + 3];
+                                float a4 = biasPtr == null ? 0f : biasPtr[co + 4], a5 = biasPtr == null ? 0f : biasPtr[co + 5];
+                                float a6 = biasPtr == null ? 0f : biasPtr[co + 6], a7 = biasPtr == null ? 0f : biasPtr[co + 7];
+                                float* inputChannel = inputPtr + inputBatch + spatial;
+                                float* w = blockWeights;
+                                for (int ci = 0; ci < inputChannels; ci++)
+                                {
+                                    float value = *inputChannel;
+                                    a0 += value * w[0]; a1 += value * w[1]; a2 += value * w[2]; a3 += value * w[3];
+                                    a4 += value * w[4]; a5 += value * w[5]; a6 += value * w[6]; a7 += value * w[7];
+                                    inputChannel += plane;
+                                    w += 8;
+                                }
+                                output0[spatial] = a0; output1[spatial] = a1; output2[spatial] = a2; output3[spatial] = a3;
+                                output4[spatial] = a4; output5[spatial] = a5; output6[spatial] = a6; output7[spatial] = a7;
                             }
-                            output0[spatial] = a0; output1[spatial] = a1; output2[spatial] = a2; output3[spatial] = a3;
-                            output4[spatial] = a4; output5[spatial] = a5; output6[spatial] = a6; output7[spatial] = a7;
                         }
                     }
             }

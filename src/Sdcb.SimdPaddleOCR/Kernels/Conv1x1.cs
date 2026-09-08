@@ -440,7 +440,8 @@ internal static partial class Conv1x1
         else
 #endif
             if (Vector.IsHardwareAccelerated && outputChannels >= 8 && (outputChannels & 7) == 0 &&
-                packedOc8.Length == checked(outputChannels * inputChannels))
+                packedOc8.Length == checked(outputChannels * inputChannels) &&
+                !(outputChannels == 16 && intraOpThreads > outputChannels / 8))
             {
                 TryPackedEightVector(input, packedOc8, bias, output, batch, inputChannels,
                     height, width, outputChannels, intraOpThreads);

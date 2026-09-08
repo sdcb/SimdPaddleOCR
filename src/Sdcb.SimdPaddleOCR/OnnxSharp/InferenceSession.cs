@@ -1207,6 +1207,14 @@ public sealed class InferenceSession : IDisposable
         if (group == 1 && kh == 2 && kw == 2 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
             pt == 0 && pl == 0 && I32(p, 40) == 1 && I32(p, 44) == 1 && oh == h && ow == wi &&
             Stride2.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, cout)) return;
+        // Packed stride-2 shards by eight-channel blocks. Detector 16-channel
+        // projections only yield two tasks at intra-op=4; use the four-channel
+        // sharded kernel so all worker lanes participate, matching stride-1.
+        if (group == 1 && kh == 3 && kw == 3 && sh == 2 && sw == 2 && dh == 1 && dw == 1 &&
+            pt == 1 && pl == 1 && I32(p, 40) == 1 && I32(p, 44) == 1 && intraOpThreads > 1 &&
+            cout == 16 && intraOpThreads > cout / 8 &&
+            Conv3x3Stride2.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, oh, ow, cout,
+                intraOpThreads)) return;
         if (group == 1 && kh == 3 && kw == 3 && sh == 2 && sw == 2 && dh == 1 && dw == 1 &&
             pt == 1 && pl == 1 && I32(p, 40) == 1 && I32(p, 44) == 1 &&
             packed3x3 is not null && Conv3x3Stride2.TryPacked(x.Data, packed3x3,

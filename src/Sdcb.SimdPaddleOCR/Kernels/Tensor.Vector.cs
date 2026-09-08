@@ -217,6 +217,10 @@ internal static partial class SimdKernels
 
     private static readonly Vector128<float> SseSignMask = Vector128.Create(unchecked((int)0x80000000)).AsSingle();
 
+    private static readonly Vector128<float> SseInvSqrtTwo = Vector128.Create(0.70710678118654752f);
+
+    private static readonly Vector128<float> SseHalf = Vector128.Create(0.5f);
+
     private static readonly Vector128<float> SseOne = Vector128.Create(1f);
 
     private static readonly Vector128<float> SseTwo = Vector128.Create(2f);
@@ -359,12 +363,31 @@ internal static partial class SimdKernels
         Vector128<float> abs = AdvSimd.And(value, SseAbsMask);
         Vector128<float> sign = AdvSimd.And(value, SseSignMask);
         Vector128<float> sq = AdvSimd.Multiply(abs, abs);
-        Vector128<float> small = ErfPolySmallAdvSimd(abs, sq);
-        Vector128<float> middle = ErfPolyMiddleAdvSimd(abs);
-        Vector128<float> large = ErfPolyLargeAdvSimd(abs);
-        Vector128<float> result = AdvSimd.BitwiseSelect(AdvSimd.CompareLessThan(abs, SseTwo), middle, large);
-        result = AdvSimd.BitwiseSelect(AdvSimd.CompareLessThan(abs, SseOne), small, result);
-        result = AdvSimd.BitwiseSelect(AdvSimd.CompareGreaterThanOrEqual(abs, SseFour), SseOne, result);
+        // Feature-map values are spatially correlated, so many vectors stay
+        // entirely inside one approximation interval. Two lane reductions give
+        // the range; scalar compares then pick the interval without six
+        // compare+reduce sequences. Mixed vectors still evaluate all three
+        // polynomials, matching the AVX/Numerics blend.
+        float lo = AdvSimd.Arm64.MinAcross(abs).ToScalar();
+        float hi = AdvSimd.Arm64.MaxAcross(abs).ToScalar();
+        Vector128<float> result;
+        if (hi < 1f)
+            result = ErfPolySmallAdvSimd(abs, sq);
+        else if (lo >= 4f)
+            result = SseOne;
+        else if (lo >= 1f && hi < 2f)
+            result = ErfPolyMiddleAdvSimd(abs);
+        else if (lo >= 2f && hi < 4f)
+            result = ErfPolyLargeAdvSimd(abs);
+        else
+        {
+            Vector128<float> small = ErfPolySmallAdvSimd(abs, sq);
+            Vector128<float> middle = ErfPolyMiddleAdvSimd(abs);
+            Vector128<float> large = ErfPolyLargeAdvSimd(abs);
+            result = AdvSimd.BitwiseSelect(AdvSimd.CompareLessThan(abs, SseTwo), middle, large);
+            result = AdvSimd.BitwiseSelect(AdvSimd.CompareLessThan(abs, SseOne), small, result);
+            result = AdvSimd.BitwiseSelect(AdvSimd.CompareGreaterThanOrEqual(abs, SseFour), SseOne, result);
+        }
         return AdvSimd.Or(result, sign);
     }
 

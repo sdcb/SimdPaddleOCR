@@ -162,20 +162,50 @@ internal static partial class Conv3x3Stride2
                         int row = oy * outputWidth;
                         for (int x = 0; x < outputWidth;)
                         {
-                            bool canVector = x + widthLanes <= outputWidth;
-                            if (canVector)
+                            int dualLanes = widthLanes * 2;
+                            bool canDual = CanStride2Width(x, dualLanes, outputWidth, inputWidth);
+                            bool canVector = !canDual && CanStride2Width(x, widthLanes, outputWidth, inputWidth);
+                            if (canDual)
                             {
-                                for (int kx = 0; kx < 3; kx++)
+                                Vector<float> a0 = new(bias0), a1 = new(bias1), a2 = new(bias2), a3 = new(bias3);
+                                Vector<float> c0 = new(bias0), c1 = new(bias1), c2 = new(bias2), c3 = new(bias3);
+                                int nextOffset = 2 * widthLanes;
+                                for (int ci = 0; ci < inputChannels; ci++)
                                 {
-                                    int first = 2 * x - 1 + kx;
-                                    if (first < 0 || first + (widthLanes * 2 - 2) >= inputWidth)
+                                    int wb0 = weightBase0 + ci * 9;
+                                    int wb1 = weightBase1 + ci * 9;
+                                    int wb2 = weightBase2 + ci * 9;
+                                    int wb3 = weightBase3 + ci * 9;
+                                    ReadOnlySpan<float> source = input.Slice(inputBatch + ci * inputPlane, inputPlane);
+                                    for (int ky = 0; ky < 3; ky++)
                                     {
-                                        canVector = false;
-                                        break;
+                                        int sourceY = oy * 2 - 1 + ky;
+                                        if ((uint)sourceY >= (uint)inputHeight) continue;
+                                        int sourceOffset = sourceY * inputWidth + 2 * x - 1;
+                                        for (int kx = 0; kx < 3; kx++)
+                                        {
+                                            Vector<float> valueLow = VectorLoadStride2(source, sourceOffset + kx);
+                                            Vector<float> valueHigh = VectorLoadStride2(source, sourceOffset + kx + nextOffset);
+                                            float w0 = weights[wb0 + ky * 3 + kx], w1 = weights[wb1 + ky * 3 + kx];
+                                            float w2 = weights[wb2 + ky * 3 + kx], w3 = weights[wb3 + ky * 3 + kx];
+                                            a0 = VectorAddMul(a0, valueLow, w0); c0 = VectorAddMul(c0, valueHigh, w0);
+                                            a1 = VectorAddMul(a1, valueLow, w1); c1 = VectorAddMul(c1, valueHigh, w1);
+                                            a2 = VectorAddMul(a2, valueLow, w2); c2 = VectorAddMul(c2, valueHigh, w2);
+                                            a3 = VectorAddMul(a3, valueLow, w3); c3 = VectorAddMul(c3, valueHigh, w3);
+                                        }
                                     }
                                 }
+                                VectorStore(output, output0 + row + x, a0);
+                                VectorStore(output, output1 + row + x, a1);
+                                VectorStore(output, output2 + row + x, a2);
+                                VectorStore(output, output3 + row + x, a3);
+                                VectorStore(output, output0 + row + x + widthLanes, c0);
+                                VectorStore(output, output1 + row + x + widthLanes, c1);
+                                VectorStore(output, output2 + row + x + widthLanes, c2);
+                                VectorStore(output, output3 + row + x + widthLanes, c3);
+                                x += dualLanes;
                             }
-                            if (canVector)
+                            else if (canVector)
                             {
                                 Vector<float> a0 = new(bias0), a1 = new(bias1), a2 = new(bias2), a3 = new(bias3);
                                 for (int ci = 0; ci < inputChannels; ci++)
@@ -205,42 +235,43 @@ internal static partial class Conv3x3Stride2
                                 VectorStore(output, output2 + row + x, a2);
                                 VectorStore(output, output3 + row + x, a3);
                                 x += widthLanes;
-                                continue;
                             }
-
-                            for (int lane = 0; lane < Math.Min(widthLanes, outputWidth - x); lane++)
+                            else
                             {
-                                int ox = x + lane;
-                                float s0 = bias0, s1 = bias1, s2 = bias2, s3 = bias3;
-                                for (int ci = 0; ci < inputChannels; ci++)
+                                for (int lane = 0; lane < Math.Min(widthLanes, outputWidth - x); lane++)
                                 {
-                                    int wb0 = weightBase0 + ci * 9;
-                                    int wb1 = weightBase1 + ci * 9;
-                                    int wb2 = weightBase2 + ci * 9;
-                                    int wb3 = weightBase3 + ci * 9;
-                                    int sourceBase = inputBatch + ci * inputPlane;
-                                    for (int ky = 0; ky < 3; ky++)
+                                    int ox = x + lane;
+                                    float s0 = bias0, s1 = bias1, s2 = bias2, s3 = bias3;
+                                    for (int ci = 0; ci < inputChannels; ci++)
                                     {
-                                        int iy = oy * 2 - 1 + ky;
-                                        if ((uint)iy >= (uint)inputHeight) continue;
-                                        for (int kx = 0; kx < 3; kx++)
+                                        int wb0 = weightBase0 + ci * 9;
+                                        int wb1 = weightBase1 + ci * 9;
+                                        int wb2 = weightBase2 + ci * 9;
+                                        int wb3 = weightBase3 + ci * 9;
+                                        int sourceBase = inputBatch + ci * inputPlane;
+                                        for (int ky = 0; ky < 3; ky++)
                                         {
-                                            int ix = ox * 2 - 1 + kx;
-                                            if ((uint)ix >= (uint)inputWidth) continue;
-                                            float v = input[sourceBase + iy * inputWidth + ix];
-                                            s0 += v * weights[wb0 + ky * 3 + kx];
-                                            s1 += v * weights[wb1 + ky * 3 + kx];
-                                            s2 += v * weights[wb2 + ky * 3 + kx];
-                                            s3 += v * weights[wb3 + ky * 3 + kx];
+                                            int iy = oy * 2 - 1 + ky;
+                                            if ((uint)iy >= (uint)inputHeight) continue;
+                                            for (int kx = 0; kx < 3; kx++)
+                                            {
+                                                int ix = ox * 2 - 1 + kx;
+                                                if ((uint)ix >= (uint)inputWidth) continue;
+                                                float v = input[sourceBase + iy * inputWidth + ix];
+                                                s0 += v * weights[wb0 + ky * 3 + kx];
+                                                s1 += v * weights[wb1 + ky * 3 + kx];
+                                                s2 += v * weights[wb2 + ky * 3 + kx];
+                                                s3 += v * weights[wb3 + ky * 3 + kx];
+                                            }
                                         }
                                     }
+                                    output[output0 + row + ox] = s0;
+                                    output[output1 + row + ox] = s1;
+                                    output[output2 + row + ox] = s2;
+                                    output[output3 + row + ox] = s3;
                                 }
-                                output[output0 + row + ox] = s0;
-                                output[output1 + row + ox] = s1;
-                                output[output2 + row + ox] = s2;
-                                output[output3 + row + ox] = s3;
+                                x += widthLanes;
                             }
-                            x += widthLanes;
                         }
                     }
                 }
@@ -529,6 +560,7 @@ internal static partial class Conv3x3Stride2
                 for (int co = 0; co < outputChannels; co += 8)
                 {
                     float* w = weightsPtr + (co / 8) * inputChannels * weightsPerInput;
+                    float* blockBias = biasPtr == null ? null : biasPtr + co;
                     float* o0 = outputPtr + (b * outputChannels + co) * outputPlane;
                     float* o1 = o0 + outputPlane, o2 = o1 + outputPlane, o3 = o2 + outputPlane;
                     float* o4 = o3 + outputPlane, o5 = o4 + outputPlane, o6 = o5 + outputPlane, o7 = o6 + outputPlane;
@@ -536,83 +568,30 @@ internal static partial class Conv3x3Stride2
                     float b2 = biasPtr == null ? 0f : biasPtr[co + 2], b3 = biasPtr == null ? 0f : biasPtr[co + 3];
                     float b4 = biasPtr == null ? 0f : biasPtr[co + 4], b5 = biasPtr == null ? 0f : biasPtr[co + 5];
                     float b6 = biasPtr == null ? 0f : biasPtr[co + 6], b7 = biasPtr == null ? 0f : biasPtr[co + 7];
-                    Vector<float> vb0 = new(b0), vb1 = new(b1), vb2 = new(b2), vb3 = new(b3);
-                    Vector<float> vb4 = new(b4), vb5 = new(b5), vb6 = new(b6), vb7 = new(b7);
                     float* batchInput = inputPtr + b * inputChannels * inputPlane;
                     for (int oy = 0; oy < outputHeight; oy++)
                     {
-                        int row = oy * outputWidth, ox = 0;
+                        int row = oy * outputWidth, ox = 0, dualLanes = widthLanes * 2;
+                        bool fullHeight = oy > 0 && oy * 2 + 1 < inputHeight;
+                        float* tileRow = batchInput + (oy * 2 - 1) * inputWidth;
                         while (ox < outputWidth)
                         {
-                            bool vector = oy > 0 && oy * 2 + 1 < inputHeight && ox > 0 &&
+                            bool dual = fullHeight && ox > 0 &&
+                                ox + dualLanes <= outputWidth &&
+                                (ox + dualLanes - 1) * 2 + 1 < inputWidth;
+                            bool vector = !dual && fullHeight && ox > 0 &&
                                 ox + widthLanes <= outputWidth &&
                                 (ox + widthLanes - 1) * 2 + 1 < inputWidth;
-                            if (vector)
+                            if (dual)
                             {
-                                Vector<float> a0 = vb0, a1 = vb1, a2 = vb2, a3 = vb3;
-                                Vector<float> a4 = vb4, a5 = vb5, a6 = vb6, a7 = vb7;
-                                for (int ci = 0; ci < inputChannels; ci++)
-                                {
-                                    float* src = batchInput + ci * inputPlane;
-                                    float* wc = w + ci * weightsPerInput;
-                                    int sourceOffset = ox * 2 - 1;
-                                    float* row0 = src + (oy * 2 - 1) * inputWidth + sourceOffset;
-                                    float* row1 = row0 + inputWidth, row2 = row1 + inputWidth;
-                                    Vector<float> v0 = VectorLoadStride2(row0);
-                                    Vector<float> v1 = VectorLoadStride2(row0 + 1);
-                                    Vector<float> v2 = VectorLoadStride2(row0 + 2);
-                                    float* weights = wc;
-                                    a0 = VectorAddMul(a0, v0, weights[0]); a1 = VectorAddMul(a1, v0, weights[1]);
-                                    a2 = VectorAddMul(a2, v0, weights[2]); a3 = VectorAddMul(a3, v0, weights[3]);
-                                    a4 = VectorAddMul(a4, v0, weights[4]); a5 = VectorAddMul(a5, v0, weights[5]);
-                                    a6 = VectorAddMul(a6, v0, weights[6]); a7 = VectorAddMul(a7, v0, weights[7]);
-                                    weights += 8;
-                                    a0 = VectorAddMul(a0, v1, weights[0]); a1 = VectorAddMul(a1, v1, weights[1]);
-                                    a2 = VectorAddMul(a2, v1, weights[2]); a3 = VectorAddMul(a3, v1, weights[3]);
-                                    a4 = VectorAddMul(a4, v1, weights[4]); a5 = VectorAddMul(a5, v1, weights[5]);
-                                    a6 = VectorAddMul(a6, v1, weights[6]); a7 = VectorAddMul(a7, v1, weights[7]);
-                                    weights += 8;
-                                    a0 = VectorAddMul(a0, v2, weights[0]); a1 = VectorAddMul(a1, v2, weights[1]);
-                                    a2 = VectorAddMul(a2, v2, weights[2]); a3 = VectorAddMul(a3, v2, weights[3]);
-                                    a4 = VectorAddMul(a4, v2, weights[4]); a5 = VectorAddMul(a5, v2, weights[5]);
-                                    a6 = VectorAddMul(a6, v2, weights[6]); a7 = VectorAddMul(a7, v2, weights[7]);
-                                    weights += 8;
-                                    v0 = VectorLoadStride2(row1); v1 = VectorLoadStride2(row1 + 1); v2 = VectorLoadStride2(row1 + 2);
-                                    a0 = VectorAddMul(a0, v0, weights[0]); a1 = VectorAddMul(a1, v0, weights[1]);
-                                    a2 = VectorAddMul(a2, v0, weights[2]); a3 = VectorAddMul(a3, v0, weights[3]);
-                                    a4 = VectorAddMul(a4, v0, weights[4]); a5 = VectorAddMul(a5, v0, weights[5]);
-                                    a6 = VectorAddMul(a6, v0, weights[6]); a7 = VectorAddMul(a7, v0, weights[7]);
-                                    weights += 8;
-                                    a0 = VectorAddMul(a0, v1, weights[0]); a1 = VectorAddMul(a1, v1, weights[1]);
-                                    a2 = VectorAddMul(a2, v1, weights[2]); a3 = VectorAddMul(a3, v1, weights[3]);
-                                    a4 = VectorAddMul(a4, v1, weights[4]); a5 = VectorAddMul(a5, v1, weights[5]);
-                                    a6 = VectorAddMul(a6, v1, weights[6]); a7 = VectorAddMul(a7, v1, weights[7]);
-                                    weights += 8;
-                                    a0 = VectorAddMul(a0, v2, weights[0]); a1 = VectorAddMul(a1, v2, weights[1]);
-                                    a2 = VectorAddMul(a2, v2, weights[2]); a3 = VectorAddMul(a3, v2, weights[3]);
-                                    a4 = VectorAddMul(a4, v2, weights[4]); a5 = VectorAddMul(a5, v2, weights[5]);
-                                    a6 = VectorAddMul(a6, v2, weights[6]); a7 = VectorAddMul(a7, v2, weights[7]);
-                                    weights += 8;
-                                    v0 = VectorLoadStride2(row2); v1 = VectorLoadStride2(row2 + 1); v2 = VectorLoadStride2(row2 + 2);
-                                    a0 = VectorAddMul(a0, v0, weights[0]); a1 = VectorAddMul(a1, v0, weights[1]);
-                                    a2 = VectorAddMul(a2, v0, weights[2]); a3 = VectorAddMul(a3, v0, weights[3]);
-                                    a4 = VectorAddMul(a4, v0, weights[4]); a5 = VectorAddMul(a5, v0, weights[5]);
-                                    a6 = VectorAddMul(a6, v0, weights[6]); a7 = VectorAddMul(a7, v0, weights[7]);
-                                    weights += 8;
-                                    a0 = VectorAddMul(a0, v1, weights[0]); a1 = VectorAddMul(a1, v1, weights[1]);
-                                    a2 = VectorAddMul(a2, v1, weights[2]); a3 = VectorAddMul(a3, v1, weights[3]);
-                                    a4 = VectorAddMul(a4, v1, weights[4]); a5 = VectorAddMul(a5, v1, weights[5]);
-                                    a6 = VectorAddMul(a6, v1, weights[6]); a7 = VectorAddMul(a7, v1, weights[7]);
-                                    weights += 8;
-                                    a0 = VectorAddMul(a0, v2, weights[0]); a1 = VectorAddMul(a1, v2, weights[1]);
-                                    a2 = VectorAddMul(a2, v2, weights[2]); a3 = VectorAddMul(a3, v2, weights[3]);
-                                    a4 = VectorAddMul(a4, v2, weights[4]); a5 = VectorAddMul(a5, v2, weights[5]);
-                                    a6 = VectorAddMul(a6, v2, weights[6]); a7 = VectorAddMul(a7, v2, weights[7]);
-                                }
-                                VectorStore(o0 + row + ox, a0); VectorStore(o1 + row + ox, a1);
-                                VectorStore(o2 + row + ox, a2); VectorStore(o3 + row + ox, a3);
-                                VectorStore(o4 + row + ox, a4); VectorStore(o5 + row + ox, a5);
-                                VectorStore(o6 + row + ox, a6); VectorStore(o7 + row + ox, a7);
+                                PackedStride2TileEightDual(tileRow + ox * 2 - 1, w, blockBias, o0 + row + ox,
+                                    outputPlane, inputChannels, inputPlane, inputWidth);
+                                ox += dualLanes;
+                            }
+                            else if (vector)
+                            {
+                                PackedStride2TileEight(tileRow + ox * 2 - 1, w, blockBias, o0 + row + ox,
+                                    outputPlane, inputChannels, inputPlane, inputWidth);
                                 ox += widthLanes;
                             }
                             else
@@ -647,5 +626,123 @@ internal static partial class Conv3x3Stride2
                     }
                 }
         }
+    }
+
+    // One interior tile: Vector<float>.Count output columns for eight packed
+    // output channels. Kept as its own method so the inliner budget covers the
+    // nine taps; `source` is input row (2*oy-1), column (2*ox-1) of channel 0.
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe void PackedStride2TileEight(float* source, float* packed, float* bias,
+        float* output, int outputPlane, int inputChannels, int inputPlane, int inputWidth)
+    {
+        Vector<float> a0 = new(bias == null ? 0f : bias[0]), a1 = new(bias == null ? 0f : bias[1]);
+        Vector<float> a2 = new(bias == null ? 0f : bias[2]), a3 = new(bias == null ? 0f : bias[3]);
+        Vector<float> a4 = new(bias == null ? 0f : bias[4]), a5 = new(bias == null ? 0f : bias[5]);
+        Vector<float> a6 = new(bias == null ? 0f : bias[6]), a7 = new(bias == null ? 0f : bias[7]);
+        for (int ci = 0; ci < inputChannels; ci++, source += inputPlane, packed += 9 * 8)
+        {
+            float* row1 = source + inputWidth, row2 = row1 + inputWidth;
+            AccumulatePackedStride2Eight(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+                source, row1, row2, packed);
+        }
+        VectorStore(output, a0); VectorStore(output + outputPlane, a1);
+        VectorStore(output + 2 * outputPlane, a2); VectorStore(output + 3 * outputPlane, a3);
+        VectorStore(output + 4 * outputPlane, a4); VectorStore(output + 5 * outputPlane, a5);
+        VectorStore(output + 6 * outputPlane, a6); VectorStore(output + 7 * outputPlane, a7);
+    }
+
+    // Two adjacent interior tiles sharing each weight load.
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe void PackedStride2TileEightDual(float* source, float* packed, float* bias,
+        float* output, int outputPlane, int inputChannels, int inputPlane, int inputWidth)
+    {
+        int widthLanes = Vector<float>.Count, next = 2 * widthLanes;
+        Vector<float> a0 = new(bias == null ? 0f : bias[0]), a1 = new(bias == null ? 0f : bias[1]);
+        Vector<float> a2 = new(bias == null ? 0f : bias[2]), a3 = new(bias == null ? 0f : bias[3]);
+        Vector<float> a4 = new(bias == null ? 0f : bias[4]), a5 = new(bias == null ? 0f : bias[5]);
+        Vector<float> a6 = new(bias == null ? 0f : bias[6]), a7 = new(bias == null ? 0f : bias[7]);
+        Vector<float> c0 = a0, c1 = a1, c2 = a2, c3 = a3, c4 = a4, c5 = a5, c6 = a6, c7 = a7;
+        for (int ci = 0; ci < inputChannels; ci++, source += inputPlane, packed += 9 * 8)
+        {
+            float* row1 = source + inputWidth, row2 = row1 + inputWidth;
+            AccumulatePackedStride2EightDual(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+                ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+                source, row1, row2, next, packed);
+        }
+        VectorStore(output, a0); VectorStore(output + widthLanes, c0);
+        output += outputPlane; VectorStore(output, a1); VectorStore(output + widthLanes, c1);
+        output += outputPlane; VectorStore(output, a2); VectorStore(output + widthLanes, c2);
+        output += outputPlane; VectorStore(output, a3); VectorStore(output + widthLanes, c3);
+        output += outputPlane; VectorStore(output, a4); VectorStore(output + widthLanes, c4);
+        output += outputPlane; VectorStore(output, a5); VectorStore(output + widthLanes, c5);
+        output += outputPlane; VectorStore(output, a6); VectorStore(output + widthLanes, c6);
+        output += outputPlane; VectorStore(output, a7); VectorStore(output + widthLanes, c7);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool CanStride2Width(int x, int lanes, int outputWidth, int inputWidth)
+    {
+        if (x + lanes > outputWidth) return false;
+        for (int kx = 0; kx < 3; kx++)
+        {
+            int first = 2 * x - 1 + kx;
+            if (first < 0 || first + (lanes * 2 - 2) >= inputWidth)
+                return false;
+        }
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void AccumulatePackedStride2Eight(
+        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
+        ref Vector<float> a4, ref Vector<float> a5, ref Vector<float> a6, ref Vector<float> a7,
+        float* row0, float* row1, float* row2, float* wc)
+    {
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row0), wc);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row0 + 1), wc + 8);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row0 + 2), wc + 16);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row1), wc + 24);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row1 + 1), wc + 32);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row1 + 2), wc + 40);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row2), wc + 48);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row2 + 1), wc + 56);
+        VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, VectorLoadStride2(row2 + 2), wc + 64);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void AccumulatePackedStride2EightDual(
+        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
+        ref Vector<float> a4, ref Vector<float> a5, ref Vector<float> a6, ref Vector<float> a7,
+        ref Vector<float> c0, ref Vector<float> c1, ref Vector<float> c2, ref Vector<float> c3,
+        ref Vector<float> c4, ref Vector<float> c5, ref Vector<float> c6, ref Vector<float> c7,
+        float* row0, float* row1, float* row2, int next, float* wc)
+    {
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row0), VectorLoadStride2(row0 + next), wc);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row0 + 1), VectorLoadStride2(row0 + 1 + next), wc + 8);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row0 + 2), VectorLoadStride2(row0 + 2 + next), wc + 16);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row1), VectorLoadStride2(row1 + next), wc + 24);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row1 + 1), VectorLoadStride2(row1 + 1 + next), wc + 32);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row1 + 2), VectorLoadStride2(row1 + 2 + next), wc + 40);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row2), VectorLoadStride2(row2 + next), wc + 48);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row2 + 1), VectorLoadStride2(row2 + 1 + next), wc + 56);
+        VectorAddMulPacked8x2(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7,
+            ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7,
+            VectorLoadStride2(row2 + 2), VectorLoadStride2(row2 + 2 + next), wc + 64);
     }
 }

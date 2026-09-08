@@ -44,6 +44,42 @@ public class KernelCorrectnessTests
     }
 
     [Fact]
+    public void Conv3x3Stride2_WidePackedAndSixteenChannelMatchReference()
+    {
+        const int batch = 1, ic = 3, oc = 8, ih = 17, iw = 21;
+        int oh = ih / 2, ow = iw / 2;
+        float[] input = Ramp(batch * ic * ih * iw, 0.01f);
+        float[] weights = Ramp(oc * ic * 9, 0.02f);
+        float[] bias = Ramp(oc, 0.03f);
+        float[] packed = PackConv3x3(weights, oc, ic);
+
+        float[] expected = new float[batch * oc * oh * ow];
+        Conv3x3Stride2Ref(input, weights, bias, expected, batch, ic, ih, iw, oh, ow, oc);
+
+        float[] packedActual = new float[expected.Length];
+        Conv3x3Stride2.TryPackedVector(input, packed, bias, packedActual, batch, ic, ih, iw, oh, ow, oc);
+        AssertClose(expected, packedActual);
+
+        const int oc16 = 16, ih16 = 13, iw16 = 18;
+        int oh16 = ih16 / 2, ow16 = iw16 / 2;
+        float[] input16 = Ramp(batch * ic * ih16 * iw16, -0.03f);
+        float[] weights16 = Ramp(oc16 * ic * 9, 0.04f);
+        float[] bias16 = Ramp(oc16, -0.02f);
+        float[] expected16 = new float[batch * oc16 * oh16 * ow16];
+        Conv3x3Stride2Ref(input16, weights16, bias16, expected16, batch, ic, ih16, iw16, oh16, ow16, oc16);
+
+        float[] actual16 = new float[expected16.Length];
+        Assert.True(Conv3x3Stride2.Try(input16, weights16, bias16, actual16, batch, ic, ih16, iw16,
+            oh16, ow16, oc16, intraOpThreads: 4));
+        AssertClose(expected16, actual16);
+
+        float[] vector16 = new float[expected16.Length];
+        Assert.True(Conv3x3Stride2.TryVector(input16, weights16, bias16, vector16, batch, ic, ih16, iw16,
+            oh16, ow16, oc16, 4));
+        AssertClose(expected16, vector16);
+    }
+
+    [Fact]
     public void Conv1x1_PackedAndOcMajorMatchReference()
     {
         const int batch = 1, ic = 6, oc = 16, h = 5, w = 7;
@@ -76,6 +112,11 @@ public class KernelCorrectnessTests
         float[] vectorUnpacked = new float[expected.Length];
         Assert.True(Conv1x1.TryVector(input, weights, bias, vectorUnpacked, batch, ic, h, w, oc, 1, 1));
         AssertClose(expected, vectorUnpacked, rtol: 5e-5f, atol: 5e-5f);
+
+        float[] fourOc = new float[expected.Length];
+        Assert.True(Conv1x1.TryPacked(input, packed4, bias, fourOc, batch, ic, h, w, oc,
+            intraOpThreads: 4, packedOc8: packed8));
+        AssertClose(expected, fourOc, rtol: 5e-5f, atol: 5e-5f);
     }
 
     [Fact]
@@ -163,6 +204,30 @@ public class KernelCorrectnessTests
             poly[i] = ErfPolyRef(input[i]);
 
         AssertClose(poly, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Fact]
+    public void Gelu_MatchesErfReference()
+    {
+        float[] input =
+        [
+            -5.5f, -4f, -3.25f, -2.1f, -1.75f, -1.01f, -0.75f, -0.1f,
+            0f, 0.25f, 0.99f, 1f, 1.5f, 1.99f, 2f, 2.75f,
+            3.5f, 3.99f, 4f, 6f, -0.33f, 0.8f, 2.2f, 5f,
+            0.5f, 1.5f, 2.5f, 5f, -0.5f, -1.5f, -2.5f, -5f,
+        ];
+        float[] actual = new float[input.Length];
+        SimdKernels.Gelu(input, actual);
+
+        float[] expected = new float[input.Length];
+        const float invSqrtTwo = 0.70710678118654752f;
+        for (int i = 0; i < input.Length; i++)
+        {
+            float activated = ErfPolyRef(input[i] * invSqrtTwo) + 1f;
+            expected[i] = input[i] * activated * 0.5f;
+        }
+
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
     }
 
     internal static float[] Ramp(int length, float scale)

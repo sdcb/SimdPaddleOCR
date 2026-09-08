@@ -276,7 +276,7 @@ internal static class SimdOps
         }
     }
 
-    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static unsafe Vector<float> VectorLoadStride2(float* source) =>
         VectorLoadStride2(ref Unsafe.AsRef<float>(source));
 
@@ -284,7 +284,9 @@ internal static class SimdOps
     internal static Vector<float> VectorLoadStride2(ReadOnlySpan<float> source, int offset) =>
         VectorLoadStride2(ref Unsafe.Add(ref MemoryMarshal.GetReference(source), offset));
 
-    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    // Must stay inlinable: the stride-2 kernels issue this per tap, and the
+    // generic scatter body below is too large for the inliner, so it lives apart.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static Vector<float> VectorLoadStride2(ref float source)
     {
 #if !NETSTANDARD2_0
@@ -292,46 +294,163 @@ internal static class SimdOps
         {
             Vector128<float> first = Vector128.LoadUnsafe(ref source);
             Vector128<float> second = Vector128.LoadUnsafe(ref Unsafe.Add(ref source, 4));
-            return Unsafe.BitCast<Vector128<float>, Vector<float>>(
-                AdvSimd.Arm64.UnzipEven(first, second));
+            return AdvSimd.Arm64.UnzipEven(first, second).AsVector();
         }
         else if (Sse.IsSupported && Vector<float>.Count == 4)
         {
             Vector128<float> first = Vector128.LoadUnsafe(ref source);
             Vector128<float> second = Vector128.LoadUnsafe(ref Unsafe.Add(ref source, 4));
-            Vector128<float> even = Sse.Shuffle(first, second, 0x88);
-            return Unsafe.BitCast<Vector128<float>, Vector<float>>(even);
+            return Sse.Shuffle(first, second, 0x88).AsVector();
         }
         else
 #endif
         {
-            Vector<float> value = default;
-            ref float d = ref Unsafe.As<Vector<float>, float>(ref value);
-            int width = Vector<float>.Count;
-            if (width == 8)
-            {
-                Unsafe.Add(ref d, 0) = source;
-                Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
-                Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
-                Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
-                Unsafe.Add(ref d, 4) = Unsafe.Add(ref source, 8);
-                Unsafe.Add(ref d, 5) = Unsafe.Add(ref source, 10);
-                Unsafe.Add(ref d, 6) = Unsafe.Add(ref source, 12);
-                Unsafe.Add(ref d, 7) = Unsafe.Add(ref source, 14);
-            }
-            else if (width == 4)
-            {
-                Unsafe.Add(ref d, 0) = source;
-                Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
-                Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
-                Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
-            }
-            else
-            {
-                for (int lane = 0; lane < width; lane++)
-                    Unsafe.Add(ref d, lane) = Unsafe.Add(ref source, lane * 2);
-            }
-            return value;
+            return VectorLoadStride2Generic(ref source);
         }
+    }
+
+    /// <summary>
+    /// <c>acc[k] += value * weights[k]</c> for eight consecutive packed weights.
+    /// On AdvSimd this is two 128-bit weight loads plus eight <c>FMLA (by element)</c>
+    /// instead of a scalar load + broadcast per FMA; every call in the body is a
+    /// hardware intrinsic, so it costs the inliner nothing beyond this method.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static unsafe void VectorAddMulPacked8(
+        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
+        ref Vector<float> a4, ref Vector<float> a5, ref Vector<float> a6, ref Vector<float> a7,
+        Vector<float> value, float* weights)
+    {
+#if !NETSTANDARD2_0
+        if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
+        {
+            Vector128<float> v = value.AsVector128();
+            Vector128<float> low = Vector128.Load(weights), high = Vector128.Load(weights + 4);
+            a0 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a0.AsVector128(), v, low, 0).AsVector();
+            a1 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a1.AsVector128(), v, low, 1).AsVector();
+            a2 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a2.AsVector128(), v, low, 2).AsVector();
+            a3 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a3.AsVector128(), v, low, 3).AsVector();
+            a4 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a4.AsVector128(), v, high, 0).AsVector();
+            a5 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a5.AsVector128(), v, high, 1).AsVector();
+            a6 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a6.AsVector128(), v, high, 2).AsVector();
+            a7 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a7.AsVector128(), v, high, 3).AsVector();
+            return;
+        }
+#endif
+        VectorAddMulPacked8Generic(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, weights);
+    }
+
+    /// <summary>
+    /// <see cref="VectorAddMulPacked8"/> for two spatial tiles (<paramref name="value"/>
+    /// and <paramref name="other"/>) sharing one set of eight packed weights.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static unsafe void VectorAddMulPacked8x2(
+        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
+        ref Vector<float> a4, ref Vector<float> a5, ref Vector<float> a6, ref Vector<float> a7,
+        ref Vector<float> c0, ref Vector<float> c1, ref Vector<float> c2, ref Vector<float> c3,
+        ref Vector<float> c4, ref Vector<float> c5, ref Vector<float> c6, ref Vector<float> c7,
+        Vector<float> value, Vector<float> other, float* weights)
+    {
+#if !NETSTANDARD2_0
+        if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
+        {
+            Vector128<float> v = value.AsVector128(), u = other.AsVector128();
+            Vector128<float> low = Vector128.Load(weights), high = Vector128.Load(weights + 4);
+            a0 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a0.AsVector128(), v, low, 0).AsVector();
+            c0 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c0.AsVector128(), u, low, 0).AsVector();
+            a1 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a1.AsVector128(), v, low, 1).AsVector();
+            c1 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c1.AsVector128(), u, low, 1).AsVector();
+            a2 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a2.AsVector128(), v, low, 2).AsVector();
+            c2 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c2.AsVector128(), u, low, 2).AsVector();
+            a3 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a3.AsVector128(), v, low, 3).AsVector();
+            c3 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c3.AsVector128(), u, low, 3).AsVector();
+            a4 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a4.AsVector128(), v, high, 0).AsVector();
+            c4 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c4.AsVector128(), u, high, 0).AsVector();
+            a5 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a5.AsVector128(), v, high, 1).AsVector();
+            c5 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c5.AsVector128(), u, high, 1).AsVector();
+            a6 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a6.AsVector128(), v, high, 2).AsVector();
+            c6 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c6.AsVector128(), u, high, 2).AsVector();
+            a7 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a7.AsVector128(), v, high, 3).AsVector();
+            c7 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(c7.AsVector128(), u, high, 3).AsVector();
+            return;
+        }
+#endif
+        VectorAddMulPacked8Generic(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, weights);
+        VectorAddMulPacked8Generic(ref c0, ref c1, ref c2, ref c3, ref c4, ref c5, ref c6, ref c7, other, weights);
+    }
+
+    /// <summary><c>acc[k] += value * weights[k]</c> for four consecutive packed weights.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static unsafe void VectorAddMulPacked4(
+        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
+        Vector<float> value, float* weights)
+    {
+#if !NETSTANDARD2_0
+        if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
+        {
+            Vector128<float> v = value.AsVector128();
+            Vector128<float> w = Vector128.Load(weights);
+            a0 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a0.AsVector128(), v, w, 0).AsVector();
+            a1 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a1.AsVector128(), v, w, 1).AsVector();
+            a2 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a2.AsVector128(), v, w, 2).AsVector();
+            a3 = AdvSimd.Arm64.FusedMultiplyAddBySelectedScalar(a3.AsVector128(), v, w, 3).AsVector();
+            return;
+        }
+#endif
+        VectorAddMulPacked4Generic(ref a0, ref a1, ref a2, ref a3, value, weights);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void VectorAddMulPacked8Generic(
+        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
+        ref Vector<float> a4, ref Vector<float> a5, ref Vector<float> a6, ref Vector<float> a7,
+        Vector<float> value, float* weights)
+    {
+        a0 += value * new Vector<float>(weights[0]); a1 += value * new Vector<float>(weights[1]);
+        a2 += value * new Vector<float>(weights[2]); a3 += value * new Vector<float>(weights[3]);
+        a4 += value * new Vector<float>(weights[4]); a5 += value * new Vector<float>(weights[5]);
+        a6 += value * new Vector<float>(weights[6]); a7 += value * new Vector<float>(weights[7]);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void VectorAddMulPacked4Generic(
+        ref Vector<float> a0, ref Vector<float> a1, ref Vector<float> a2, ref Vector<float> a3,
+        Vector<float> value, float* weights)
+    {
+        a0 += value * new Vector<float>(weights[0]); a1 += value * new Vector<float>(weights[1]);
+        a2 += value * new Vector<float>(weights[2]); a3 += value * new Vector<float>(weights[3]);
+    }
+
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static Vector<float> VectorLoadStride2Generic(ref float source)
+    {
+        Vector<float> value = default;
+        ref float d = ref Unsafe.As<Vector<float>, float>(ref value);
+        int width = Vector<float>.Count;
+        if (width == 8)
+        {
+            Unsafe.Add(ref d, 0) = source;
+            Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
+            Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
+            Unsafe.Add(ref d, 4) = Unsafe.Add(ref source, 8);
+            Unsafe.Add(ref d, 5) = Unsafe.Add(ref source, 10);
+            Unsafe.Add(ref d, 6) = Unsafe.Add(ref source, 12);
+            Unsafe.Add(ref d, 7) = Unsafe.Add(ref source, 14);
+        }
+        else if (width == 4)
+        {
+            Unsafe.Add(ref d, 0) = source;
+            Unsafe.Add(ref d, 1) = Unsafe.Add(ref source, 2);
+            Unsafe.Add(ref d, 2) = Unsafe.Add(ref source, 4);
+            Unsafe.Add(ref d, 3) = Unsafe.Add(ref source, 6);
+        }
+        else
+        {
+            for (int lane = 0; lane < width; lane++)
+                Unsafe.Add(ref d, lane) = Unsafe.Add(ref source, lane * 2);
+        }
+        return value;
     }
 }

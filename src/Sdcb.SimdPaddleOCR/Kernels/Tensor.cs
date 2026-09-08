@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 #endif
 
@@ -528,6 +529,32 @@ internal static partial class SimdKernels
                     activated1 = Avx.Multiply(value1, activated1);
                     Avx.Store(outputPtr + i, Avx.Multiply(activated0, VHalf));
                     Avx.Store(outputPtr + i + 8, Avx.Multiply(activated1, VHalf));
+                }
+            }
+        }
+        else if (AdvSimd.IsSupported)
+        {
+            fixed (float* inputPtr = input, outputPtr = output)
+            {
+                for (; i <= input.Length - 8; i += 8)
+                {
+                    Vector128<float> value0 = Vector128.Load(inputPtr + i);
+                    Vector128<float> value1 = Vector128.Load(inputPtr + i + 4);
+                    Vector128<float> activated0 = AdvSimd.Add(
+                        ErfVectorAdvSimd(AdvSimd.Multiply(value0, SseInvSqrtTwo)), SseOne);
+                    Vector128<float> activated1 = AdvSimd.Add(
+                        ErfVectorAdvSimd(AdvSimd.Multiply(value1, SseInvSqrtTwo)), SseOne);
+                    activated0 = AdvSimd.Multiply(value0, activated0);
+                    activated1 = AdvSimd.Multiply(value1, activated1);
+                    AdvSimd.Multiply(activated0, SseHalf).Store(outputPtr + i);
+                    AdvSimd.Multiply(activated1, SseHalf).Store(outputPtr + i + 4);
+                }
+                for (; i <= input.Length - 4; i += 4)
+                {
+                    Vector128<float> value = Vector128.Load(inputPtr + i);
+                    Vector128<float> activated = AdvSimd.Add(
+                        ErfVectorAdvSimd(AdvSimd.Multiply(value, SseInvSqrtTwo)), SseOne);
+                    AdvSimd.Multiply(AdvSimd.Multiply(value, activated), SseHalf).Store(outputPtr + i);
                 }
             }
         }
