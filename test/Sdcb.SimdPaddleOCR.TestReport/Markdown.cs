@@ -28,7 +28,6 @@ static class Markdown
         SmokeSection(sb, "Platform smoke", runs.Where(r => r.IsSmoke).ToList());
         BenchSections(sb, "SIMD / ISA benchmarks", runs.Where(r => r.IsSimdBenchmark).ToList());
         BenchSections(sb, "Engine comparison benchmarks", runs.Where(r => r.IsEngineBenchmark).ToList());
-        EngineCompare(sb, runs.Where(r => r.IsEngineBenchmark && r.Rid == "win-x64" && r.Model == "tiny").ToList());
         sb.AppendLine("## Benchmark details");
         sb.AppendLine();
         foreach (Run run in runs.Where(r => r.IsBenchmark).OrderBy(r => r.Rid).ThenBy(r => r.Machine).ThenBy(r => r.Replica).ThenBy(r => r.Label))
@@ -147,62 +146,6 @@ static class Markdown
             sb.AppendLine("No stage/operator breakdown (total latency and memory only).");
             sb.AppendLine();
         }
-    }
-
-    private static void EngineCompare(StringBuilder sb, List<Run> runs)
-    {
-        sb.AppendLine("## C# vs C vs OpenVINO (win-x64 tiny)");
-        sb.AppendLine();
-        var groups = runs
-            .Where(r => r.Rid == "win-x64" && r.Model == "tiny" && (r.IsSharp || r.IsC))
-            .GroupBy(r => r.Workers)
-            .OrderBy(g => g.Key)
-            .Select(g => (
-                Workers: g.Key,
-                Sharp: g.FirstOrDefault(r => r.IsSharp),
-                C: g.FirstOrDefault(r => r.IsC)))
-            .Where(p => p.Sharp is not null || p.C is not null)
-            .ToList();
-        Run? openvino = runs
-            .Where(r => r.Rid == "win-x64" && r.Model == "tiny" && r.IsOpenVino)
-            .OrderByDescending(r => r.Workers == 4)
-            .ThenBy(r => r.Workers)
-            .FirstOrDefault();
-        if (groups.Count == 0 && openvino is null)
-        {
-            sb.AppendLine("No matching runs.");
-            sb.AppendLine();
-            return;
-        }
-
-        Run? sharp4 = groups.FirstOrDefault(g => g.Workers == 4).Sharp
-            ?? groups.Select(g => g.Sharp).FirstOrDefault(r => r is not null);
-
-        sb.AppendLine("| w | engine | n | mean | median | P95 | img/s | vs C# | exact_lines | CER | WS loaded | WS last | WS peak | Δ WS |");
-        sb.AppendLine("| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
-        foreach (var (workers, sharp, c) in groups)
-        {
-            AppendVsRow(sb, workers?.ToString(CultureInfo.InvariantCulture), sharp, sharp);
-            AppendVsRow(sb, workers?.ToString(CultureInfo.InvariantCulture), c, sharp);
-        }
-        AppendVsRow(sb, "—", openvino, sharp4);
-        sb.AppendLine();
-    }
-
-    private static void AppendVsRow(StringBuilder sb, string? workers, Run? run, Run? baseline)
-    {
-        if (run is null) return;
-        double? delta = run.WsLast is { } last && run.WsLoaded is { } loaded ? last - loaded : null;
-        string ratio = run.IsSharp
-            ? "1.00"
-            : baseline is not null && baseline.Mean > 0
-                ? (run.Mean / baseline.Mean).ToString("F2", CultureInfo.InvariantCulture)
-                : "—";
-        sb.Append($"| {workers} | {Cell(run.Engine)} | {run.N}");
-        sb.Append($" | {run.Mean:F1} | {run.Median:F1} | {run.P95:F1} | {run.Throughput:F2}");
-        sb.Append($" | {ratio} | {Frac(run.ExactLines, run.TotalLines)} | {Pct(run.Cer)}");
-        sb.Append($" | {Mb(run.WsLoaded)} | {Mb(run.WsLast)} | {Mb(run.WsPeak)} | {Mb(delta)}");
-        sb.AppendLine(" |");
     }
 
     private static void MetricTable(StringBuilder sb, string kind, IEnumerable<string> keys, Dictionary<string, double> values)

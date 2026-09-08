@@ -42,13 +42,10 @@ sealed class Run
     public Dictionary<string, double> Operators { get; init; } = [];
     public Dictionary<string, double> Conv { get; init; } = [];
 
-    public bool IsSharp => Engine is "sharp" or "";
     public bool IsBenchmark => Benchmark;
     public bool IsSmoke => !Benchmark;
     public bool IsSimdBenchmark => IsBenchmark && BenchmarkKind == "simd";
     public bool IsEngineBenchmark => IsBenchmark && BenchmarkKind == "engine";
-    public bool IsC => Engine == "c";
-    public bool IsOpenVino => Engine == "openvino";
 
     public int SimdRank => Simd switch
     {
