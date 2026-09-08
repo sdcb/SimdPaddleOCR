@@ -43,6 +43,29 @@ public class KernelCorrectnessTests
         AssertClose(expected, actual);
     }
 
+    [Theory]
+    [InlineData(5, 32, 40)]
+    [InlineData(4, 64, 1040)]
+    [InlineData(5, 64, 1040)]
+    public void MatMul_VectorMatchesReference(int rows, int inner, int columns)
+    {
+        const int batch = 2;
+        float[] input = Ramp(batch * rows * inner, 0.01f);
+        float[] weights = Ramp(inner * columns, 0.02f);
+        float[]? packed = columns >= 16 ? PackMatMul(weights, inner, columns) : null;
+
+        float[] expected = new float[batch * rows * columns];
+        MatMulRef(input, weights, expected, batch, rows, inner, columns);
+
+        float[] actual = new float[expected.Length];
+        Assert.True(MatMul.Try(input, weights, actual, batch, rows, inner, columns, packed));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+
+        float[] vectorActual = new float[expected.Length];
+        Assert.True(MatMul.TryVector(input, weights, vectorActual, batch, rows, inner, columns, packed));
+        AssertClose(expected, vectorActual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
     [Fact]
     public void ConvTranspose2x2_VectorMatchesReference()
     {
@@ -83,6 +106,30 @@ public class KernelCorrectnessTests
             if (Math.Abs(e - a) > tol)
                 Assert.Fail($"index {i}: expected {e}, actual {a}, tol {tol}");
         }
+    }
+
+    internal static float[] PackMatMul(ReadOnlySpan<float> weights, int inner, int columns)
+    {
+        int fullTiles = columns / 16;
+        float[] packed = new float[fullTiles * inner * 16];
+        for (int tile = 0; tile < fullTiles; tile++)
+            for (int k = 0; k < inner; k++)
+                weights.Slice(k * columns + tile * 16, 16).CopyTo(packed.AsSpan((tile * inner + k) * 16, 16));
+        return packed;
+    }
+
+    internal static void MatMulRef(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+        Span<float> output, int batch, int rows, int inner, int columns)
+    {
+        for (int b = 0; b < batch; b++)
+            for (int row = 0; row < rows; row++)
+                for (int col = 0; col < columns; col++)
+                {
+                    float sum = 0;
+                    for (int k = 0; k < inner; k++)
+                        sum += input[(b * rows + row) * inner + k] * weights[k * columns + col];
+                    output[(b * rows + row) * columns + col] = sum;
+                }
     }
 
     internal static float[] PackConv3x3(ReadOnlySpan<float> weights, int outputChannels, int inputChannels)

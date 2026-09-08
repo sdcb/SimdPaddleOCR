@@ -48,7 +48,7 @@ internal static partial class MatMul
 #endif
         if (Vector.IsHardwareAccelerated)
         {
-            return TryVector(input, weights, output, batch, rows, inner, columns);
+            return TryVector(input, weights, output, batch, rows, inner, columns, packedWeights);
         }
         MatMulScalar(input, weights, output, batch, rows, inner, columns);
         return true;
