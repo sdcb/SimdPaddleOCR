@@ -15,10 +15,6 @@ on:
       - .github/workflows/test.yml
   workflow_dispatch:
 
-concurrency:
-  group: simdpaddleocr-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   unittest:
     runs-on: ubuntu-24.04
@@ -55,7 +51,6 @@ jobs:
           name: ocr-dataset
           path: dataset
           if-no-files-found: error
-          retention-days: 30
 
   smoke-platform:
     needs: generate
@@ -86,7 +81,7 @@ jobs:
       - name: Run platform smoke
         run: >
           dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r ${{ matrix.rid }} --no-self-contained --
-          --smoke --count 3 --engine sharp --workers 4 --model tiny --input dataset
+          --smoke --count 20 --engine sharp --workers 4 --model tiny --input dataset
           --case-id ${{ matrix.name }} --out ${{ matrix.name }}-smoke.json
       - uses: actions/upload-artifact@v7
         if: always()
@@ -94,7 +89,6 @@ jobs:
           name: smoke-platform-${{ matrix.name }}
           path: ${{ matrix.name }}-smoke.json
           if-no-files-found: warn
-          retention-days: 30
 
   smoke-models:
     needs: generate
@@ -112,7 +106,7 @@ jobs:
           set -euo pipefail
           for model in tiny small medium; do
             dotnet run --project test/Sdcb.SimdPaddleOCR.Tests -c Release -r linux-x64 --no-self-contained -- \
-              --smoke --count 3 --engine sharp --workers 4 --model "$model" --input dataset \
+              --smoke --count 20 --engine sharp --workers 4 --model "$model" --input dataset \
               --case-id "$model" --out "model-$model-smoke.json"
           done
       - uses: actions/upload-artifact@v7
@@ -121,7 +115,6 @@ jobs:
           name: smoke-models
           path: model-*-smoke.json
           if-no-files-found: warn
-          retention-days: 30
 
   bench-win-x64-simd:
     needs: generate
@@ -182,7 +175,6 @@ jobs:
           name: bench-win-x64-simd-r${{ matrix.replica }}
           path: win-x64-simd-*.json
           if-no-files-found: warn
-          retention-days: 30
 
   bench-win-x64-engines:
     needs: generate
@@ -234,7 +226,6 @@ jobs:
           name: bench-win-x64-engines-r${{ matrix.replica }}
           path: win-x64-engines-*.json
           if-no-files-found: warn
-          retention-days: 30
 
   bench-linux-arm64:
     needs: generate
@@ -306,7 +297,6 @@ jobs:
           name: bench-linux-arm64-r${{ matrix.replica }}
           path: linux-arm64-*.json
           if-no-files-found: warn
-          retention-days: 30
 
   bench-osx-arm64:
     needs: generate
@@ -364,7 +354,6 @@ jobs:
           name: bench-osx-arm64-r${{ matrix.replica }}
           path: osx-arm64-*.json
           if-no-files-found: warn
-          retention-days: 30
 
   report:
     needs: [smoke-platform, smoke-models, bench-win-x64-simd, bench-win-x64-engines, bench-linux-arm64, bench-osx-arm64]
@@ -397,7 +386,6 @@ jobs:
           name: perf-report
           path: results
           if-no-files-found: error
-          retention-days: 30
       - name: Delete individual result artifacts
         env:
           GH_TOKEN: ${{ github.token }}
