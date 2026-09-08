@@ -145,6 +145,26 @@ public class KernelCorrectnessTests
         AssertClose(expected, vectorActual);
     }
 
+    [Fact]
+    public void Erf_MatchesPolynomialReference()
+    {
+        float[] input =
+        [
+            -5.5f, -4f, -3.25f, -2.1f, -1.75f, -1.01f, -0.75f, -0.1f,
+            0f, 0.25f, 0.99f, 1f, 1.5f, 1.99f, 2f, 2.75f,
+            3.5f, 3.99f, 4f, 6f, -0.33f, 0.8f, 2.2f, 5f,
+            0.5f, 1.5f, 2.5f, 5f, -0.5f, -1.5f, -2.5f, -5f,
+        ];
+        float[] actual = new float[input.Length];
+        SimdKernels.Erf(input, actual);
+
+        float[] poly = new float[input.Length];
+        for (int i = 0; i < input.Length; i++)
+            poly[i] = ErfPolyRef(input[i]);
+
+        AssertClose(poly, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
     internal static float[] Ramp(int length, float scale)
     {
         float[] values = new float[length];
@@ -296,5 +316,54 @@ public class KernelCorrectnessTests
                         }
                 }
             }
+    }
+
+    internal static float ErfPolyRef(float x)
+    {
+        float a = MathF.Abs(x);
+        float result;
+        if (a >= 4f)
+            result = 1f;
+        else if (a < 1f)
+        {
+            float s = a * a;
+            float p = 1.0590875083315439e-6f;
+            p = s * p + -1.3906452410711274e-5f;
+            p = s * p + 1.1955437252428243e-4f;
+            p = s * p + -8.542475960079766e-4f;
+            p = s * p + 5.223771899427153e-3f;
+            p = s * p + -2.686612888828867e-2f;
+            p = s * p + 1.128379122662546e-1f;
+            p = s * p + -3.761263888304388e-1f;
+            p = s * p + 1.1283791670929921f;
+            result = a * p;
+        }
+        else if (a < 2f)
+        {
+            float z = a - 1.5f;
+            float p = -2.400667527836574e-3f;
+            p = z * p + -3.8855162788028288e-3f;
+            p = z * p + 1.9332860298601401e-2f;
+            p = z * p + -1.501360723487143e-2f;
+            p = z * p + -4.4599369472787913e-2f;
+            p = z * p + 1.3876136033191724e-1f;
+            p = z * p + -1.7839541988688759e-1f;
+            p = z * p + 1.1893013063163335e-1f;
+            result = z * p + 9.661051464140682e-1f;
+        }
+        else
+        {
+            float z = a - 3f;
+            float p = -8.875076532056503e-5f;
+            p = z * p + 3.880528563007222e-4f;
+            p = z * p + -7.781201071142843e-4f;
+            p = z * p + 1.0255980996254569e-3f;
+            p = z * p + -1.0307062838910627e-3f;
+            p = z * p + 7.858608012972956e-4f;
+            p = z * p + -4.193605385522123e-4f;
+            p = z * p + 1.3951109720745927e-4f;
+            result = z * p + 9.999779388683872e-1f;
+        }
+        return x < 0f ? -result : result;
     }
 }

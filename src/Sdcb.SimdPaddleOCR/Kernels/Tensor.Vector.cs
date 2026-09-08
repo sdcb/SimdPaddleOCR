@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 #endif
 
@@ -87,6 +88,11 @@ internal static partial class SimdKernels
     private static Vector<float> ErfExactVector(Vector<float> value)
     {
 #if !NETSTANDARD2_0
+        if (AdvSimd.IsSupported && Vector<float>.Count == 4)
+        {
+            Vector128<float> packed = Unsafe.BitCast<Vector<float>, Vector128<float>>(value);
+            return Unsafe.BitCast<Vector128<float>, Vector<float>>(ErfVectorAdvSimd(packed));
+        }
         if (Sse.IsSupported && Vector<float>.Count == 4)
         {
             Vector128<float> packed = Unsafe.BitCast<Vector<float>, Vector128<float>>(value);
@@ -341,6 +347,70 @@ internal static partial class SimdKernels
         p = SseMulAdd(z, p, SseLarge6);
         p = SseMulAdd(z, p, SseLarge7);
         return SseMulAdd(z, p, SseLarge8);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<float> AdvSimdMulAdd(Vector128<float> x, Vector128<float> y, Vector128<float> z) =>
+        AdvSimd.FusedMultiplyAdd(z, x, y);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<float> ErfVectorAdvSimd(Vector128<float> value)
+    {
+        Vector128<float> abs = AdvSimd.And(value, SseAbsMask);
+        Vector128<float> sign = AdvSimd.And(value, SseSignMask);
+        Vector128<float> sq = AdvSimd.Multiply(abs, abs);
+        Vector128<float> small = ErfPolySmallAdvSimd(abs, sq);
+        Vector128<float> middle = ErfPolyMiddleAdvSimd(abs);
+        Vector128<float> large = ErfPolyLargeAdvSimd(abs);
+        Vector128<float> result = AdvSimd.BitwiseSelect(AdvSimd.CompareLessThan(abs, SseTwo), middle, large);
+        result = AdvSimd.BitwiseSelect(AdvSimd.CompareLessThan(abs, SseOne), small, result);
+        result = AdvSimd.BitwiseSelect(AdvSimd.CompareGreaterThanOrEqual(abs, SseFour), SseOne, result);
+        return AdvSimd.Or(result, sign);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<float> ErfPolySmallAdvSimd(Vector128<float> a, Vector128<float> s)
+    {
+        Vector128<float> p = SseSmall0;
+        p = AdvSimdMulAdd(s, p, SseSmall1);
+        p = AdvSimdMulAdd(s, p, SseSmall2);
+        p = AdvSimdMulAdd(s, p, SseSmall3);
+        p = AdvSimdMulAdd(s, p, SseSmall4);
+        p = AdvSimdMulAdd(s, p, SseSmall5);
+        p = AdvSimdMulAdd(s, p, SseSmall6);
+        p = AdvSimdMulAdd(s, p, SseSmall7);
+        p = AdvSimdMulAdd(s, p, SseSmall8);
+        return AdvSimd.Multiply(a, p);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<float> ErfPolyMiddleAdvSimd(Vector128<float> a)
+    {
+        Vector128<float> z = AdvSimd.Subtract(a, SseOnePointFive);
+        Vector128<float> p = SseMiddle0;
+        p = AdvSimdMulAdd(z, p, SseMiddle1);
+        p = AdvSimdMulAdd(z, p, SseMiddle2);
+        p = AdvSimdMulAdd(z, p, SseMiddle3);
+        p = AdvSimdMulAdd(z, p, SseMiddle4);
+        p = AdvSimdMulAdd(z, p, SseMiddle5);
+        p = AdvSimdMulAdd(z, p, SseMiddle6);
+        p = AdvSimdMulAdd(z, p, SseMiddle7);
+        return AdvSimdMulAdd(z, p, SseMiddle8);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector128<float> ErfPolyLargeAdvSimd(Vector128<float> a)
+    {
+        Vector128<float> z = AdvSimd.Subtract(a, SseThree);
+        Vector128<float> p = SseLarge0;
+        p = AdvSimdMulAdd(z, p, SseLarge1);
+        p = AdvSimdMulAdd(z, p, SseLarge2);
+        p = AdvSimdMulAdd(z, p, SseLarge3);
+        p = AdvSimdMulAdd(z, p, SseLarge4);
+        p = AdvSimdMulAdd(z, p, SseLarge5);
+        p = AdvSimdMulAdd(z, p, SseLarge6);
+        p = AdvSimdMulAdd(z, p, SseLarge7);
+        return AdvSimdMulAdd(z, p, SseLarge8);
     }
 #endif
 }

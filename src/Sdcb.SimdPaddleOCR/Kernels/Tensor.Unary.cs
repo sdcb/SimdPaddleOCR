@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Runtime.CompilerServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 #endif
 
@@ -182,6 +183,19 @@ internal static partial class SimdKernels
             {
                 for (; i <= n - 8; i += 8)
                     Avx.Store(outputPtr + i, ErfVector(Avx.LoadVector256(inputPtr + i)));
+            }
+        }
+        else if (AdvSimd.IsSupported)
+        {
+            fixed (float* inputPtr = input, outputPtr = output)
+            {
+                for (; i <= n - 8; i += 8)
+                {
+                    ErfVectorAdvSimd(Vector128.Load(inputPtr + i)).Store(outputPtr + i);
+                    ErfVectorAdvSimd(Vector128.Load(inputPtr + i + 4)).Store(outputPtr + i + 4);
+                }
+                for (; i <= n - 4; i += 4)
+                    ErfVectorAdvSimd(Vector128.Load(inputPtr + i)).Store(outputPtr + i);
             }
         }
         else
