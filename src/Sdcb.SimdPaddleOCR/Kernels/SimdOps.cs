@@ -241,12 +241,34 @@ internal static class SimdOps
         !Vector.EqualsAll(mask, Vector<int>.Zero);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static Vector<float> VectorAddMul(Vector<float> accumulator, Vector<float> value, float weight) =>
-        accumulator + value * new Vector<float>(weight);
+    internal static Vector<float> VectorAddMul(Vector<float> accumulator, Vector<float> value, float weight)
+    {
+#if !NETSTANDARD2_0
+        if (AdvSimd.IsSupported && Vector<float>.Count == 4)
+        {
+            Vector128<float> acc = Unsafe.BitCast<Vector<float>, Vector128<float>>(accumulator);
+            Vector128<float> val = Unsafe.BitCast<Vector<float>, Vector128<float>>(value);
+            return Unsafe.BitCast<Vector128<float>, Vector<float>>(
+                AdvSimd.FusedMultiplyAdd(acc, val, AdvSimd.DuplicateToVector128(weight)));
+        }
+#endif
+        return accumulator + value * new Vector<float>(weight);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static Vector<float> VectorAddMul(Vector<float> accumulator, Vector<float> value, Vector<float> weight) =>
-        accumulator + value * weight;
+    internal static Vector<float> VectorAddMul(Vector<float> accumulator, Vector<float> value, Vector<float> weight)
+    {
+#if !NETSTANDARD2_0
+        if (AdvSimd.IsSupported && Vector<float>.Count == 4)
+        {
+            Vector128<float> acc = Unsafe.BitCast<Vector<float>, Vector128<float>>(accumulator);
+            Vector128<float> val = Unsafe.BitCast<Vector<float>, Vector128<float>>(value);
+            Vector128<float> w = Unsafe.BitCast<Vector<float>, Vector128<float>>(weight);
+            return Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.FusedMultiplyAdd(acc, val, w));
+        }
+#endif
+        return accumulator + value * weight;
+    }
 
     [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     internal static unsafe Vector<float> VectorLoadStride2(float* source) =>

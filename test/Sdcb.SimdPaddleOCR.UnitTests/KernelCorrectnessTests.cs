@@ -43,6 +43,64 @@ public class KernelCorrectnessTests
         AssertClose(expected, actual);
     }
 
+    [Fact]
+    public void Conv1x1_PackedAndOcMajorMatchReference()
+    {
+        const int batch = 1, ic = 6, oc = 16, h = 5, w = 7;
+        int plane = h * w;
+        float[] input = Ramp(batch * ic * plane, 0.03f);
+        float[] weights = Ramp(oc * ic, -0.02f);
+        float[] bias = Ramp(oc, 0.01f);
+        float[] packed4 = PackConv1x1(weights, oc, ic, 4);
+        float[] packed8 = PackConv1x1(weights, oc, ic, 8);
+
+        float[] expected = new float[batch * oc * plane];
+        Conv1x1Ref(input, weights, bias, expected, batch, ic, h, w, oc);
+
+        float[] packed = new float[expected.Length];
+        Assert.True(Conv1x1.TryPacked(input, packed4, bias, packed, batch, ic, h, w, oc, packedOc8: packed8));
+        AssertClose(expected, packed, rtol: 5e-5f, atol: 5e-5f);
+
+        float[] eight = new float[expected.Length];
+        Assert.True(Conv1x1.TryPackedEightVector(input, packed8, bias, eight, batch, ic, h, w, oc, 1));
+        AssertClose(expected, eight, rtol: 5e-5f, atol: 5e-5f);
+
+        float[] packedFour = new float[expected.Length];
+        Assert.True(Conv1x1.TryPackedVector(input, packed4, bias, packedFour, batch, ic, h, w, oc, 1));
+        AssertClose(expected, packedFour, rtol: 5e-5f, atol: 5e-5f);
+
+        float[] unpacked = new float[expected.Length];
+        Assert.True(Conv1x1.Try(input, weights, bias, unpacked, batch, ic, h, w, oc, 1));
+        AssertClose(expected, unpacked, rtol: 5e-5f, atol: 5e-5f);
+
+        float[] vectorUnpacked = new float[expected.Length];
+        Assert.True(Conv1x1.TryVector(input, weights, bias, vectorUnpacked, batch, ic, h, w, oc, 1, 1));
+        AssertClose(expected, vectorUnpacked, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Fact]
+    public void Conv1x1_OcMajorSmallPlaneMatchesReference()
+    {
+        const int batch = 1, ic = 8, oc = 16, h = 4, w = 8; // plane = 32 < 48
+        int plane = h * w;
+        float[] input = Ramp(batch * ic * plane, 0.05f);
+        float[] weights = Ramp(oc * ic, 0.04f);
+        float[] bias = Ramp(oc, -0.02f);
+        float[] packedOc16 = PackConv1x1Oc16(weights, oc, ic);
+
+        float[] expected = new float[batch * oc * plane];
+        Conv1x1Ref(input, weights, bias, expected, batch, ic, h, w, oc);
+
+        float[] actual = new float[expected.Length];
+        Assert.True(Conv1x1.TryOcMajor(input, packedOc16, bias, actual, batch, ic, h, w, oc));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+
+        float[] vectorActual = new float[expected.Length];
+        Conv1x1.Conv1x1OcMajorVector(input, packedOc16, bias, vectorActual, batch, ic, h, w, oc,
+            (oc + 15) & ~15, 0);
+        AssertClose(expected, vectorActual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
     [Theory]
     [InlineData(5, 32, 40)]
     [InlineData(4, 64, 1040)]
@@ -106,6 +164,44 @@ public class KernelCorrectnessTests
             if (Math.Abs(e - a) > tol)
                 Assert.Fail($"index {i}: expected {e}, actual {a}, tol {tol}");
         }
+    }
+
+    internal static float[] PackConv1x1(ReadOnlySpan<float> weights, int outputChannels, int inputChannels, int tile)
+    {
+        float[] packed = new float[outputChannels * inputChannels];
+        int blocks = outputChannels / tile;
+        for (int block = 0; block < blocks; block++)
+            for (int ci = 0; ci < inputChannels; ci++)
+                for (int lane = 0; lane < tile; lane++)
+                    packed[(block * inputChannels + ci) * tile + lane] =
+                        weights[(block * tile + lane) * inputChannels + ci];
+        return packed;
+    }
+
+    internal static float[] PackConv1x1Oc16(ReadOnlySpan<float> weights, int outputChannels, int inputChannels)
+    {
+        int coutPadded = (outputChannels + 15) & ~15;
+        float[] packed = new float[inputChannels * coutPadded];
+        for (int ci = 0; ci < inputChannels; ci++)
+            for (int co = 0; co < outputChannels; co++)
+                packed[ci * coutPadded + co] = weights[co * inputChannels + ci];
+        return packed;
+    }
+
+    internal static void Conv1x1Ref(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+        ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
+        int height, int width, int outputChannels)
+    {
+        int plane = height * width;
+        for (int b = 0; b < batch; b++)
+            for (int co = 0; co < outputChannels; co++)
+                for (int s = 0; s < plane; s++)
+                {
+                    float sum = bias.IsEmpty ? 0f : bias[co];
+                    for (int ci = 0; ci < inputChannels; ci++)
+                        sum += input[(b * inputChannels + ci) * plane + s] * weights[co * inputChannels + ci];
+                    output[(b * outputChannels + co) * plane + s] = sum;
+                }
     }
 
     internal static float[] PackMatMul(ReadOnlySpan<float> weights, int inner, int columns)

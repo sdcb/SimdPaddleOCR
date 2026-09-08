@@ -209,10 +209,7 @@ internal static partial class Conv1x1
         int batch, int inputChannels, int height, int width, int outputChannels,
         int intraOpThreads = 1)
     {
-#if NETSTANDARD2_0
-        return false;
-#else
-        if (!Avx512F.IsSupported || (outputChannels & 15) != 0 || outputChannels < 16)
+        if ((outputChannels & 15) != 0 || outputChannels < 16)
             return false;
         int plane = checked(height * width);
         // Small-plane REC (weight-bandwidth bound): OC-vectorize.
@@ -221,44 +218,56 @@ internal static partial class Conv1x1
         int coutPadded = (outputChannels + 15) & ~15;
         if (packedOc16.Length < checked(inputChannels * coutPadded)) return false;
 
-        if (intraOpThreads > 1 && batch == 1 && outputChannels >= 32 &&
-            (long)outputChannels * inputChannels * plane >= 1_000_000)
+#if !NETSTANDARD2_0
+        if (Avx512F.IsSupported)
         {
-            int ocBlocks = outputChannels / 16;
-            int workers = Math.Min(intraOpThreads, ocBlocks);
-            fixed (float* inputPtr = input, weightsPtr = packedOc16,
-                biasPtr = bias, outputPtr = output)
+            if (intraOpThreads > 1 && batch == 1 && outputChannels >= 32 &&
+                (long)outputChannels * inputChannels * plane >= 1_000_000)
             {
-                nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
-                    biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
-                int inputLength = input.Length, weightsLength = packedOc16.Length,
-                    biasLength = bias.Length, outputLength = output.Length;
-                Parallel.For(0, workers, worker =>
+                int ocBlocks = outputChannels / 16;
+                int workers = Math.Min(intraOpThreads, ocBlocks);
+                fixed (float* inputPtr = input, weightsPtr = packedOc16,
+                    biasPtr = bias, outputPtr = output)
                 {
-                    int beginOc = (ocBlocks * worker / workers) * 16;
-                    int endOc = worker == workers - 1
-                        ? outputChannels
-                        : (ocBlocks * (worker + 1) / workers) * 16;
-                    if (endOc <= beginOc) return;
-                    int shardCout = endOc - beginOc;
-                    ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
-                    // Full weight buffer; kernel indexes by absolute OC via coutPadded.
-                    ReadOnlySpan<float> weightSpan = new((void*)weightsAddress, weightsLength);
-                    ReadOnlySpan<float> biasSpan = biasLength == 0 ? []
-                        : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(beginOc, shardCout);
-                    Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
-                        .Slice(beginOc * plane, shardCout * plane);
-                    Conv1x1OcMajorAvx512Unsafe(inSpan, weightSpan, biasSpan, outSpan, 1,
-                        inputChannels, height, width, shardCout, coutPadded, beginOc);
-                });
+                    nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                        biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                    int inputLength = input.Length, weightsLength = packedOc16.Length,
+                        biasLength = bias.Length, outputLength = output.Length;
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int beginOc = (ocBlocks * worker / workers) * 16;
+                        int endOc = worker == workers - 1
+                            ? outputChannels
+                            : (ocBlocks * (worker + 1) / workers) * 16;
+                        if (endOc <= beginOc) return;
+                        int shardCout = endOc - beginOc;
+                        ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                        // Full weight buffer; kernel indexes by absolute OC via coutPadded.
+                        ReadOnlySpan<float> weightSpan = new((void*)weightsAddress, weightsLength);
+                        ReadOnlySpan<float> biasSpan = biasLength == 0 ? []
+                            : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(beginOc, shardCout);
+                        Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
+                            .Slice(beginOc * plane, shardCout * plane);
+                        Conv1x1OcMajorAvx512Unsafe(inSpan, weightSpan, biasSpan, outSpan, 1,
+                            inputChannels, height, width, shardCout, coutPadded, beginOc);
+                    });
+                }
+                return true;
             }
+
+            Conv1x1OcMajorAvx512Unsafe(input, packedOc16, bias, output, batch,
+                inputChannels, height, width, outputChannels, coutPadded, 0);
             return true;
         }
-
-        Conv1x1OcMajorAvx512Unsafe(input, packedOc16, bias, output, batch,
-            inputChannels, height, width, outputChannels, coutPadded, 0);
-        return true;
 #endif
+
+        if (Vector.IsHardwareAccelerated)
+        {
+            Conv1x1OcMajorVector(input, packedOc16, bias, output, batch,
+                inputChannels, height, width, outputChannels, coutPadded, 0);
+            return true;
+        }
+        return false;
     }
 
     internal static bool FusesResidualInPackedEight(int outputChannels, int inputChannels,
@@ -432,6 +441,12 @@ internal static partial class Conv1x1
         }
         else
 #endif
+        if (Vector.IsHardwareAccelerated && outputChannels >= 8 && (outputChannels & 7) == 0 &&
+            packedOc8.Length == checked(outputChannels * inputChannels))
+        {
+            return TryPackedEightVector(input, packedOc8, bias, output, batch, inputChannels,
+                height, width, outputChannels, intraOpThreads);
+        }
         if (Vector.IsHardwareAccelerated && outputChannels >= 4 && (outputChannels & 3) == 0)
         {
             return TryPackedVector(input, packedWeights, bias, output, batch, inputChannels,
