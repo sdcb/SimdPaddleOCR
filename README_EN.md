@@ -147,6 +147,18 @@ dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
 
 Open the web sample in a browser to upload; the API is `POST /api/ocr` (`multipart/form-data` fields `file`, `model`), docs at `/scalar`.
 
+## FAQ
+
+### Why is OCR recognition much slower while debugging?
+
+The debugger can disable JIT optimization when modules load. This prevents the runtime from optimizing OCR's compute-intensive code, making recognition significantly slower.
+
+Clear this option, then restart the debugging session:
+
+- Visual Studio: `Tools > Options > Debugging > General` > clear `Suppress JIT optimization on module load (Managed only)`.
+- Rider: `Build, Execution, Deployment > Debugger > JIT` > clear `Disable JIT optimization on module load`.
+- VS Code: open `Settings (JSON)` and add `"csharp.debug.suppressJITOptimizations": false`.
+
 ## Support
 
 | | Notes |
