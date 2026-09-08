@@ -147,6 +147,18 @@ dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
 
 Web 示例打开站点即可上传；API 为 `POST /api/ocr`（`multipart/form-data` 字段 `file`、`model`），文档在 `/scalar`。
 
+## 常见问题
+
+### 为什么调试时 OCR 识别特别慢？
+
+调试器可能会在模块加载时取消 JIT 优化，使 OCR 的计算密集型代码无法获得应有的运行时优化，从而导致识别明显变慢。
+
+请关闭该选项，然后重新启动调试会话：
+
+- Visual Studio：`工具 > 选项 > 调试 > 常规`，取消勾选`在模块加载时取消 JIT 优化`。
+- Rider：`构建、执行、部署 > 调试器 > JIT`，取消勾选`在加载模块时禁用 JIT 优化`。
+- VS Code：打开`设置 (JSON)`，添加 `"csharp.debug.suppressJITOptimizations": false`。
+
 ## 支持范围
 
 | | 说明 |
