@@ -176,6 +176,13 @@ internal static partial class Conv3x3Stride2
     {
         if (outputChannels < 8 || (outputChannels & 7) != 0)
             return false;
+#if !NETSTANDARD2_0
+        if (!Avx512F.IsSupported && !Avx.IsSupported && !Vector.IsHardwareAccelerated)
+            return false;
+#else
+        if (!Vector.IsHardwareAccelerated)
+            return false;
+#endif
         int outputPlane = checked(outputHeight * outputWidth);
         int blocks = outputChannels / 8;
         const int weightsPerInput = 9 * 8;
