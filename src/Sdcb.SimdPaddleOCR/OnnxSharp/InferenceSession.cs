@@ -1142,11 +1142,11 @@ public sealed class InferenceSession : IDisposable
     {
         int[] id = x.Shape; int[] wd = w.Shape; int[] od = o.Shape; int group = checked((int)U32(p, 4)), kh = I32(p, 8), kw = I32(p, 12), sh = I32(p, 16), sw = I32(p, 20), dh = I32(p, 24), dw = I32(p, 28), pt = I32(p, 32), pl = I32(p, 36); int n = id[0], cin = id[1], h = id[2], wi = id[3], cout = od[1], oh = od[2], ow = od[3], cpg = cin / group, opg = cout / group;
         ReadOnlySpan<float> biasData = bias is null ? [] : bias.Data;
-        // A packed 3x3 kernel shards by eight-channel blocks.  For the
-        // detector's 16-channel projections that would leave only two tasks
-        // at intra-op=4; use the four-channel sharded kernel instead so all
-        // worker lanes participate.  Keep the packed path for single-thread
-        // execution, wider projections, and Vector256 (unpacked 4-OC is slower).
+        // Packed 3x3 shards by 8-OC, so 16-channel detector projections only
+        // yield two tasks at intra-op=4. Count==4 is AdvSimd: the unpacked
+        // 4-OC kernel uses all four workers and wins. Count!=4 is AVX2 / ns2
+        // Vector256, where packed 8-OC is still faster with two shards —
+        // forcing unpacked here was part of the 9c54d56 win-x64 ns2 regression.
         if (group == 1 && kh == 3 && kw == 3 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
             pt == 1 && pl == 1 && I32(p, 40) == 1 && I32(p, 44) == 1 && intraOpThreads > 1 &&
             Vector<float>.Count == 4 && cout == 16 && intraOpThreads > cout / 8 && oh == h && ow == wi &&
@@ -1208,10 +1208,9 @@ public sealed class InferenceSession : IDisposable
         if (group == 1 && kh == 2 && kw == 2 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
             pt == 0 && pl == 0 && I32(p, 40) == 1 && I32(p, 44) == 1 && oh == h && ow == wi &&
             Stride2.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, cout)) return;
-        // Packed stride-2 shards by eight-channel blocks. Detector 16-channel
-        // projections only yield two tasks at intra-op=4; use the four-channel
-        // sharded kernel so all worker lanes participate, matching stride-1.
-        // Vector256 keeps the packed 8-OC kernel: unpacked 4-OC is slower there.
+        // Same 16-channel worker-count fork as stride-1: unpacked 4-OC only
+        // on AdvSimd (Count==4). Vector256 keeps packed 8-OC — the unpacked
+        // shard was the e2e stride-2 half of the 9c54d56 ns2 regression.
         if (group == 1 && kh == 3 && kw == 3 && sh == 2 && sw == 2 && dh == 1 && dw == 1 &&
             pt == 1 && pl == 1 && I32(p, 40) == 1 && I32(p, 44) == 1 && intraOpThreads > 1 &&
             Vector<float>.Count == 4 && cout == 16 && intraOpThreads > cout / 8 &&

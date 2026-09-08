@@ -122,7 +122,9 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: { replica: [1, 2, 3] }
+      # 6 replicas: Pro concurrency can run these in parallel; more samples
+      # cut runner/ISA noise (7763 vs 9V74, M1 spread).
+      matrix: { replica: [1, 2, 3, 4, 5, 6] }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -182,7 +184,9 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: { replica: [1, 2, 3] }
+      # 6 replicas: Pro concurrency can run these in parallel; more samples
+      # cut runner/ISA noise (7763 vs 9V74, M1 spread).
+      matrix: { replica: [1, 2, 3, 4, 5, 6] }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -233,7 +237,9 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: { replica: [1, 2, 3] }
+      # 6 replicas: Pro concurrency can run these in parallel; more samples
+      # cut runner/ISA noise (7763 vs 9V74, M1 spread).
+      matrix: { replica: [1, 2, 3, 4, 5, 6] }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
@@ -304,7 +310,9 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix: { replica: [1, 2, 3] }
+      # 6 replicas: Pro concurrency can run these in parallel; more samples
+      # cut runner/ISA noise (7763 vs 9V74, M1 spread).
+      matrix: { replica: [1, 2, 3, 4, 5, 6] }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6

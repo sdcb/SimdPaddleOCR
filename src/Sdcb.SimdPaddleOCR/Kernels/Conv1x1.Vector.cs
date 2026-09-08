@@ -549,6 +549,9 @@ internal static partial class Conv1x1
                                 {
                                     Vector<float> valueLow = VectorLoad(inputChannel);
                                     Vector<float> valueHigh = VectorLoad(inputChannel + widthLanes);
+                                    // Packed8 is AdvSimd FMLA-by-element. On ns2 / Vector256
+                                    // the 8-ref helper does not inline in this Eight loop and
+                                    // was the 9c54d56 win-x64 ns2 regression; expand VectorAddMul.
 #if !NETSTANDARD2_0
                                     if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
                                     {
@@ -588,6 +591,7 @@ internal static partial class Conv1x1
                                 for (int ci = 0; ci < inputChannels; ci++)
                                 {
                                     Vector<float> value = VectorLoad(inputChannel);
+                                    // Same Packed8 / VectorAddMul split as the dual tile above.
 #if !NETSTANDARD2_0
                                     if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
                                         VectorAddMulPacked8(ref a0, ref a1, ref a2, ref a3, ref a4, ref a5, ref a6, ref a7, value, w);

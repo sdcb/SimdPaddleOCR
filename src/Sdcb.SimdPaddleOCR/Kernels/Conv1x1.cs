@@ -439,6 +439,10 @@ internal static partial class Conv1x1
         }
         else
 #endif
+            // 16-OC / intra-op>2: AdvSimd (Count==4) skips Eight so Four can
+            // shard 4 ways (Eight only has two 8-OC blocks). Vector256 keeps
+            // Eight — that is the ns2 default; skipping it sent 16-OC through
+            // Four and was part of the 9c54d56 win-x64 ns2 regression.
             if (Vector.IsHardwareAccelerated && outputChannels >= 8 && (outputChannels & 7) == 0 &&
                 packedOc8.Length == checked(outputChannels * inputChannels) &&
                 !(Vector<float>.Count == 4 && outputChannels == 16 && intraOpThreads > outputChannels / 8))

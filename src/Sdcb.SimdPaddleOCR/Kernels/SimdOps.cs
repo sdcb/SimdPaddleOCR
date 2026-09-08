@@ -337,6 +337,8 @@ internal static class SimdOps
             return;
         }
 #endif
+        // Do not hide this behind another 8-ref helper. That generic fallback
+        // failed to inline on ns2 and was the 9c54d56 win-x64 Vector regression.
         a0 = VectorAddMul(a0, value, weights[0]); a1 = VectorAddMul(a1, value, weights[1]);
         a2 = VectorAddMul(a2, value, weights[2]); a3 = VectorAddMul(a3, value, weights[3]);
         a4 = VectorAddMul(a4, value, weights[4]); a5 = VectorAddMul(a5, value, weights[5]);

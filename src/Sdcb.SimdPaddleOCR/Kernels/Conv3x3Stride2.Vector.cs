@@ -555,6 +555,9 @@ internal static partial class Conv3x3Stride2
         int inputPlane = checked(inputHeight * inputWidth), outputPlane = checked(outputHeight * outputWidth);
         const int weightsPerInput = 9 * 8;
         int widthLanes = Vector<float>.Count;
+        // Count!=4 is AVX2 / ns2 Vector256. The AdvSimd tile + Packed8 helpers
+        // below are for Count==4; on Vector256 they spill and lose to the
+        // pre-9c54d56 inlined 8-OC loop.
         if (widthLanes != 4)
         {
             TryPackedVector256(input, packedWeights, bias, output, batch, inputChannels,
@@ -583,9 +586,11 @@ internal static partial class Conv3x3Stride2
                         float* tileRow = batchInput + (oy * 2 - 1) * inputWidth;
                         while (ox < outputWidth)
                         {
-                            // Dual 8-OC tiles hold 16 Vector accumulators. That
-                            // only pays off at Vector.Count==4 (AdvSimd); on
-                            // Vector256 it spills and is slower than one tile.
+                            // Dual 8-OC tiles hold 16 accumulators. That only
+                            // pays off at Count==4 (AdvSimd FMLA + 16 Q regs).
+                            // On Vector256 it spills; this Count==4 path is
+                            // unreachable there (early-out above) but keep the
+                            // gate so a future caller cannot enable it by accident.
                             bool dual = widthLanes == 4 && fullHeight && ox > 0 &&
                                 ox + dualLanes <= outputWidth &&
                                 (ox + dualLanes - 1) * 2 + 1 < inputWidth;
@@ -845,6 +850,8 @@ internal static partial class Conv3x3Stride2
         ref Vector<float> a4, ref Vector<float> a5, ref Vector<float> a6, ref Vector<float> a7,
         float* row0, float* row1, float* row2, float* wc)
     {
+        // Same Packed8 / VectorAddMul split as Conv1x1 Eight: FMLA on AdvSimd,
+        // expanded VectorAddMul otherwise so ns2 does not take the 8-ref helper.
 #if !NETSTANDARD2_0
         if (AdvSimd.Arm64.IsSupported && Vector<float>.Count == 4)
         {
