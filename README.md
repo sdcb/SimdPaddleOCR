@@ -192,15 +192,25 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 
 GitHub-hosted runner、PP-OCRv6 tiny、去掉首张 warmup 后的中位墙钟（2026-09，4 次 CI 合计）：
 
-| 平台 | CPU | ISA | 中位 ms/图 | 同机对比 |
-| --- | --- | --- | ---: | --- |
-| win-x64 | AMD EPYC 7763（4 vCPU） | AVX2 | **238** | 比 [lw.PPOCR.C](https://github.com/lxw112190/lw.PPOCR.C) 快约 26%；与 [OpenVINO.NET](https://github.com/sdcb/OpenVINO.NET) 墙钟接近，工作集约其 1/3 |
-| win-x64 `netstandard2.0` | 同上 | AVX2（`Vector`） | 373 | 约为 net10 AVX2 的 1.56× |
-| linux-arm64 | Neoverse N2 | AdvSimd | **273** | replica 间几乎一条直线 |
+| 平台 | CPU | ISA | 中位 ms/图 | 工作集峰值 | 简评 |
+| --- | --- | --- | ---: | ---: | --- |
+| win-x64 | AMD EPYC 7763（4 vCPU） | AVX2 | **238** | ~790 MB | 默认路径；正确率跨 ISA 不变 |
+| win-x64 `netstandard2.0` | 同上 | AVX2（`Vector`） | 373 | ~785 MB | 约为 net10 AVX2 的 1.56× |
+| linux-arm64 | Neoverse N2 | AdvSimd | **273** | ~847 MB | replica 间几乎一条直线 |
 
-tiny 在 100 张合成图上的行精确匹配为 **757/1022**，CER **3.53%**，跨 Windows / Linux / macOS 与 scalar 路径都相同。
+同机引擎对比（win-x64 / EPYC 7763，tiny 4 worker；与上表不是同一批 VM，只看相对关系）：
 
-完整环境、ISA 阶梯、引擎对比和读数规则见 [`docs/perf.md`](docs/perf.md)。
+| 引擎 | 中位 ms/图 | 工作集峰值 | 行精确 | CER |
+| --- | ---: | ---: | --- | ---: |
+| 本库 | **224** | **~790 MB** | **757/1022** | **3.53%** |
+| [lw.PPOCR.C](https://github.com/lxw112190/lw.PPOCR.C) | 281 | ~586 MB | 759/1022 | 4.18% |
+| [OpenVINO.NET](https://github.com/sdcb/OpenVINO.NET) | 214 | ~2600 MB | 698/1022 | 3.63% |
+
+lw.PPOCR.C 用的是 **2026 年 8 月底**的一份构建，不代表该项目最新版本。
+
+简评：墙钟接近 OpenVINO.NET、比这份 lw.PPOCR.C 快约 26%；工作集约 OpenVINO.NET 的 1/3，比 C 高一截。正确率跨 Windows / Linux / macOS 与 scalar 都是 757/1022、CER 3.53%；CER 好于该份 C，行精确高于 OpenVINO.NET。
+
+完整环境、ISA 阶梯和读数规则见 [`docs/perf.md`](docs/perf.md)。
 
 ## 性能复现
 

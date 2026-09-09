@@ -192,15 +192,25 @@ respective owners. This project is not official and does not imply endorsement.
 
 Median wall time per image on GitHub-hosted runners, PP-OCRv6 tiny, first image excluded as warmup (Sep 2026, four CI runs):
 
-| Platform | CPU | ISA | Median ms/image | Same-machine notes |
-| --- | --- | --- | ---: | --- |
-| win-x64 | AMD EPYC 7763 (4 vCPU) | AVX2 | **238** | About 26% faster than [lw.PPOCR.C](https://github.com/lxw112190/lw.PPOCR.C); wall time close to [OpenVINO.NET](https://github.com/sdcb/OpenVINO.NET) at about one-third the working set |
-| win-x64 `netstandard2.0` | same | AVX2 (`Vector`) | 373 | About 1.56× the net10 AVX2 path |
-| linux-arm64 | Neoverse N2 | AdvSimd | **273** | Very tight replica spread |
+| Platform | CPU | ISA | Median ms/image | WS peak | Notes |
+| --- | --- | --- | ---: | ---: | --- |
+| win-x64 | AMD EPYC 7763 (4 vCPU) | AVX2 | **238** | ~790 MB | Default path; accuracy unchanged across ISAs |
+| win-x64 `netstandard2.0` | same | AVX2 (`Vector`) | 373 | ~785 MB | About 1.56× the net10 AVX2 path |
+| linux-arm64 | Neoverse N2 | AdvSimd | **273** | ~847 MB | Very tight replica spread |
 
-On the 100-image synthetic set, tiny scores **757/1022** exact lines and **3.53%** CER, identical across Windows / Linux / macOS and the scalar path.
+Same-machine engine comparison (win-x64 / EPYC 7763, tiny 4 workers; a different VM pool from the table above — use the ratios, not the absolute 224 vs 238):
 
-Full host/CPU notes, ISA ladder, engine comparison, and how to read the numbers: [`docs/perf.md`](docs/perf.md).
+| Engine | Median ms/image | WS peak | Exact lines | CER |
+| --- | ---: | ---: | --- | ---: |
+| This library | **224** | **~790 MB** | **757/1022** | **3.53%** |
+| [lw.PPOCR.C](https://github.com/lxw112190/lw.PPOCR.C) | 281 | ~586 MB | 759/1022 | 4.18% |
+| [OpenVINO.NET](https://github.com/sdcb/OpenVINO.NET) | 214 | ~2600 MB | 698/1022 | 3.63% |
+
+The lw.PPOCR.C build is a **late-August 2026** snapshot and does not represent that project's latest release.
+
+In short: wall time is close to OpenVINO.NET and about 26% faster than this lw.PPOCR.C snapshot; working set is about one-third of OpenVINO.NET and higher than C. Accuracy is 757/1022 lines and 3.53% CER on Windows / Linux / macOS and the scalar path; CER is better than that C snapshot, exact-line rate is higher than OpenVINO.NET.
+
+Full host/CPU notes, ISA ladder, and how to read the numbers: [`docs/perf.md`](docs/perf.md).
 
 ## Reproducing performance
 
