@@ -188,11 +188,25 @@ Full third-party attribution is in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). PaddleOCR, PP-OCR, and related names belong to their
 respective owners. This project is not official and does not imply endorsement.
 
+## Performance
+
+Median wall time per image on GitHub-hosted runners, PP-OCRv6 tiny, first image excluded as warmup (Sep 2026, four CI runs):
+
+| Platform | CPU | ISA | Median ms/image | Same-machine notes |
+| --- | --- | --- | ---: | --- |
+| win-x64 | AMD EPYC 7763 (4 vCPU) | AVX2 | **238** | About 26% faster than [lw.PPOCR.C](https://github.com/lxw112190/lw.PPOCR.C); wall time close to [OpenVINO.NET](https://github.com/sdcb/OpenVINO.NET) at about one-third the working set |
+| win-x64 `netstandard2.0` | same | AVX2 (`Vector`) | 373 | About 1.56× the net10 AVX2 path |
+| linux-arm64 | Neoverse N2 | AdvSimd | **273** | Very tight replica spread |
+
+On the 100-image synthetic set, tiny scores **757/1022** exact lines and **3.53%** CER, identical across Windows / Linux / macOS and the scalar path.
+
+Full host/CPU notes, ISA ladder, engine comparison, and how to read the numbers: [`docs/perf.md`](docs/perf.md).
+
 ## Reproducing performance
 
 The [GitHub Actions `test` workflow](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml)
 runs unit tests and benches tiny / small / medium on Windows / Linux / macOS across architectures
-(including disabling AVX-512 / AVX2 / AVX / all hardware acceleration, and the `netstandard2.0` build). Summary output goes to the job summary and the `report.md` artifact.
+(including disabling AVX-512 / AVX2 / AVX / all hardware acceleration, and the `netstandard2.0` build). Summary output goes to the job summary and the `perf-report` artifact.
 
 ## WeChat group
 

@@ -188,11 +188,25 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。PaddleOCR、PP-OCR 及相关名称归其
 各自权利人所有，本项目不代表官方，也不构成官方背书。
 
+## 性能
+
+GitHub-hosted runner、PP-OCRv6 tiny、去掉首张 warmup 后的中位墙钟（2026-09，4 次 CI 合计）：
+
+| 平台 | CPU | ISA | 中位 ms/图 | 同机对比 |
+| --- | --- | --- | ---: | --- |
+| win-x64 | AMD EPYC 7763（4 vCPU） | AVX2 | **238** | 比 [lw.PPOCR.C](https://github.com/lxw112190/lw.PPOCR.C) 快约 26%；与 [OpenVINO.NET](https://github.com/sdcb/OpenVINO.NET) 墙钟接近，工作集约其 1/3 |
+| win-x64 `netstandard2.0` | 同上 | AVX2（`Vector`） | 373 | 约为 net10 AVX2 的 1.56× |
+| linux-arm64 | Neoverse N2 | AdvSimd | **273** | replica 间几乎一条直线 |
+
+tiny 在 100 张合成图上的行精确匹配为 **757/1022**，CER **3.53%**，跨 Windows / Linux / macOS 与 scalar 路径都相同。
+
+完整环境、ISA 阶梯、引擎对比和读数规则见 [`docs/perf.md`](docs/perf.md)。
+
 ## 性能复现
 
 [GitHub Actions `test` 工作流](https://github.com/sdcb/SimdPaddleOCR/actions/workflows/test.yml)
 会跑单元测试，并在 Windows / Linux / macOS 多架构上对 tiny / small / medium 做 bench
-（含关闭 AVX-512 / AVX2 / AVX / 全部硬件加速，以及 `netstandard2.0` 库）。汇总报告写入 job summary 与 `report.md` artifact。
+（含关闭 AVX-512 / AVX2 / AVX / 全部硬件加速，以及 `netstandard2.0` 库）。汇总报告写入 job summary 与 `perf-report` artifact。
 
 ## 微信群
 
