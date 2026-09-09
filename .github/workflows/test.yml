@@ -15,6 +15,9 @@ on:
       - .github/workflows/test.yml
   workflow_dispatch:
 
+env:
+  DOTNET_VERSION: "11.0.100-rc.1.26425.128"
+
 jobs:
   unittest:
     runs-on: ubuntu-24.04
@@ -23,8 +26,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
-      - name: Unit tests (net10 library)
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Unit tests (net11 library)
         run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo
       - name: Unit tests (ns2.0 library)
         run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true
@@ -42,7 +45,7 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: steps.dataset.outputs.cache-hit != 'true'
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: ${{ env.DOTNET_VERSION }}
       - name: Generate dataset
         if: steps.dataset.outputs.cache-hit != 'true'
         run: dotnet run --project test/Sdcb.SimdPaddleOCR.TestData -c Release -- --out dataset
@@ -72,10 +75,10 @@ jobs:
       - uses: actions/setup-dotnet@v6
         if: matrix.rid != 'win-x86'
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: ${{ env.DOTNET_VERSION }}
       - uses: actions/setup-dotnet@v6
         if: matrix.rid == 'win-x86'
-        with: { dotnet-version: "10.0.x", architecture: x86 }
+        with: { dotnet-version: ${{ env.DOTNET_VERSION }}, architecture: x86 }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run platform smoke
@@ -97,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
-        with: { dotnet-version: "10.0.x" }
+        with: { dotnet-version: ${{ env.DOTNET_VERSION }} }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run tiny/small/medium smoke
@@ -128,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
-        with: { dotnet-version: "10.0.x" }
+        with: { dotnet-version: ${{ env.DOTNET_VERSION }} }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run Windows x64 benchmark suite
@@ -190,7 +193,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
-        with: { dotnet-version: "10.0.x" }
+        with: { dotnet-version: ${{ env.DOTNET_VERSION }} }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run Windows x64 engine comparison
@@ -243,7 +246,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
-        with: { dotnet-version: "10.0.x" }
+        with: { dotnet-version: ${{ env.DOTNET_VERSION }} }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run ARM64 benchmark suite
@@ -315,7 +318,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
-        with: { dotnet-version: "10.0.x" }
+        with: { dotnet-version: ${{ env.DOTNET_VERSION }} }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run macOS ARM64 worker benchmark
@@ -383,7 +386,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
-        with: { dotnet-version: "10.0.x" }
+        with: { dotnet-version: ${{ env.DOTNET_VERSION }} }
       - uses: actions/download-artifact@v8
         continue-on-error: true
         with:

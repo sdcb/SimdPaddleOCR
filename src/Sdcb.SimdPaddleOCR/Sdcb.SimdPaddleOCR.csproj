@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFrameworks>net10.0;netstandard2.0</TargetFrameworks>
+    <TargetFrameworks>net11.0;netstandard2.0</TargetFrameworks>
     <AssemblyName>Sdcb.SimdPaddleOCR</AssemblyName>
     <RootNamespace>Sdcb.SimdPaddleOCR</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -11,7 +11,7 @@
     <LangVersion>preview</LangVersion>
     <Optimize>true</Optimize>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <IsAotCompatible Condition="'$(TargetFramework)' == 'net10.0'">true</IsAotCompatible>
+    <IsAotCompatible Condition="'$(TargetFramework)' == 'net11.0'">true</IsAotCompatible>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Sdcb.SimdPaddleOCR.ModelProvider\Sdcb.SimdPaddleOCR.ModelProvider.csproj" />
