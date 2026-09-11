@@ -56,7 +56,7 @@ public sealed class PaddleOcrClassifier : IDisposable
         int sourceStride = 0)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrClassifier));
-        if (sourceStride == 0) sourceStride = checked(sourceWidth * PaddleOcrAll.BytesPerPixel);
+        if (sourceStride == 0) sourceStride = checked(sourceWidth * Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel);
         if ((long)sourceWidth * sourceHeight > _options.MaxImagePixels)
             throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
         bool profile = PipelineProfiler.Enabled;

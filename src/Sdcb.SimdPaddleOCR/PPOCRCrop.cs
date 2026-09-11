@@ -21,7 +21,7 @@ internal static class PPOCRCrop
             throw new InvalidDataException("Invalid detection quadrilateral.");
         int width = transform.RotateVertical ? transform.UnrotatedHeight : transform.UnrotatedWidth;
         int height = transform.RotateVertical ? transform.UnrotatedWidth : transform.UnrotatedHeight;
-        long bytes = checked((long)width * height * PaddleOcrAll.BytesPerPixel);
+        long bytes = checked((long)width * height * Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel);
         return (width, height, checked((int)bytes));
     }
 
@@ -82,7 +82,7 @@ internal static class PPOCRCrop
     public static unsafe void Rotate180(Span<byte> pixels, int width, int height)
     {
         int count = checked(width * height);
-        int bpp = PaddleOcrAll.BytesPerPixel;
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         fixed (byte* data = pixels)
         {
             for (int left = 0; left < count / 2; left++)
@@ -155,7 +155,7 @@ internal static class PPOCRCrop
     {
         if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
-        int bpp = PaddleOcrAll.BytesPerPixel;
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         if (stride < checked(width * bpp)) throw new ArgumentException("Source stride is too small.");
         long required = checked((long)(height - 1) * stride + width * (long)bpp);
         if (required > source.Length) throw new ArgumentException("Source buffer is too small.");

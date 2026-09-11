@@ -69,7 +69,7 @@ internal static partial class Warp
         Vector<double> wy = CubicWeightVector(new Vector<double>(y) - tap);
         Vector<double> wx0 = new(wx.GetElement(0)), wx1 = new(wx.GetElement(1));
         Vector<double> wx2 = new(wx.GetElement(2)), wx3 = new(wx.GetElement(3));
-        byte* row = source + (yBase - 1) * stride + (xBase - 1) * PaddleOcrAll.BytesPerPixel;
+        byte* row = source + (yBase - 1) * stride + (xBase - 1) * BytesPerPixel;
         Vector<double> acc = AccumulateRowVector(row, wx0, wx1, wx2, wx3,
             new Vector<double>(wy.GetElement(0)), Vector<double>.Zero);
         acc = AccumulateRowVector(row + stride, wx0, wx1, wx2, wx3, new Vector<double>(wy.GetElement(1)), acc);
@@ -84,11 +84,10 @@ internal static partial class Warp
         Vector<double> wx0, Vector<double> wx1, Vector<double> wx2, Vector<double> wx3,
         Vector<double> wy, Vector<double> acc)
     {
-        int bpp = PaddleOcrAll.BytesPerPixel;
         acc += LoadPixelVector(row) * wx0 * wy;
-        acc += LoadPixelVector(row + bpp) * wx1 * wy;
-        acc += LoadPixelVector(row + 2 * bpp) * wx2 * wy;
-        acc += LoadPixelVector(row + 3 * bpp) * wx3 * wy;
+        acc += LoadPixelVector(row + BytesPerPixel) * wx1 * wy;
+        acc += LoadPixelVector(row + 2 * BytesPerPixel) * wx2 * wy;
+        acc += LoadPixelVector(row + 3 * BytesPerPixel) * wx3 * wy;
         return acc;
     }
 

@@ -6,7 +6,7 @@ using Sdcb.SimdPaddleOCR.OnnxSharp;
 namespace Sdcb.SimdPaddleOCR;
 
 /// <summary>Pure managed DB detector. The caller supplies packed BGR or BGRA
-/// bytes (see <see cref="PaddleOcrAll.BytesPerPixel"/>).</summary>
+/// bytes (see <see cref="Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel"/>).</summary>
 public sealed class PaddleOcrDetector : IDisposable
 {
     private static bool s_profileEnabled;
@@ -102,7 +102,7 @@ public sealed class PaddleOcrDetector : IDisposable
         int sourceStride = 0)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrDetector));
-        int bpp = PaddleOcrAll.BytesPerPixel;
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         if (sourceStride == 0) sourceStride = checked(sourceWidth * bpp);
         int originalWidth = sourceWidth, originalHeight = sourceHeight;
         if ((long)sourceWidth * sourceHeight > _options.MaxImagePixels)

@@ -191,7 +191,7 @@ internal static class PPOCRPreprocess
         int sourceY, int destinationWidth, int[] offsets, short[] coefficients, int[] destination)
     {
         byte* row = source + sourceY * sourceStride;
-        int sourceBpp = PaddleOcrAll.BytesPerPixel;
+        int sourceBpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         for (int x = 0; x < destinationWidth; x++)
         {
             int sx = offsets[x], sx1 = Math.Min(sx + 1, sourceWidth - 1);
@@ -382,7 +382,7 @@ internal static class PPOCRPreprocess
         int resizedHeight, int outputWidth, Span<float> output)
     {
         int plane = checked(resizedHeight * outputWidth);
-        int bpp = PaddleOcrAll.BytesPerPixel;
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         fixed (byte* sourcePtr = resized)
         fixed (float* outputPtr = output)
         {
@@ -409,7 +409,7 @@ internal static class PPOCRPreprocess
         int sourceHeight, int sourceStride, int destinationWidth, int destinationHeight,
         Span<byte> destination)
     {
-        int bpp = PaddleOcrAll.BytesPerPixel;
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         int required = checked(destinationWidth * destinationHeight * bpp);
         if (destination.Length < required) throw new ArgumentException("Destination buffer is too small.");
         int[] xOffsets = PooledArrays.Rent<int>(destinationWidth);
@@ -466,7 +466,7 @@ internal static class PPOCRPreprocess
     {
         if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
-        int bpp = PaddleOcrAll.BytesPerPixel;
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         if (stride < checked(width * bpp)) throw new ArgumentException("Source stride is too small.");
         long required = checked((long)(height - 1) * stride + width * (long)bpp);
         if (required > source.Length) throw new ArgumentException("Source buffer is too small.");

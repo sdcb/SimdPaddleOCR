@@ -7,7 +7,7 @@ using Sdcb.SimdPaddleOCR.Kernels;
 namespace Sdcb.SimdPaddleOCR;
 
 /// <summary>Pure managed PP-OCR CTC recognizer accepting BGR or BGRA crop
-/// memory (see <see cref="PaddleOcrAll.BytesPerPixel"/>).</summary>
+/// memory (see <see cref="Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel"/>).</summary>
 public sealed class PaddleOcrRecognizer : IDisposable
 {
     private readonly Model _model;
@@ -128,7 +128,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
         int sourceStride = 0)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
-        if (sourceStride == 0) sourceStride = checked(sourceWidth * PaddleOcrAll.BytesPerPixel);
+        if (sourceStride == 0) sourceStride = checked(sourceWidth * Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel);
         if ((long)sourceWidth * sourceHeight > _options.MaxImagePixels)
             throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
         bool profile = PipelineProfiler.Enabled;
@@ -263,7 +263,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
                     throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
                 resizedWidths[k] = PPOCRPreprocess.RecBgrToNchw(
                     cropBuffer.AsSpan(offsets[line], cropBytes[line]), sourceWidth, sourceHeight,
-                    checked(sourceWidth * PaddleOcrAll.BytesPerPixel), targetWidth,
+                    checked(sourceWidth * Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel), targetWidth,
                     input.Slice(k * sampleLength, sampleLength), session.ResizeWorkspace);
             }
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecPreprocess, started);

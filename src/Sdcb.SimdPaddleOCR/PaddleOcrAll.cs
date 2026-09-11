@@ -23,7 +23,6 @@ public sealed class PaddleOcrAll : IDisposable
 {
     private static bool s_profileEnabled;
     private static readonly long[] s_profileTicks = new long[6];
-    private static int bytesPerPixel = 3;
 
     /// <summary>
     /// Bytes per source pixel supplied to <see cref="Run"/> and to the
@@ -39,8 +38,8 @@ public sealed class PaddleOcrAll : IDisposable
     /// <exception cref="ArgumentOutOfRangeException">Value must be 3 or 4.</exception>
     public static int BytesPerPixel
     {
-        get => bytesPerPixel;
-        set => bytesPerPixel = value is 3 or 4
+        get => Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
+        set => Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel = value is 3 or 4
             ? value
             : throw new ArgumentOutOfRangeException(nameof(value), "BytesPerPixel must be 3 or 4.");
     }
@@ -156,7 +155,7 @@ public sealed class PaddleOcrAll : IDisposable
         int sourceStride = 0)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrAll));
-        if (sourceStride == 0) sourceStride = checked(sourceWidth * BytesPerPixel);
+        if (sourceStride == 0) sourceStride = checked(sourceWidth * Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel);
         long stageStart = s_profileEnabled ? Stopwatch.GetTimestamp() : 0;
         PaddleOcrDetectionResult detection = _detector.Detect(source, sourceWidth, sourceHeight, sourceStride);
         if (s_profileEnabled) AddProfile(0, stageStart);
