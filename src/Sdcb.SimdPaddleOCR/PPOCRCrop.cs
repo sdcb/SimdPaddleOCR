@@ -21,7 +21,7 @@ internal static class PPOCRCrop
             throw new InvalidDataException("Invalid detection quadrilateral.");
         int width = transform.RotateVertical ? transform.UnrotatedHeight : transform.UnrotatedWidth;
         int height = transform.RotateVertical ? transform.UnrotatedWidth : transform.UnrotatedHeight;
-        long bytes = checked((long)width * height * 3);
+        long bytes = checked((long)width * height * Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel);
         return (width, height, checked((int)bytes));
     }
 
@@ -82,15 +82,17 @@ internal static class PPOCRCrop
     public static unsafe void Rotate180(Span<byte> pixels, int width, int height)
     {
         int count = checked(width * height);
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
         fixed (byte* data = pixels)
         {
             for (int left = 0; left < count / 2; left++)
             {
                 int right = count - 1 - left;
-                byte* l = data + left * 3, r = data + right * 3;
-                byte value = l[0]; l[0] = r[0]; r[0] = value;
-                value = l[1]; l[1] = r[1]; r[1] = value;
-                value = l[2]; l[2] = r[2]; r[2] = value;
+                byte* l = data + left * bpp, r = data + right * bpp;
+                for (int i = 0; i < bpp; i++)
+                {
+                    byte value = l[i]; l[i] = r[i]; r[i] = value;
+                }
             }
         }
     }
@@ -153,8 +155,9 @@ internal static class PPOCRCrop
     {
         if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
-        if (stride < checked(width * 3)) throw new ArgumentException("Source stride is too small.");
-        long required = checked((long)(height - 1) * stride + width * 3L);
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
+        if (stride < checked(width * bpp)) throw new ArgumentException("Source stride is too small.");
+        long required = checked((long)(height - 1) * stride + width * (long)bpp);
         if (required > source.Length) throw new ArgumentException("Source buffer is too small.");
     }
 }

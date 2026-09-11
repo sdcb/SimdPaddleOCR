@@ -1,3 +1,4 @@
+using Sdcb.SimdPaddleOCR;
 using System;
 using System.Diagnostics;
 using System.Drawing;
@@ -7,7 +8,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using Sdcb.SimdPaddleOCR;
+using System.Xml.Linq;
 
 namespace SystemDrawing.WinForms;
 
@@ -70,6 +71,10 @@ internal sealed class MainForm : Form
         AddPathRow(2, "CLS 模型", _clsPath, "模型|*.onnx|所有文件|*.*", false);
         AddPathRow(3, "REC 模型", _recPath, "模型|*.onnx|所有文件|*.*", false);
         AddPathRow(4, "字典", _dictPath, "字典|*.txt|所有文件|*.*", false);
+
+        CheckBox bppCheckBox = new() { Text = "颜色通道数(默认选中为3通道BGR, 不选为4通道BGRA)", Checked = true, Size = new Size(400, 30), Anchor = AnchorStyles.Left, Margin = new Padding(0, 7, 6, 4) };
+        bppCheckBox.CheckedChanged += (_, _) => PaddleOcrAll.BytesPerPixel = bppCheckBox.Checked ? 3 : 4;
+        _paths.Controls.Add(bppCheckBox, 1, 5);
 
         TableLayoutPanel root = new() { Dock = DockStyle.Fill, Padding = new Padding(12), RowCount = 3, ColumnCount = 1 };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize)); root.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -145,15 +150,33 @@ internal sealed class MainForm : Form
         finally { _run.Enabled = _ocr is not null; _paths.Enabled = true; }
     }
 
-    private OcrResult RunPipeline(string imagePath)
+    unsafe private OcrResult RunPipeline(string imagePath)
     {
+        //改用直接访问内存，提升性能
         using Bitmap bitmap = new(imagePath);
-        byte[] bgr = ToBgr(bitmap, out int stride); PaddleOcrResult result = _ocr!.Run(bgr, bitmap.Width, bitmap.Height, stride); Bitmap annotated = new(bitmap);
-        using Graphics graphics = Graphics.FromImage(annotated); using Pen pen = new(Color.LimeGreen, 3); using Brush brush = new SolidBrush(Color.Red);
+        var w = bitmap.Width;
+        var h = bitmap.Height;
+        var stride = w * PaddleOcrAll.BytesPerPixel;
+        var data = bitmap.LockBits(
+            new Rectangle(0, 0, w, h),
+            ImageLockMode.ReadOnly,
+            PaddleOcrAll.BytesPerPixel == 4 ? PixelFormat.Format32bppArgb : PixelFormat.Format24bppRgb);
+        PaddleOcrResult result = _ocr!.Run(new ReadOnlySpan<byte>((void*)data.Scan0, stride * h), w, h, stride);
+        bitmap.UnlockBits(data);
+
+        Bitmap annotated = new(bitmap);
+        using Graphics graphics = Graphics.FromImage(annotated);
+        using Pen pen = new(Color.LimeGreen, 3);
+        using Brush brush = new SolidBrush(Color.Red);
         foreach (PaddleOcrLine line in result.Lines)
         {
-            Point[] points = [new((int)line.Box.X1, (int)line.Box.Y1), new((int)line.Box.X2, (int)line.Box.Y2), new((int)line.Box.X3, (int)line.Box.Y3), new((int)line.Box.X4, (int)line.Box.Y4)];
-            graphics.DrawPolygon(pen, points); graphics.DrawString(line.Text, Font, brush, points[0]);
+            Point[] points = [
+                new((int)line.Box.X1,(int)line.Box.Y1),
+                new((int)line.Box.X2, (int)line.Box.Y2),
+                new((int)line.Box.X3, (int)line.Box.Y3),
+                new((int)line.Box.X4, (int)line.Box.Y4)];
+            graphics.DrawPolygon(pen, points);
+            //graphics.DrawString(line.Text, Font, brush, points[0]);
         }
         return new OcrResult(string.Join(Environment.NewLine, result.Lines.Select(line => line.Text)), result.DetectedCount, annotated);
     }
@@ -162,10 +185,19 @@ internal sealed class MainForm : Form
 
     private static byte[] ToBgr(Bitmap bitmap, out int stride)
     {
-        stride = checked(bitmap.Width * 3); byte[] bgr = new byte[checked(stride * bitmap.Height)]; Rectangle rectangle = new(0, 0, bitmap.Width, bitmap.Height);
+        stride = checked(bitmap.Width * 3);
+        byte[] bgr = new byte[checked(stride * bitmap.Height)];
+        Rectangle rectangle = new(0, 0, bitmap.Width, bitmap.Height);
         BitmapData data = bitmap.LockBits(rectangle, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-        try { for (int y = 0; y < bitmap.Height; y++) Marshal.Copy(new IntPtr(data.Scan0.ToInt64() + y * (long)data.Stride), bgr, y * stride, stride); }
-        finally { bitmap.UnlockBits(data); }
+        try
+        {
+            for (int y = 0; y < bitmap.Height; y++)
+                Marshal.Copy(new IntPtr(data.Scan0.ToInt64() + y * (long)data.Stride), bgr, y * stride, stride);
+        }
+        finally
+        {
+            bitmap.UnlockBits(data);
+        }
         return bgr;
     }
 
@@ -201,6 +233,8 @@ internal sealed class MainForm : Form
     private sealed class OcrResult
     {
         public OcrResult(string text, int count, Bitmap annotated) { Text = text; Count = count; Annotated = annotated; }
-        public string Text { get; } public int Count { get; } public Bitmap Annotated { get; }
+        public string Text { get; }
+        public int Count { get; }
+        public Bitmap Annotated { get; }
     }
 }

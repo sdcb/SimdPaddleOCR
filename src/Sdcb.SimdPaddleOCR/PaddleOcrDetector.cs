@@ -5,7 +5,8 @@ using Sdcb.SimdPaddleOCR.OnnxSharp;
 
 namespace Sdcb.SimdPaddleOCR;
 
-/// <summary>Pure managed DB detector. The caller supplies packed BGR bytes.</summary>
+/// <summary>Pure managed DB detector. The caller supplies packed BGR or BGRA
+/// bytes (see <see cref="Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel"/>).</summary>
 public sealed class PaddleOcrDetector : IDisposable
 {
     private static bool s_profileEnabled;
@@ -101,7 +102,8 @@ public sealed class PaddleOcrDetector : IDisposable
         int sourceStride = 0)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrDetector));
-        if (sourceStride == 0) sourceStride = checked(sourceWidth * 3);
+        int bpp = Sdcb.SimdPaddleOCR.Kernels.Warp.BytesPerPixel;
+        if (sourceStride == 0) sourceStride = checked(sourceWidth * bpp);
         int originalWidth = sourceWidth, originalHeight = sourceHeight;
         if ((long)sourceWidth * sourceHeight > _options.MaxImagePixels)
             throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
@@ -111,18 +113,18 @@ public sealed class PaddleOcrDetector : IDisposable
         {
             int paddedWidth = Math.Max(32, sourceWidth);
             int paddedHeight = Math.Max(32, sourceHeight);
-            paddedSource = PooledArrays.Rent<byte>(checked(paddedWidth * paddedHeight * 3));
-            Span<byte> padded = paddedSource.AsSpan(0, checked(paddedWidth * paddedHeight * 3));
+            paddedSource = PooledArrays.Rent<byte>(checked(paddedWidth * paddedHeight * bpp));
+            Span<byte> padded = paddedSource.AsSpan(0, checked(paddedWidth * paddedHeight * bpp));
             padded.Clear();
             for (int y = 0; y < sourceHeight; y++)
             {
-                source.Slice(y * sourceStride, checked(sourceWidth * 3))
-                    .CopyTo(padded.Slice(y * paddedWidth * 3, checked(sourceWidth * 3)));
+                source.Slice(y * sourceStride, checked(sourceWidth * bpp))
+                    .CopyTo(padded.Slice(y * paddedWidth * bpp, checked(sourceWidth * bpp)));
             }
             source = padded;
             sourceWidth = paddedWidth;
             sourceHeight = paddedHeight;
-            sourceStride = checked(paddedWidth * 3);
+            sourceStride = checked(paddedWidth * bpp);
         }
 
         try

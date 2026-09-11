@@ -34,7 +34,7 @@ internal static partial class Warp
             throw new InvalidDataException("Invalid perspective transform.");
         int destinationX = rotateVertical ? unrotatedHeight - 1 - y : x;
         int destinationY = rotateVertical ? x : y;
-        int destination = checked((destinationY * outputWidth + destinationX) * 3);
+        int destination = checked((destinationY * outputWidth + destinationX) * BytesPerPixel);
         SampleCubicScalar(sourcePtr, sourceWidth, sourceHeight, sourceStride,
             sx, sy, cropPtr, destination);
     }
@@ -64,8 +64,8 @@ internal static partial class Warp
             for (int ky = 0; ky < 4; ky++)
             {
                 double wy = yWeights[ky];
-                int sourceOffset = (yBase + ky - 1) * stride + (xBase - 1) * 3;
-                for (int kx = 0; kx < 4; kx++, sourceOffset += 3)
+                int sourceOffset = (yBase + ky - 1) * stride + (xBase - 1) * BytesPerPixel;
+                for (int kx = 0; kx < 4; kx++, sourceOffset += BytesPerPixel)
                 {
                     double wx = xWeights[kx];
                     value0 += source[sourceOffset] * wx * wy;
@@ -84,7 +84,7 @@ internal static partial class Warp
                 {
                     double wx = xWeights[kx];
                     int sx = Clamp(xBase + kx - 1, width);
-                    int sourceOffset = sy * stride + sx * 3;
+                    int sourceOffset = sy * stride + sx * BytesPerPixel;
                     value0 += source[sourceOffset] * wx * wy;
                     value1 += source[sourceOffset + 1] * wx * wy;
                     value2 += source[sourceOffset + 2] * wx * wy;
