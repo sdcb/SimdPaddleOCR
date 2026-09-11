@@ -9,8 +9,9 @@ using Sdcb.SimdPaddleOCR.ModelProvider;
 namespace Sdcb.SimdPaddleOCR;
 
 /// <summary>
-/// Complete pure managed PP-OCR pipeline. It accepts packed BGR8 memory and
-/// deliberately has no image-decoding or file-system dependency.
+/// Complete pure managed PP-OCR pipeline. It accepts packed BGR or BGRA memory
+/// (see <see cref="BytesPerPixel"/>) and deliberately has no image-decoding or
+/// file-system dependency.
 /// <para>
 /// Thread-safe: the detector, classifier and recognizer each hold one shared
 /// compiled model and pool per-call inference requests, while every run rents
@@ -22,6 +23,27 @@ public sealed class PaddleOcrAll : IDisposable
 {
     private static bool s_profileEnabled;
     private static readonly long[] s_profileTicks = new long[6];
+    private static int bytesPerPixel = 3;
+
+    /// <summary>
+    /// Bytes per source pixel supplied to <see cref="Run"/> and to the
+    /// detector/classifier/recognizer entry points. Set to <c>3</c> for packed
+    /// BGR memory (default) or <c>4</c> for packed BGRA memory. The alpha
+    /// channel is ignored throughout the pipeline; choosing <c>4</c> lets
+    /// callers hand off BGRA memory directly without an external pack step.
+    /// <para>
+    /// Configure once at startup. Mutating this property while concurrent
+    /// <see cref="Run"/> calls are in flight is not advised.
+    /// </para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Value must be 3 or 4.</exception>
+    public static int BytesPerPixel
+    {
+        get => bytesPerPixel;
+        set => bytesPerPixel = value is 3 or 4
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), "BytesPerPixel must be 3 or 4.");
+    }
     private readonly PaddleOcrDetector _detector;
     private readonly PaddleOcrClassifier? _classifier;
     private readonly PaddleOcrRecognizer _recognizer;
@@ -134,7 +156,7 @@ public sealed class PaddleOcrAll : IDisposable
         int sourceStride = 0)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrAll));
-        if (sourceStride == 0) sourceStride = checked(sourceWidth * 3);
+        if (sourceStride == 0) sourceStride = checked(sourceWidth * BytesPerPixel);
         long stageStart = s_profileEnabled ? Stopwatch.GetTimestamp() : 0;
         PaddleOcrDetectionResult detection = _detector.Detect(source, sourceWidth, sourceHeight, sourceStride);
         if (s_profileEnabled) AddProfile(0, stageStart);

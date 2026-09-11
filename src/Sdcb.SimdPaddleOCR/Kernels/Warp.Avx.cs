@@ -69,7 +69,7 @@ internal static partial class Warp
         Vector256<double> wy = CubicWeightVectorAvx(ty);
         Vector256<double> wx0 = Avx2.Permute4x64(wx, 0x00), wx1 = Avx2.Permute4x64(wx, 0x55);
         Vector256<double> wx2 = Avx2.Permute4x64(wx, 0xAA), wx3 = Avx2.Permute4x64(wx, 0xFF);
-        byte* row = source + (yBase - 1) * stride + (xBase - 1) * 3;
+        byte* row = source + (yBase - 1) * stride + (xBase - 1) * PaddleOcrAll.BytesPerPixel;
         Vector256<double> acc = AccumulateRowAvx(row, wx0, wx1, wx2, wx3,
             Avx2.Permute4x64(wy, 0x00), Vector256<double>.Zero);
         acc = AccumulateRowAvx(row + stride, wx0, wx1, wx2, wx3, Avx2.Permute4x64(wy, 0x55), acc);
@@ -84,10 +84,11 @@ internal static partial class Warp
         Vector256<double> wx0, Vector256<double> wx1, Vector256<double> wx2, Vector256<double> wx3,
         Vector256<double> wy, Vector256<double> acc)
     {
+        int bpp = PaddleOcrAll.BytesPerPixel;
         acc = Avx.Add(acc, Avx.Multiply(Avx.Multiply(LoadPixelAvx(row), wx0), wy));
-        acc = Avx.Add(acc, Avx.Multiply(Avx.Multiply(LoadPixelAvx(row + 3), wx1), wy));
-        acc = Avx.Add(acc, Avx.Multiply(Avx.Multiply(LoadPixelAvx(row + 6), wx2), wy));
-        acc = Avx.Add(acc, Avx.Multiply(Avx.Multiply(LoadPixelAvx(row + 9), wx3), wy));
+        acc = Avx.Add(acc, Avx.Multiply(Avx.Multiply(LoadPixelAvx(row + bpp), wx1), wy));
+        acc = Avx.Add(acc, Avx.Multiply(Avx.Multiply(LoadPixelAvx(row + 2 * bpp), wx2), wy));
+        acc = Avx.Add(acc, Avx.Multiply(Avx.Multiply(LoadPixelAvx(row + 3 * bpp), wx3), wy));
         return acc;
     }
 

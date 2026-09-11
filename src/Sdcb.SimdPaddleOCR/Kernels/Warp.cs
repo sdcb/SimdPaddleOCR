@@ -65,7 +65,7 @@ internal static partial class Warp
     {
         int destinationX = rotateVertical ? unrotatedHeight - 1 - y : x;
         int destinationY = rotateVertical ? x : y;
-        int destination = checked((destinationY * outputWidth + destinationX) * 3);
+        int destination = checked((destinationY * outputWidth + destinationX) * PaddleOcrAll.BytesPerPixel);
         SampleCubic(sourcePtr, sourceWidth, sourceHeight, sourceStride,
             pixelX, pixelY, cropPtr, destination);
     }

@@ -191,11 +191,15 @@ internal static class PPOCRPreprocess
         int sourceY, int destinationWidth, int[] offsets, short[] coefficients, int[] destination)
     {
         byte* row = source + sourceY * sourceStride;
+        int sourceBpp = PaddleOcrAll.BytesPerPixel;
         for (int x = 0; x < destinationWidth; x++)
         {
             int sx = offsets[x], sx1 = Math.Min(sx + 1, sourceWidth - 1);
             short coefficient0 = coefficients[x * 2], coefficient1 = coefficients[x * 2 + 1];
-            int sourceOffset = sx * 3, sourceOffset1 = sx1 * 3, destinationOffset = x * 3;
+            // Source pixels are BGR (3) or BGRA (4) bytes; the intermediate
+            // horizontal row buffer always carries 3 channels per pixel so
+            // downstream NCHW packing stays 3-plane regardless of input.
+            int sourceOffset = sx * sourceBpp, sourceOffset1 = sx1 * sourceBpp, destinationOffset = x * 3;
             destination[destinationOffset] = row[sourceOffset] * coefficient0 + row[sourceOffset1] * coefficient1;
             destination[destinationOffset + 1] = row[sourceOffset + 1] * coefficient0 + row[sourceOffset1 + 1] * coefficient1;
             destination[destinationOffset + 2] = row[sourceOffset + 2] * coefficient0 + row[sourceOffset1 + 2] * coefficient1;
@@ -378,6 +382,7 @@ internal static class PPOCRPreprocess
         int resizedHeight, int outputWidth, Span<float> output)
     {
         int plane = checked(resizedHeight * outputWidth);
+        int bpp = PaddleOcrAll.BytesPerPixel;
         fixed (byte* sourcePtr = resized)
         fixed (float* outputPtr = output)
         {
@@ -385,7 +390,7 @@ internal static class PPOCRPreprocess
             {
                 for (int ox = 0; ox < resizedWidth; ox++)
                 {
-                    int sourceOffset = (oy * resizedWidth + ox) * 3;
+                    int sourceOffset = (oy * resizedWidth + ox) * bpp;
                     int destination = oy * outputWidth + ox;
                     outputPtr[destination] = RecNormalized[sourcePtr[sourceOffset]];
                     outputPtr[plane + destination] = RecNormalized[sourcePtr[sourceOffset + 1]];
@@ -404,10 +409,13 @@ internal static class PPOCRPreprocess
         int sourceHeight, int sourceStride, int destinationWidth, int destinationHeight,
         Span<byte> destination)
     {
-        int required = checked(destinationWidth * destinationHeight * 3);
+        int bpp = PaddleOcrAll.BytesPerPixel;
+        int required = checked(destinationWidth * destinationHeight * bpp);
         if (destination.Length < required) throw new ArgumentException("Destination buffer is too small.");
         int[] xOffsets = PooledArrays.Rent<int>(destinationWidth);
         short[] xCoefficients = PooledArrays.Rent<short>(checked(destinationWidth * 2));
+        // Intermediate horizontal rows always carry 3 channels per pixel so
+        // downstream NCHW packing stays 3-plane regardless of source bpp.
         int[] row0 = PooledArrays.Rent<int>(checked(destinationWidth * 3));
         int[] row1 = PooledArrays.Rent<int>(checked(destinationWidth * 3));
         try
@@ -427,11 +435,11 @@ internal static class PPOCRPreprocess
                     BuildHorizontalRow(sourcePtr, sourceStride, sourceWidth, sy1,
                         destinationWidth,
                         xOffsets, xCoefficients, row1);
-                    int destinationOffset = oy * destinationWidth * 3;
+                    int destinationOffset = oy * destinationWidth * bpp;
                     for (int ox = 0; ox < destinationWidth; ox++)
                     {
                         int rowOffset = ox * 3;
-                        int pixelOffset = destinationOffset + rowOffset;
+                        int pixelOffset = destinationOffset + ox * bpp;
                         int h0 = row0[rowOffset], h1 = row1[rowOffset];
                         int value = (((h0 >> 4) * beta0 >> 16) + ((h1 >> 4) * beta1 >> 16) + 2) >> 2;
                         destinationPtr[pixelOffset] = (byte)MathCompat.Clamp(value, 0, 255);
@@ -458,8 +466,9 @@ internal static class PPOCRPreprocess
     {
         if (width <= 0) throw new ArgumentOutOfRangeException(nameof(width));
         if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
-        if (stride < checked(width * 3)) throw new ArgumentException("Source stride is too small.");
-        long required = checked((long)(height - 1) * stride + width * 3L);
+        int bpp = PaddleOcrAll.BytesPerPixel;
+        if (stride < checked(width * bpp)) throw new ArgumentException("Source stride is too small.");
+        long required = checked((long)(height - 1) * stride + width * (long)bpp);
         if (required > source.Length) throw new ArgumentException("Source buffer is too small.");
     }
 

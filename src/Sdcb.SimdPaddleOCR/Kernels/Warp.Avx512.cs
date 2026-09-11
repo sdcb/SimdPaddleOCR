@@ -74,7 +74,7 @@ internal static partial class Warp
         Vector512<double> wx1 = Vector512.Create(wx.GetElement(1));
         Vector512<double> wx2 = Vector512.Create(wx.GetElement(2));
         Vector512<double> wx3 = Vector512.Create(wx.GetElement(3));
-        byte* row = source + (yBase - 1) * stride + (xBase - 1) * 3;
+        byte* row = source + (yBase - 1) * stride + (xBase - 1) * PaddleOcrAll.BytesPerPixel;
         Vector512<double> acc = AccumulateRowAvx512(row, wx0, wx1, wx2, wx3,
             Vector512.Create(wy.GetElement(0)), Vector512<double>.Zero);
         acc = AccumulateRowAvx512(row + stride, wx0, wx1, wx2, wx3, Vector512.Create(wy.GetElement(1)), acc);
@@ -89,10 +89,11 @@ internal static partial class Warp
         Vector512<double> wx0, Vector512<double> wx1, Vector512<double> wx2, Vector512<double> wx3,
         Vector512<double> wy, Vector512<double> acc)
     {
+        int bpp = PaddleOcrAll.BytesPerPixel;
         acc = Avx512F.Add(acc, Avx512F.Multiply(Avx512F.Multiply(LoadPixelAvx512(row), wx0), wy));
-        acc = Avx512F.Add(acc, Avx512F.Multiply(Avx512F.Multiply(LoadPixelAvx512(row + 3), wx1), wy));
-        acc = Avx512F.Add(acc, Avx512F.Multiply(Avx512F.Multiply(LoadPixelAvx512(row + 6), wx2), wy));
-        acc = Avx512F.Add(acc, Avx512F.Multiply(Avx512F.Multiply(LoadPixelAvx512(row + 9), wx3), wy));
+        acc = Avx512F.Add(acc, Avx512F.Multiply(Avx512F.Multiply(LoadPixelAvx512(row + bpp), wx1), wy));
+        acc = Avx512F.Add(acc, Avx512F.Multiply(Avx512F.Multiply(LoadPixelAvx512(row + 2 * bpp), wx2), wy));
+        acc = Avx512F.Add(acc, Avx512F.Multiply(Avx512F.Multiply(LoadPixelAvx512(row + 3 * bpp), wx3), wy));
         return acc;
     }
 

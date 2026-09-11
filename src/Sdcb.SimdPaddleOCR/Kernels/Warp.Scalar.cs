@@ -34,7 +34,7 @@ internal static partial class Warp
             throw new InvalidDataException("Invalid perspective transform.");
         int destinationX = rotateVertical ? unrotatedHeight - 1 - y : x;
         int destinationY = rotateVertical ? x : y;
-        int destination = checked((destinationY * outputWidth + destinationX) * 3);
+        int destination = checked((destinationY * outputWidth + destinationX) * PaddleOcrAll.BytesPerPixel);
         SampleCubicScalar(sourcePtr, sourceWidth, sourceHeight, sourceStride,
             sx, sy, cropPtr, destination);
     }
@@ -58,14 +58,15 @@ internal static partial class Warp
             CubicWeight(y - (yBase + 1)),
             CubicWeight(y - (yBase + 2)),
         ];
+        int bpp = PaddleOcrAll.BytesPerPixel;
         double value0 = 0, value1 = 0, value2 = 0;
         if (xBase >= 1 && xBase < width - 2 && yBase >= 1 && yBase < height - 2)
         {
             for (int ky = 0; ky < 4; ky++)
             {
                 double wy = yWeights[ky];
-                int sourceOffset = (yBase + ky - 1) * stride + (xBase - 1) * 3;
-                for (int kx = 0; kx < 4; kx++, sourceOffset += 3)
+                int sourceOffset = (yBase + ky - 1) * stride + (xBase - 1) * bpp;
+                for (int kx = 0; kx < 4; kx++, sourceOffset += bpp)
                 {
                     double wx = xWeights[kx];
                     value0 += source[sourceOffset] * wx * wy;
@@ -84,7 +85,7 @@ internal static partial class Warp
                 {
                     double wx = xWeights[kx];
                     int sx = Clamp(xBase + kx - 1, width);
-                    int sourceOffset = sy * stride + sx * 3;
+                    int sourceOffset = sy * stride + sx * bpp;
                     value0 += source[sourceOffset] * wx * wy;
                     value1 += source[sourceOffset + 1] * wx * wy;
                     value2 += source[sourceOffset + 2] * wx * wy;
