@@ -19,18 +19,28 @@ internal static partial class ConvDenseStride1
     /// order; boundary pixels reuse the scalar tap-skipping semantics.
     /// </summary>
     internal static unsafe bool Try(ReadOnlySpan<float> input,
-        ReadOnlySpan<float> weights, ReadOnlySpan<float> bias, Span<float> output,
+        ReadOnlySpan<float> packedWeights8, ReadOnlySpan<float> weights,
+        ReadOnlySpan<float> bias, Span<float> output,
         int batch, int inputChannels, int height, int width, int outputChannels,
         int outputHeight, int outputWidth, int kernelH, int kernelW, int padTop, int padLeft,
         int intraOpThreads)
     {
+        #if !NETSTANDARD2_0
+        if (!packedWeights8.IsEmpty && TryPacked8(input, packedWeights8, weights, bias, output,
+            batch, inputChannels, height, width, outputChannels, outputHeight, outputWidth,
+            kernelH, kernelW, padTop, padLeft, intraOpThreads))
+            return true;
+        #endif
         // DenseStride1 Avx512 disabled on Zen 5 (family bisect: OtherConv regresses).
         #if !NETSTANDARD2_0
         if (Avx.IsSupported && (long)kernelH * kernelW * inputChannels <= 1 << 20)
         {
             int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
             int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
-            if (xEnd - xStart < 16) return false;
+            // The AVX2 interior loop needs only one full vector.  Falling
+            // back when the valid interior is 8..15 pixels wide sends small
+            // detector feature maps through the scalar generic convolution.
+            if (xEnd - xStart < 8) return false;
             if (intraOpThreads > 1 && batch == 1 && outputChannels >= 2 &&
                 (long)outputChannels * inputChannels * outputHeight * outputWidth * kernelH * kernelW >= 4_000_000)
             {
@@ -42,8 +52,32 @@ internal static partial class ConvDenseStride1
                     int inputLength = input.Length, weightsLength = weights.Length,
                         biasLength = bias.Length, outputLength = output.Length;
                     int weightsPerOut = inputChannels * kernelH * kernelW, plane = outputHeight * outputWidth;
+                    // Small output-channel projections (the detector's 32-OC
+                    // 5x5/7x7 layers in particular) have a much better AVX2
+                    // 8-OC microkernel than the 4-OC fallback. Split their
+                    // independent output rows across workers so every worker
+                    // keeps the full eight-channel accumulator set live.
+                    bool splitSpatial = Avx2.IsSupported && Fma.IsSupported &&
+                        (outputChannels & 7) == 0 && outputChannels <= 64 &&
+                        outputHeight >= workers * 2;
                     Parallel.For(0, workers, worker =>
                     {
+                        if (splitSpatial)
+                        {
+                            int yBegin = outputHeight * worker / workers;
+                            int yEnd = outputHeight * (worker + 1) / workers;
+                            float* inPtr = (float*)inputAddress;
+                            float* wPtr = (float*)weightsAddress;
+                            float* bPtr = biasLength == 0 ? null : (float*)biasAddress;
+                            float* oPtr = (float*)outputAddress;
+                            int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
+                            int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
+                            for (int co = 0; co < outputChannels; co += 8)
+                                DenseStride1OctUnsafe(inPtr, wPtr, bPtr, oPtr, inputChannels,
+                                    height, width, outputHeight, outputWidth, kernelH, kernelW,
+                                    padTop, padLeft, co, xStart, xEnd, yBegin, yEnd);
+                            return;
+                        }
                         int begin = outputChannels * worker / workers, end = outputChannels * (worker + 1) / workers;
                         if (end <= begin) return;
                         ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
@@ -53,7 +87,7 @@ internal static partial class ConvDenseStride1
                             : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(begin, end - begin);
                         Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
                             .Slice(begin * plane, (end - begin) * plane);
-                        Try(inSpan, wSpan, bSpan, outSpan, 1, inputChannels, height,
+                        Try(inSpan, [], wSpan, bSpan, outSpan, 1, inputChannels, height,
                             width, end - begin, outputHeight, outputWidth, kernelH, kernelW,
                             padTop, padLeft, 1);
                     });
@@ -68,6 +102,10 @@ internal static partial class ConvDenseStride1
                     float* batchInput = inputPtr + (long)b * inputChannels * height * width;
                     float* batchOutput = outputPtr + (long)b * outputChannels * outputHeight * outputWidth;
                     int co = 0;
+                    for (; co <= outputChannels - 8; co += 8)
+                        DenseStride1OctUnsafe(batchInput, weightsPtr, biasOrNull, batchOutput,
+                            inputChannels, height, width, outputHeight, outputWidth, kernelH, kernelW,
+                            padTop, padLeft, co, xStart, xEnd);
                     for (; co <= outputChannels - 4; co += 4)
                         DenseStride1QuadUnsafe(batchInput, weightsPtr, biasOrNull, batchOutput,
                             inputChannels, height, width, outputHeight, outputWidth, kernelH, kernelW,

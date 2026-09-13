@@ -63,10 +63,10 @@ internal static partial class MatMul
                             Vector256<float> w1 = Avx.LoadVector256(weightCursor + 8);
                             Vector256<float> w2 = Avx.LoadVector256(weightCursor + 16);
                             Vector256<float> w3 = Avx.LoadVector256(weightCursor + 24);
-                            Vector256<float> v0 = Vector256.Create(inputPtr[inputBase + k]);
-                            Vector256<float> v1 = Vector256.Create(inputPtr[inputBase + inner + k]);
-                            Vector256<float> v2 = Vector256.Create(inputPtr[inputBase + inner * 2 + k]);
-                            Vector256<float> v3 = Vector256.Create(inputPtr[inputBase + inner * 3 + k]);
+                            Vector256<float> v0 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + k);
+                            Vector256<float> v1 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner + k);
+                            Vector256<float> v2 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 2 + k);
+                            Vector256<float> v3 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 3 + k);
                             a0a = AddMul(a0a, v0, w0); a0b = AddMul(a0b, v0, w1);
                             a0c = AddMul(a0c, v0, w2); a0d = AddMul(a0d, v0, w3);
                             a1a = AddMul(a1a, v1, w0); a1b = AddMul(a1b, v1, w1);
@@ -99,10 +99,10 @@ internal static partial class MatMul
                         {
                             Vector256<float> wLow = Avx.LoadVector256(weightCursor);
                             Vector256<float> wHigh = Avx.LoadVector256(weightCursor + 8);
-                            Vector256<float> v0 = Vector256.Create(inputPtr[inputBase + k]);
-                            Vector256<float> v1 = Vector256.Create(inputPtr[inputBase + inner + k]);
-                            Vector256<float> v2 = Vector256.Create(inputPtr[inputBase + inner * 2 + k]);
-                            Vector256<float> v3 = Vector256.Create(inputPtr[inputBase + inner * 3 + k]);
+                            Vector256<float> v0 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + k);
+                            Vector256<float> v1 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner + k);
+                            Vector256<float> v2 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 2 + k);
+                            Vector256<float> v3 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 3 + k);
                             a0l = AddMul(a0l, v0, wLow); a0h = AddMul(a0h, v0, wHigh);
                             a1l = AddMul(a1l, v1, wLow); a1h = AddMul(a1h, v1, wHigh);
                             a2l = AddMul(a2l, v2, wLow); a2h = AddMul(a2h, v2, wHigh);
@@ -193,10 +193,10 @@ internal static partial class MatMul
                         {
                             Vector256<float> wLow = Avx.LoadVector256(tile + k * 16);
                             Vector256<float> wHigh = Avx.LoadVector256(tile + k * 16 + 8);
-                            Vector256<float> v0 = Vector256.Create(inputPtr[inputBase + k]);
-                            Vector256<float> v1 = Vector256.Create(inputPtr[inputBase + inner + k]);
-                            Vector256<float> v2 = Vector256.Create(inputPtr[inputBase + inner * 2 + k]);
-                            Vector256<float> v3 = Vector256.Create(inputPtr[inputBase + inner * 3 + k]);
+                            Vector256<float> v0 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + k);
+                            Vector256<float> v1 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner + k);
+                            Vector256<float> v2 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 2 + k);
+                            Vector256<float> v3 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 3 + k);
                             a0l = AddMul(a0l, v0, wLow); a0h = AddMul(a0h, v0, wHigh);
                             a1l = AddMul(a1l, v1, wLow); a1h = AddMul(a1h, v1, wHigh);
                             a2l = AddMul(a2l, v2, wLow); a2h = AddMul(a2h, v2, wHigh);
@@ -223,6 +223,75 @@ internal static partial class MatMul
                             }
                     }
                 }
+        }
+    }
+
+    // Eight-row by eight-column AVX2 tile.  The 4x16 kernel keeps eight
+    // accumulators too, but spends two weight loads per K step and only
+    // advances four independent input rows.  This orientation matches the
+    // REC CTC projection (many rows, very wide vocabulary) and reuses one
+    // 8-wide packed weight load across eight broadcast input scalars.
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe void MatMulRows8Packed(ReadOnlySpan<float> input,
+        ReadOnlySpan<float> weights, ReadOnlySpan<float> packedWeights, Span<float> output,
+        int batch, int rows, int inner, int columns)
+    {
+        fixed (float* inputPtr = input, weightsPtr = weights,
+            packedPtr = packedWeights, outputPtr = output)
+        {
+            for (int b = 0; b < batch; b++)
+                for (int row = 0; row <= rows - 8; row += 8)
+                {
+                    int inputBase = (b * rows + row) * inner;
+                    int outputBase = (b * rows + row) * columns;
+                    int col = 0, packedColumns = (columns / 16) * 16;
+                    for (; col <= packedColumns - 8; col += 8)
+                    {
+                        Vector256<float> a0 = Vector256<float>.Zero, a1 = a0;
+                        Vector256<float> a2 = a0, a3 = a0, a4 = a0, a5 = a0, a6 = a0, a7 = a0;
+                        float* tile = packedPtr + (col / 16) * inner * 16;
+                        int tileOffset = col & 15;
+                        for (int k = 0; k < inner; k++)
+                        {
+                            Vector256<float> w = Avx.LoadVector256(tile + k * 16 + tileOffset);
+                            a0 = AddMul(a0, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + k));
+                            a1 = AddMul(a1, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner + k));
+                            a2 = AddMul(a2, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 2 + k));
+                            a3 = AddMul(a3, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 3 + k));
+                            a4 = AddMul(a4, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 4 + k));
+                            a5 = AddMul(a5, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 5 + k));
+                            a6 = AddMul(a6, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 6 + k));
+                            a7 = AddMul(a7, w, Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 7 + k));
+                        }
+                        int ob = outputBase + col;
+                        Avx.Store(outputPtr + ob, a0);
+                        Avx.Store(outputPtr + ob + columns, a1);
+                        Avx.Store(outputPtr + ob + columns * 2, a2);
+                        Avx.Store(outputPtr + ob + columns * 3, a3);
+                        Avx.Store(outputPtr + ob + columns * 4, a4);
+                        Avx.Store(outputPtr + ob + columns * 5, a5);
+                        Avx.Store(outputPtr + ob + columns * 6, a6);
+                        Avx.Store(outputPtr + ob + columns * 7, a7);
+                    }
+                    if (col < columns)
+                    {
+                        // Preserve the original layout for the short tail.
+                        for (int r = 0; r < 8; r++)
+                            for (int c = col; c < columns; c++)
+                            {
+                                float sum = 0;
+                                for (int k = 0; k < inner; k++)
+                                    sum += inputPtr[inputBase + r * inner + k] * weightsPtr[k * columns + c];
+                                outputPtr[outputBase + r * columns + c] = sum;
+                            }
+                    }
+                }
+            int tail = rows & 7;
+            if (tail != 0)
+                for (int b = 0; b < batch; b++)
+                    MatMulRows1(input.Slice(b * rows * inner + (rows - tail) * inner), weights,
+                        output.Slice(b * rows * columns + (rows - tail) * columns), 1,
+                        0, tail, inner, columns);
         }
     }
 }

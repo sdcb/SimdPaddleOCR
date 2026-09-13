@@ -213,8 +213,9 @@ internal static partial class Conv1x1
         if ((outputChannels & 15) != 0 || outputChannels < 16)
             return false;
         int plane = checked(height * width);
-        // Small-plane REC (weight-bandwidth bound): OC-vectorize.
-        // plane >= 48 keeps spatial 8-OC packed path (best for larger H×W).
+        // OC-major is useful when the output plane is small: each input scalar
+        // then updates one contiguous vector of output channels. Keep the
+        // output in NCHW so all graph consumers remain unchanged.
         if (plane >= 48) return false;
         int coutPadded = (outputChannels + 15) & ~15;
         if (packedOc16.Length < checked(inputChannels * coutPadded)) return false;
@@ -264,8 +265,40 @@ internal static partial class Conv1x1
 #endif
             if (Vector.IsHardwareAccelerated)
             {
-                Conv1x1OcMajorVector(input, packedOc16, bias, output, batch,
-                    inputChannels, height, width, outputChannels, coutPadded, 0);
+                int tile = Vector<float>.Count >= 8 ? 8 : 4;
+                if (intraOpThreads > 1 && batch == 1 && outputChannels >= tile * 2 &&
+                    (long)outputChannels * inputChannels * plane >= 8_000_000)
+                {
+                    int blocks = outputChannels / tile;
+                    int workers = Math.Min(intraOpThreads, blocks);
+                    fixed (float* inputPtr = input, weightsPtr = packedOc16,
+                        biasPtr = bias, outputPtr = output)
+                    {
+                        nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                            biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                        int inputLength = input.Length, weightsLength = packedOc16.Length,
+                            biasLength = bias.Length, outputLength = output.Length;
+                        Parallel.For(0, workers, worker =>
+                        {
+                            int begin = (blocks * worker / workers) * tile;
+                            int end = worker == workers - 1
+                                ? outputChannels : (blocks * (worker + 1) / workers) * tile;
+                            if (end <= begin) return;
+                            int count = end - begin;
+                            ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                            ReadOnlySpan<float> weightSpan = new ReadOnlySpan<float>((void*)weightsAddress, weightsLength);
+                            ReadOnlySpan<float> biasSpan = biasLength == 0 ? []
+                                : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(begin, count);
+                            Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
+                                .Slice(begin * plane, count * plane);
+                            Conv1x1OcMajorVector(inSpan, weightSpan, biasSpan, outSpan, 1,
+                                inputChannels, height, width, count, coutPadded, begin);
+                        });
+                    }
+                }
+                else
+                    Conv1x1OcMajorVector(input, packedOc16, bias, output, batch,
+                        inputChannels, height, width, outputChannels, coutPadded, 0);
             }
             else
                 return false;
@@ -292,6 +325,58 @@ internal static partial class Conv1x1
     {
         // Packed [block8, ic, 8] for AVX-512 8-OC; [block4, ic, 4] otherwise.
 #if !NETSTANDARD2_0
+        // A batched REC request has several independent NCHW samples.  The
+        // single-sample kernels are substantially better tuned than their
+        // batch loop, so distribute samples across the session's intra-op
+        // budget before selecting the AVX2/AVX-512 micro-kernel.  Each worker
+        // receives a disjoint output slice and therefore needs no reduction.
+        int packedPlane = checked(height * width);
+        long packedWork = checked((long)outputChannels * inputChannels * packedPlane);
+        // For wide REC batches, let the NHWC tiled kernel own the complete
+        // batch.  Splitting into one sample per task prevents its row tiles
+        // from sharing the scheduling/cache decisions and oversubscribes the
+        // outer batched recognizer units.  Shapes without the AVX2 blocked
+        // layout retain the existing per-sample sharding below.
+        bool useBatchedNhwc = Avx.IsSupported && packedOc8.Length == checked(inputChannels * outputChannels) &&
+            outputChannels >= 16 && (outputChannels & 15) == 0 && packedPlane > 4096 && packedWork >= 4_000_000;
+        if (Avx.IsSupported && batch > 1 && intraOpThreads > 1 &&
+            (long)outputChannels * inputChannels * height * width >= 1_000_000 && !useBatchedNhwc)
+        {
+            int plane = checked(height * width);
+            int workers = Math.Min(intraOpThreads, batch);
+            fixed (float* inputPtr = input, weightsPtr = packedWeights,
+                biasPtr = bias, outputPtr = output, residualPtr = residual,
+                packedOc8Ptr = packedOc8)
+            {
+                nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                    biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr,
+                    residualAddress = (nint)residualPtr, packedOc8Address = (nint)packedOc8Ptr;
+                int inputLength = input.Length, weightsLength = packedWeights.Length,
+                    biasLength = bias.Length, outputLength = output.Length,
+                    packedOc8Length = packedOc8.Length;
+                bool hasResidual = residual.Length == output.Length;
+                Parallel.For(0, workers, worker =>
+                {
+                    for (int b = worker; b < batch; b += workers)
+                    {
+                        ReadOnlySpan<float> inSpan = new ReadOnlySpan<float>((void*)inputAddress, inputLength)
+                            .Slice(b * inputChannels * plane, inputChannels * plane);
+                        Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
+                            .Slice(b * outputChannels * plane, outputChannels * plane);
+                        ReadOnlySpan<float> residualSpan = hasResidual
+                            ? new ReadOnlySpan<float>((void*)residualAddress, outputLength)
+                                .Slice(b * outputChannels * plane, outputChannels * plane)
+                            : default;
+                        TryPacked(inSpan, new ReadOnlySpan<float>((void*)weightsAddress, weightsLength),
+                            biasLength == 0 ? [] : new ReadOnlySpan<float>((void*)biasAddress, biasLength),
+                            outSpan, 1, inputChannels, height, width, outputChannels, 1,
+                            packedInt8,
+                            new ReadOnlySpan<float>((void*)packedOc8Address, packedOc8Length), residualSpan);
+                    }
+                });
+            }
+            return true;
+        }
         if (AvxVnni.IsSupported && packedInt8 is not null &&
             inputChannels >= 192 && (inputChannels & 3) == 0 && (outputChannels & 7) == 0 &&
             packedInt8.Weights.Length == checked(inputChannels * outputChannels) &&
@@ -392,10 +477,49 @@ internal static partial class Conv1x1
                     height, width, outputChannels);
             }
         }
+        else if (Avx.IsSupported && outputChannels >= 16 && (outputChannels & 15) == 0 &&
+            packedOc8.Length == checked(inputChannels * outputChannels) &&
+            Conv1x1PackedNhwcTiledAvx2(input, packedOc8, bias, output, batch, inputChannels,
+                height, width, outputChannels, intraOpThreads))
+        {
+            // Tiled NHWC working set already wrote the output.
+        }
+        else if (Avx.IsSupported && outputChannels >= 16 && (outputChannels & 15) == 0 &&
+            packedOc8.Length == checked(inputChannels * outputChannels) &&
+            Conv1x1PackedNhwcAvx2(input, packedOc8, bias, output, batch, inputChannels,
+                height, width, outputChannels, intraOpThreads))
+        {
+            // NHWC blocked GEMM path already wrote the output.
+        }
         else if (Avx.IsSupported && outputChannels >= 4 && (outputChannels & 3) == 0)
         {
             int plane = checked(height * width), blocks = outputChannels / 4;
-            if (intraOpThreads > 1 && batch == 1 && blocks >= 2 &&
+            if (intraOpThreads > 1 && batch == 1 && plane >= 4096 &&
+                (long)outputChannels * inputChannels * plane >= 8_000_000)
+            {
+                int workers = Math.Min(intraOpThreads, Math.Max(1, plane / 16));
+                fixed (float* inputPtr = input, weightsPtr = packedWeights,
+                    biasPtr = bias, outputPtr = output)
+                {
+                    nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                        biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                    int inputLength = input.Length, weightsLength = packedWeights.Length,
+                        biasLength = bias.Length, outputLength = output.Length;
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int begin = (plane * worker / workers) & ~15;
+                        int end = worker == workers - 1 ? plane : (plane * (worker + 1) / workers) & ~15;
+                        ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                        ReadOnlySpan<float> weightSpan = new((void*)weightsAddress, weightsLength);
+                        ReadOnlySpan<float> biasSpan = biasLength == 0 ? []
+                            : new ReadOnlySpan<float>((void*)biasAddress, biasLength);
+                        Span<float> outSpan = new((void*)outputAddress, outputLength);
+                        Conv1x1PackedUnsafe(inSpan, weightSpan, biasSpan, outSpan, 1, inputChannels,
+                            height, width, outputChannels, begin, end);
+                    });
+                }
+            }
+            else if (intraOpThreads > 1 && batch == 1 && blocks >= 2 &&
                 (long)outputChannels * inputChannels * plane >= 1_000_000)
             {
                 int workers = Math.Min(intraOpThreads, blocks);
@@ -421,16 +545,9 @@ internal static partial class Conv1x1
                     });
                 }
             }
-            else if ((outputChannels & 15) == 0)
-            {
-                Conv1x1PackedSixteenOutputsUnsafe(input, packedWeights, bias, output, batch,
-                    inputChannels, height, width, outputChannels);
-            }
             else if ((outputChannels & 7) == 0)
-            {
-                Conv1x1PackedEightOutputsUnsafe(input, packedWeights, bias, output, batch,
-                    inputChannels, height, width, outputChannels);
-            }
+                Conv1x1PackedUnsafe(input, packedWeights, bias, output, batch, inputChannels,
+                    height, width, outputChannels);
             else
             {
                 Conv1x1PackedUnsafe(input, packedWeights, bias, output, batch, inputChannels,

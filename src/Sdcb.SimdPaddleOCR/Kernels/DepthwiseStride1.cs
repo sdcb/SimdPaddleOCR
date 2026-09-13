@@ -24,7 +24,7 @@ internal static partial class DepthwiseStride1
         {
             int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
             int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
-            if (xEnd - xStart < 16) return false;
+            if (xEnd <= xStart) return false;
             if (intraOpThreads > 1 && batch == 1 && channels >= 2 &&
                 (long)channels * outputHeight * outputWidth * kernelH * kernelW >= 4_000_000)
             {
@@ -73,7 +73,34 @@ internal static partial class DepthwiseStride1
         {
             int xStart = MathCompat.Clamp(padLeft, 0, outputWidth);
             int xEnd = MathCompat.Clamp(width - kernelW + 1 + padLeft, xStart, outputWidth);
-            if (xEnd - xStart < 16) return false;
+            if (xEnd <= xStart) return false;
+            // The detector's large 9x9 depthwise maps are the main remaining
+            // depthwise hotspot. Use the fixed-tap AVX2 body before the
+            // generic runtime-kernel loop, retaining the same channel sharding
+            // and scalar edge semantics.
+            if (batch == 1 && kernelH == 9 && kernelW == 9 && padTop == 4 && padLeft == 4 &&
+                outputHeight == height && outputWidth == width && height >= 9 && width >= 9 &&
+                (long)channels * outputHeight * outputWidth * 81 >= 4_000_000)
+            {
+                int workers = intraOpThreads > 1 ? Math.Min(intraOpThreads, channels) : 1;
+                fixed (float* inputPtr = input, weightsPtr = weights, biasPtr = bias, outputPtr = output)
+                {
+                    nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                        biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                    int plane = checked(height * width), biasLength = bias.Length;
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int begin = channels * worker / workers, end = channels * (worker + 1) / workers;
+                        if (end <= begin) return;
+                        float* inPtr = (float*)inputAddress + (long)begin * plane;
+                        float* wPtr = (float*)weightsAddress + (long)begin * 81;
+                        float* bPtr = biasLength == 0 ? null : (float*)biasAddress + begin;
+                        float* oPtr = (float*)outputAddress + (long)begin * plane;
+                        Depthwise9x9ChannelsUnsafe(inPtr, wPtr, bPtr, oPtr, end - begin, height, width);
+                    });
+                }
+                return true;
+            }
             if (intraOpThreads > 1 && batch == 1 && channels >= 2 &&
                 (long)channels * outputHeight * outputWidth * kernelH * kernelW >= 4_000_000)
             {

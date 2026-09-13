@@ -56,7 +56,7 @@ public sealed class Model : IDisposable
 
     // Pack kinds mirror the loops previously in CompiledModel, plus OC-major 1x1.
     internal const int PackMatMul = 0, PackConv3x3 = 1, PackConv1x1 = 2, PackConv1x1Oc16 = 3,
-        PackConv1x1Oc8 = 4;
+        PackConv1x1Oc8 = 4, PackConvDense8 = 5, PackDepthwise9 = 6;
 
     /// <summary>
     /// Returns the packed weights for a node's weight input, computing and
@@ -176,6 +176,49 @@ public sealed class Model : IDisposable
                             packed3x3[((block * inputChannels + ci) * 9 + k) * 8 + lane] =
                                 w[((block * 8 + lane) * inputChannels + ci) * 9 + k];
             return packed3x3;
+        }
+
+        if (packKind == PackConvDense8)
+        {
+            // Dense stride-1 AVX2 uses an output-channel block of eight:
+            // [oc/8][input-channel][kernel tap][oc lane].  Keep the pack
+            // separate from the existing 1x1/3x3 layouts because this path
+            // is only selected for the large 5x5/7x7 detector kernels.
+            if (U32(p, 4) != 1 || I32(p, 16) != 1 || I32(p, 20) != 1 ||
+                I32(p, 24) != 1 || I32(p, 28) != 1 || dims.Length != 4 ||
+                dims[0] < 8 || (dims[0] & 7) != 0)
+                return null;
+            int outputChannels = dims[0], inputChannels = dims[1];
+            int kernelH = I32(p, 8), kernelW = I32(p, 12);
+            if (!((kernelH == 5 && kernelW == 5) || (kernelH == 7 && kernelW == 7)))
+                return null;
+            int taps = checked(kernelH * kernelW);
+            float[] packedDense = new float[checked(outputChannels * inputChannels * taps)];
+            int blocks = outputChannels / 8;
+            for (int block = 0; block < blocks; block++)
+                for (int ci = 0; ci < inputChannels; ci++)
+                    for (int tap = 0; tap < taps; tap++)
+                        for (int lane = 0; lane < 8; lane++)
+                            packedDense[((block * inputChannels + ci) * taps + tap) * 8 + lane] =
+                                w[((block * 8 + lane) * inputChannels * taps) + ci * taps + tap];
+            return packedDense;
+        }
+
+        if (packKind == PackDepthwise9)
+        {
+            if (U32(p, 4) <= 1 || I32(p, 8) != 9 || I32(p, 12) != 9 ||
+                I32(p, 16) != 1 || I32(p, 20) != 1 || I32(p, 24) != 1 ||
+                I32(p, 28) != 1 || dims.Length != 4 || dims[1] != 1 ||
+                dims[0] < 8 || (dims[0] & 7) != 0 || dims[2] != 9 || dims[3] != 9)
+                return null;
+            int channels = dims[0], blocks = channels / 8;
+            float[] packedDepthwise = new float[checked(channels * 81)];
+            for (int block = 0; block < blocks; block++)
+                for (int tap = 0; tap < 81; tap++)
+                    for (int lane = 0; lane < 8; lane++)
+                        packedDepthwise[(block * 81 + tap) * 8 + lane] =
+                            w[((block * 8 + lane) * 81) + tap];
+            return packedDepthwise;
         }
 
         // PackConv1x1 / PackConv1x1Oc16 share 1x1 attribute checks.

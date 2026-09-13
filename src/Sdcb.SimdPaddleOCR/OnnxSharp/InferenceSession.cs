@@ -17,6 +17,7 @@ namespace Sdcb.SimdPaddleOCR.OnnxSharp;
 public sealed class InferenceSession : IDisposable
 {
     private static bool s_profileEnabled;
+    private static readonly bool s_dumpConv = Environment.GetEnvironmentVariable("PPOCR_DUMP_CONV") is not null;
     private static readonly long[] s_profileTicks = new long[26];
     private static readonly long[] s_profileCalls = new long[26];
     private static readonly long[] s_profileConvClassTicks = new long[5];
@@ -778,6 +779,8 @@ public sealed class InferenceSession : IDisposable
         float[]? packedOc16 = _model.GetPackedWeights(conv, Model.PackConv1x1Oc16);
         float[]? packedOc8 = _model.GetPackedWeights(conv, Model.PackConv1x1Oc8);
         float[]? packed3x3 = _model.GetPackedWeights(conv, Model.PackConv3x3);
+        float[]? packedDense8 = _model.GetPackedWeights(conv, Model.PackConvDense8);
+        float[]? packedDepthwise9 = _model.GetPackedWeights(conv, Model.PackDepthwise9);
         // Disabled after the full small-model gate: quantization changed
         // texts and was slower than the AVX-512 float kernel.
         const bool EnableInt8VnniConv1x1 = false;
@@ -785,7 +788,7 @@ public sealed class InferenceSession : IDisposable
             ? _model.GetPackedConv1x1Int8(conv)
             : null;
         Conv(x, _tensors[conv.Inputs[1]], bias, p, output, _intraOpThreads,
-            packed, packed3x3, packedOc16, packedInt8, packedOc8, residual);
+            packed, packed3x3, packedOc16, packedInt8, packedOc8, residual, packedDense8, packedDepthwise9);
     }
 
     private bool TryExecuteConvBiasAdd(int index)
@@ -1055,6 +1058,9 @@ public sealed class InferenceSession : IDisposable
         }
         if (a.Length == o.Length && b.Length == o.Length) { SimdKernels.ElementwiseParallel<TOp>(a.Data, b.Data, o.Data, intraOpThreads); return; }
         int[] ad = a.Shape; int[] bd = b.Shape; int[] od = o.Shape; int rank = od.Length;
+        if (rank == 4 && ad.Length == 4 && bd.Length == 4 &&
+            SimdKernels.TryElementwiseBroadcast4<TOp>(a.Data, ad, b.Data, bd, o.Data, od))
+            return;
         if (rank == 4 && ad.Length == 4 && bd.Length == 4 && od.Length == 4 &&
             ad[0] == od[0] && ad[1] == od[1] && ad[2] == od[2] && ad[3] == od[3] &&
             bd[0] == 1 && bd[1] == ad[1] && bd[2] == 1 && bd[3] == 1)
@@ -1138,7 +1144,7 @@ public sealed class InferenceSession : IDisposable
     private static void Conv(TensorValue x, TensorValue w, TensorValue? bias, ReadOnlySpan<byte> p,
         TensorValue o, int intraOpThreads = 1, float[]? packedWeights = null, float[]? packed3x3 = null,
         float[]? packedOc16 = null, PackedConv1x1Int8? packedInt8 = null, float[]? packedOc8 = null,
-        ReadOnlySpan<float> residual = default)
+        ReadOnlySpan<float> residual = default, float[]? packedDense8 = null, float[]? packedDepthwise9 = null)
     {
         int[] id = x.Shape; int[] wd = w.Shape; int[] od = o.Shape; int group = checked((int)U32(p, 4)), kh = I32(p, 8), kw = I32(p, 12), sh = I32(p, 16), sw = I32(p, 20), dh = I32(p, 24), dw = I32(p, 28), pt = I32(p, 32), pl = I32(p, 36); int n = id[0], cin = id[1], h = id[2], wi = id[3], cout = od[1], oh = od[2], ow = od[3], cpg = cin / group, opg = cout / group;
         ReadOnlySpan<float> biasData = bias is null ? [] : bias.Data;
@@ -1156,6 +1162,9 @@ public sealed class InferenceSession : IDisposable
             pt == 1 && pl == 1 && I32(p, 40) == 1 && I32(p, 44) == 1 && packed3x3 is not null &&
             (cout & 7) == 0 && Conv3x3Packed.Try(x.Data, packed3x3, biasData, o.Data,
                 n, cin, h, wi, cout, intraOpThreads)) return;
+        if (group == 1 && sh == 1 && sw == 1 && dh == 1 && dw == 1 && packedDense8 is not null &&
+            ConvDenseStride1.Try(x.Data, packedDense8, w.Data, biasData, o.Data, n, cin, h, wi,
+                cout, oh, ow, kh, kw, pt, pl, intraOpThreads)) return;
         if (kh == 1 && kw == 1 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
             pt == 0 && pl == 0 && I32(p, 40) == 0 && I32(p, 44) == 0 &&
             packedOc16 is not null && group == 1 &&
@@ -1183,6 +1192,14 @@ public sealed class InferenceSession : IDisposable
             I32(p, 40) == 3 && I32(p, 44) == 3 && oh == h && ow == wi &&
             Depthwise.Try7x7(x.Data, w.Data, biasData, o.Data, n, cin, h, wi,
                 intraOpThreads)) return;
+        #if !NETSTANDARD2_0
+        if (group == cin && cout == cin && wd[1] == 1 && kh == 9 && kw == 9 &&
+            sh == 1 && sw == 1 && dh == 1 && dw == 1 && pt == 4 && pl == 4 &&
+            I32(p, 40) == 4 && I32(p, 44) == 4 && oh == h && ow == wi &&
+            packedDepthwise9 is not null &&
+            DepthwiseStride1.TryPacked9(x.Data, packedDepthwise9, biasData, o.Data,
+                n, cin, h, wi, oh, ow, intraOpThreads)) return;
+        #endif
         if (group == cin && cout == cin && wd[1] == 1 && kh == 3 && kw == 3 &&
             sh == 2 && sw == 1 && dh == 1 && dw == 1 && pt == 1 && pl == 1 &&
             I32(p, 40) == 1 && I32(p, 44) == 1 &&
@@ -1207,7 +1224,8 @@ public sealed class InferenceSession : IDisposable
             Conv3x3.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, cout, intraOpThreads)) return;
         if (group == 1 && kh == 2 && kw == 2 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
             pt == 0 && pl == 0 && I32(p, 40) == 1 && I32(p, 44) == 1 && oh == h && ow == wi &&
-            Stride2.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, cout)) return;
+            Stride2.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi, cout,
+                intraOpThreads)) return;
         // Same 16-channel worker-count fork as stride-1: unpacked 4-OC only
         // on AdvSimd (Count==4). Vector256 keeps packed 8-OC — the unpacked
         // shard was the e2e stride-2 half of the 9c54d56 ns2 regression.
@@ -1230,14 +1248,13 @@ public sealed class InferenceSession : IDisposable
             DepthwiseStride1.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi,
                 oh, ow, kh, kw, pt, pl, intraOpThreads)) return;
         if (group == 1 && sh == 1 && sw == 1 && dh == 1 && dw == 1 &&
-            ConvDenseStride1.Try(x.Data, w.Data, biasData, o.Data, n, cin, h, wi,
+            ConvDenseStride1.Try(x.Data, [], w.Data, biasData, o.Data, n, cin, h, wi,
                 cout, oh, ow, kh, kw, pt, pl, intraOpThreads)) return;
         ReadOnlySpan<float> xData = x.Data, wData = w.Data; Span<float> oData = o.Data;
         if (s_dumpConv) DumpConvShape(n, cin, h, wi, cout, oh, ow, group, kh, kw, sh, sw, dh, dw, pt, pl);
         for (int b = 0; b < n; b++) for (int co = 0; co < cout; co++) for (int y = 0; y < oh; y++) for (int xx = 0; xx < ow; xx++) { float sum = bias is null ? 0 : biasData[co]; int g = co / opg; for (int ci = 0; ci < cpg; ci++) for (int ky = 0; ky < kh; ky++) { int iy = y * sh - pt + ky * dh; if ((uint)iy >= (uint)h) continue; for (int kx = 0; kx < kw; kx++) { int ix = xx * sw - pl + kx * dw; if ((uint)ix >= (uint)wi) continue; sum += xData[((b * cin + g * cpg + ci) * h + iy) * wi + ix] * wData[(((co * cpg + ci) * kh + ky) * kw + kx)]; } } oData[((b * cout + co) * oh + y) * ow + xx] = sum; }
     }
 
-    private static readonly bool s_dumpConv = Environment.GetEnvironmentVariable("PPOCR_DUMP_CONV") is not null;
     private static readonly HashSet<string> s_dumpedConvs = [];
     private static void DumpConvShape(int n, int cin, int h, int wi, int cout, int oh, int ow,
         int group, int kh, int kw, int sh, int sw, int dh, int dw, int pt, int pl)
@@ -1247,6 +1264,7 @@ public sealed class InferenceSession : IDisposable
             if (s_dumpedConvs.Add(key))
                 Console.Error.WriteLine(key);
     }
+
     private static void ConvTranspose(TensorValue x, TensorValue w, TensorValue? bias, ReadOnlySpan<byte> p, TensorValue o,
         int intraOpThreads = 1)
     {

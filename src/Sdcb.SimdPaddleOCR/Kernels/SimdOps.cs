@@ -251,6 +251,13 @@ internal static class SimdOps
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(
                 AdvSimd.FusedMultiplyAdd(acc, val, AdvSimd.DuplicateToVector128(weight)));
         }
+        else if (Fma.IsSupported && Vector<float>.Count == 8)
+        {
+            Vector256<float> acc = Unsafe.BitCast<Vector<float>, Vector256<float>>(accumulator);
+            Vector256<float> val = Unsafe.BitCast<Vector<float>, Vector256<float>>(value);
+            return Unsafe.BitCast<Vector256<float>, Vector<float>>(
+                Fma.MultiplyAdd(val, Vector256.Create(weight), acc));
+        }
         else
 #endif
         {
@@ -268,6 +275,13 @@ internal static class SimdOps
             Vector128<float> val = Unsafe.BitCast<Vector<float>, Vector128<float>>(value);
             Vector128<float> w = Unsafe.BitCast<Vector<float>, Vector128<float>>(weight);
             return Unsafe.BitCast<Vector128<float>, Vector<float>>(AdvSimd.FusedMultiplyAdd(acc, val, w));
+        }
+        else if (Fma.IsSupported && Vector<float>.Count == 8)
+        {
+            Vector256<float> acc = Unsafe.BitCast<Vector<float>, Vector256<float>>(accumulator);
+            Vector256<float> val = Unsafe.BitCast<Vector<float>, Vector256<float>>(value);
+            Vector256<float> w = Unsafe.BitCast<Vector<float>, Vector256<float>>(weight);
+            return Unsafe.BitCast<Vector256<float>, Vector<float>>(Fma.MultiplyAdd(val, w, acc));
         }
         else
 #endif

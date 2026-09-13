@@ -645,7 +645,7 @@ internal static partial class Conv1x1
     {
         int plane = checked(height * width);
         int ocTile = Vector<float>.Count >= 8 ? 8 : 4;
-        if (plane <= 0 || plane >= 48) return;
+        if (plane <= 0) return;
         fixed (float* inputPtr = input, weightsPtr = packedOc16, biasPtr = bias, outputPtr = output)
         {
             for (int b = 0; b < batch; b++)
@@ -658,9 +658,14 @@ internal static partial class Conv1x1
                     float* weightBase = weightsPtr + weightOcBase + co;
                     float* out0 = batchOutput + co * plane;
                     int spatial = 0;
-                    for (; spatial <= plane - 4; spatial += 4)
+                    // Eight spatial outputs amortize the OC-vector weight load
+                    // while using only eight YMM accumulators.  This is the
+                    // same register footprint as the packed 8-OC kernel but
+                    // reuses each input-channel weight across eight pixels.
+                    for (; spatial <= plane - 8; spatial += 8)
                     {
                         Vector<float> a0 = vBias, a1 = vBias, a2 = vBias, a3 = vBias;
+                        Vector<float> a4 = vBias, a5 = vBias, a6 = vBias, a7 = vBias;
                         float* in0 = batchInput + spatial;
                         for (int ci = 0; ci < inputChannels; ci++)
                         {
@@ -669,12 +674,20 @@ internal static partial class Conv1x1
                             a1 = VectorAddMul(a1, w, in0[1]);
                             a2 = VectorAddMul(a2, w, in0[2]);
                             a3 = VectorAddMul(a3, w, in0[3]);
+                            a4 = VectorAddMul(a4, w, in0[4]);
+                            a5 = VectorAddMul(a5, w, in0[5]);
+                            a6 = VectorAddMul(a6, w, in0[6]);
+                            a7 = VectorAddMul(a7, w, in0[7]);
                             in0 += plane;
                         }
                         StoreOcTile(out0, plane, spatial, a0, ocTile);
                         StoreOcTile(out0, plane, spatial + 1, a1, ocTile);
                         StoreOcTile(out0, plane, spatial + 2, a2, ocTile);
                         StoreOcTile(out0, plane, spatial + 3, a3, ocTile);
+                        StoreOcTile(out0, plane, spatial + 4, a4, ocTile);
+                        StoreOcTile(out0, plane, spatial + 5, a5, ocTile);
+                        StoreOcTile(out0, plane, spatial + 6, a6, ocTile);
+                        StoreOcTile(out0, plane, spatial + 7, a7, ocTile);
                     }
                     for (; spatial < plane; spatial++)
                     {

@@ -44,10 +44,10 @@ internal static partial class MatMul
                         {
                             Vector256<float> wl = Avx.LoadVector256(tile + k * 16);
                             Vector256<float> wh = Avx.LoadVector256(tile + k * 16 + 8);
-                            Vector256<float> v0 = Vector256.Create(inputPtr[inputBase + k]);
-                            Vector256<float> v1 = Vector256.Create(inputPtr[inputBase + inner + k]);
-                            Vector256<float> v2 = Vector256.Create(inputPtr[inputBase + inner * 2 + k]);
-                            Vector256<float> v3 = Vector256.Create(inputPtr[inputBase + inner * 3 + k]);
+                            Vector256<float> v0 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + k);
+                            Vector256<float> v1 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner + k);
+                            Vector256<float> v2 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 2 + k);
+                            Vector256<float> v3 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 3 + k);
                             a0l = AddMul(a0l, v0, wl); a0h = AddMul(a0h, v0, wh);
                             a1l = AddMul(a1l, v1, wl); a1h = AddMul(a1h, v1, wh);
                             a2l = AddMul(a2l, v2, wl); a2h = AddMul(a2h, v2, wh);

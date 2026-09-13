@@ -30,7 +30,9 @@ internal static partial class MatMul
         }
         else if (Avx.IsSupported)
         {
-            if (packedWeights is not null && rows >= 4 && (rows & 3) == 0 && inner >= 64 && columns >= 1024)
+            if (packedWeights is not null && rows >= 8 && (rows & 7) == 0 && inner >= 64 && columns >= 1024)
+                MatMulRows8Packed(input, weights, packedWeights, output, batch, rows, inner, columns);
+            else if (packedWeights is not null && rows >= 4 && (rows & 3) == 0 && inner >= 64 && columns >= 1024)
                 MatMulRows4Packed(input, weights, packedWeights, output, batch, rows, inner, columns);
             else if (rows >= 4)
                 MatMulRows4(input, weights, output, batch, rows, inner, columns);

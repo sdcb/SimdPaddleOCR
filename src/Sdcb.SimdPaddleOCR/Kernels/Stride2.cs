@@ -13,12 +13,47 @@ namespace Sdcb.SimdPaddleOCR.Kernels;
 
 internal static partial class Stride2
 {
-    internal static bool Try(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+    internal static unsafe bool Try(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
         ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
-        int height, int width, int outputChannels)
+        int height, int width, int outputChannels, int intraOpThreads = 1)
     {
         int plane = checked(height * width);
-        #if !NETSTANDARD2_0
+        // 2x2 stride-1 convolutions are used by the detector's feature
+        // pyramid.  Their AVX2 kernels used to ignore the session's
+        // intra-op budget and ran the whole output channel range on one
+        // thread.  Shard complete output tiles; each shard has a disjoint
+        // output slice and therefore preserves the scalar accumulation order.
+        int tile = (outputChannels & 7) == 0 ? 8 : (outputChannels & 3) == 0 ? 4 : 1;
+        long work = checked((long)outputChannels * inputChannels * plane * 4);
+        if (tile > 1 && intraOpThreads > 1 && batch == 1 && work >= 4_000_000)
+        {
+            int blocks = outputChannels / tile;
+            int workers = Math.Min(intraOpThreads, blocks);
+            fixed (float* inputPtr = input, weightsPtr = weights,
+                biasPtr = bias, outputPtr = output)
+            {
+                nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                    biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+                int inputLength = input.Length, weightsLength = weights.Length,
+                    biasLength = bias.Length, outputLength = output.Length;
+                Parallel.For(0, workers, worker =>
+                {
+                    int beginBlock = blocks * worker / workers;
+                    int endBlock = blocks * (worker + 1) / workers;
+                    int begin = beginBlock * tile, count = (endBlock - beginBlock) * tile;
+                    ReadOnlySpan<float> inSpan = new((void*)inputAddress, inputLength);
+                    ReadOnlySpan<float> wSpan = new ReadOnlySpan<float>((void*)weightsAddress, weightsLength)
+                        .Slice(begin * inputChannels * 4, count * inputChannels * 4);
+                    ReadOnlySpan<float> bSpan = biasLength == 0 ? []
+                        : new ReadOnlySpan<float>((void*)biasAddress, biasLength).Slice(begin, count);
+                    Span<float> outSpan = new Span<float>((void*)outputAddress, outputLength)
+                        .Slice(begin * plane, count * plane);
+                    Try(inSpan, wSpan, bSpan, outSpan, 1, inputChannels, height, width, count, 1);
+                });
+            }
+            return true;
+        }
+#if !NETSTANDARD2_0
         if (Avx.IsSupported)
         {
             if ((outputChannels & 7) == 0)

@@ -142,6 +142,88 @@ public class KernelCorrectnessTests
         AssertClose(expected, vectorActual, rtol: 5e-5f, atol: 5e-5f);
     }
 
+    [Fact]
+    public void Conv1x1_BatchedNhwcMatchesReference()
+    {
+        const int batch = 2, ic = 32, oc = 32, h = 24, w = 192;
+        int plane = h * w;
+        float[] input = Ramp(batch * ic * plane, 0.003f);
+        float[] weights = Ramp(oc * ic, -0.004f);
+        float[] bias = Ramp(oc, 0.005f);
+        float[] packed4 = PackConv1x1(weights, oc, ic, 4);
+        float[] packed8 = PackConv1x1(weights, oc, ic, 8);
+        float[] expected = new float[batch * oc * plane];
+        Conv1x1Ref(input, weights, bias, expected, batch, ic, h, w, oc);
+        float[] actual = new float[expected.Length];
+        Assert.True(Conv1x1.TryPacked(input, packed4, bias, actual, batch, ic, h, w, oc,
+            intraOpThreads: 2, packedOc8: packed8));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Fact]
+    public void Stride2_ThreadedMatchesReference()
+    {
+        const int batch = 1, ic = 16, oc = 16, h = 64, w = 64;
+        int plane = h * w;
+        float[] input = Ramp(batch * ic * plane, 0.001f);
+        float[] weights = Ramp(oc * ic * 4, -0.002f);
+        float[] bias = Ramp(oc, 0.003f);
+        float[] expected = new float[batch * oc * plane];
+        Stride2Ref(input, weights, bias, expected, batch, ic, h, w, oc);
+        float[] actual = new float[expected.Length];
+        Assert.True(Stride2.Try(input, weights, bias, actual, batch, ic, h, w, oc,
+            intraOpThreads: 4));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Fact]
+    public void Depthwise9PackedMatchesReference()
+    {
+        const int channels = 16, h = 32, w = 32;
+        int plane = h * w;
+        float[] input = Ramp(channels * plane, 0.002f);
+        float[] weights = Ramp(channels * 81, -0.003f);
+        float[] bias = Ramp(channels, 0.004f);
+        float[] packed = new float[weights.Length];
+        for (int block = 0; block < channels / 8; block++)
+            for (int tap = 0; tap < 81; tap++)
+                for (int lane = 0; lane < 8; lane++)
+                    packed[(block * 81 + tap) * 8 + lane] = weights[(block * 8 + lane) * 81 + tap];
+        float[] expected = new float[input.Length];
+        Depthwise9Ref(input, weights, bias, expected, channels, h, w);
+        float[] actual = new float[input.Length];
+#if !USE_NS20_LIBRARY
+        Assert.True(DepthwiseStride1.TryPacked9(input, packed, bias, actual, 1, channels, h, w, h, w, 2));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+#endif
+        Assert.True(DepthwiseStride1.Try(input, weights, bias, actual, 1, channels, h, w, h, w,
+            9, 9, 4, 4, 2));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Fact]
+    public void Dense5PackedMatchesReference()
+    {
+        const int ic = 16, oc = 16, h = 32, w = 32, kernel = 5;
+        int plane = h * w, taps = kernel * kernel;
+        float[] input = Ramp(ic * plane, 0.002f);
+        float[] weights = Ramp(oc * ic * taps, -0.003f);
+        float[] bias = Ramp(oc, 0.004f);
+        float[] packed = new float[weights.Length];
+        for (int block = 0; block < oc / 8; block++)
+            for (int ci = 0; ci < ic; ci++)
+                for (int tap = 0; tap < taps; tap++)
+                    for (int lane = 0; lane < 8; lane++)
+                        packed[((block * ic + ci) * taps + tap) * 8 + lane] =
+                            weights[(block * 8 + lane) * ic * taps + ci * taps + tap];
+        float[] expected = new float[oc * plane];
+        Dense5Ref(input, weights, bias, expected, ic, oc, h, w, kernel);
+        float[] actual = new float[expected.Length];
+        Assert.True(ConvDenseStride1.Try(input, packed, weights, bias, actual, 1, ic, h, w, oc,
+            h, w, kernel, kernel, kernel / 2, kernel / 2, 2));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
     [Theory]
     [InlineData(5, 32, 40)]
     [InlineData(4, 64, 1040)]
@@ -163,6 +245,20 @@ public class KernelCorrectnessTests
         float[] vectorActual = new float[expected.Length];
         Assert.True(MatMul.TryVector(input, weights, vectorActual, batch, rows, inner, columns, packed));
         AssertClose(expected, vectorActual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Fact]
+    public void MatMul_Rows8PackedHandlesPartialColumnTile()
+    {
+        const int batch = 1, rows = 8, inner = 64, columns = 1050;
+        float[] input = Ramp(batch * rows * inner, 0.01f);
+        float[] weights = Ramp(inner * columns, -0.02f);
+        float[] packed = PackMatMul(weights, inner, columns);
+        float[] expected = new float[batch * rows * columns];
+        MatMulRef(input, weights, expected, batch, rows, inner, columns);
+        float[] actual = new float[expected.Length];
+        Assert.True(MatMul.Try(input, weights, actual, batch, rows, inner, columns, packed));
+        AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
     }
 
     [Fact]
@@ -287,6 +383,80 @@ public class KernelCorrectnessTests
                         sum += input[(b * inputChannels + ci) * plane + s] * weights[co * inputChannels + ci];
                     output[(b * outputChannels + co) * plane + s] = sum;
                 }
+    }
+
+    private static void Depthwise9Ref(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+        ReadOnlySpan<float> bias, Span<float> output, int channels, int h, int w)
+    {
+        int plane = h * w;
+        for (int c = 0; c < channels; c++)
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    float sum = bias[c];
+                    for (int ky = 0; ky < 9; ky++)
+                    {
+                        int iy = y - 4 + ky;
+                        if ((uint)iy >= (uint)h) continue;
+                        for (int kx = 0; kx < 9; kx++)
+                        {
+                            int ix = x - 4 + kx;
+                            if ((uint)ix < (uint)w)
+                                sum += input[c * plane + iy * w + ix] * weights[c * 81 + ky * 9 + kx];
+                        }
+                    }
+                    output[c * plane + y * w + x] = sum;
+                }
+    }
+
+    private static void Dense5Ref(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+        ReadOnlySpan<float> bias, Span<float> output, int ic, int oc, int h, int w, int kernel)
+    {
+        int plane = h * w, pad = kernel / 2, taps = kernel * kernel;
+        for (int co = 0; co < oc; co++)
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                {
+                    float sum = bias[co];
+                    for (int ci = 0; ci < ic; ci++)
+                        for (int ky = 0; ky < kernel; ky++)
+                        {
+                            int iy = y - pad + ky;
+                            if ((uint)iy >= (uint)h) continue;
+                            for (int kx = 0; kx < kernel; kx++)
+                            {
+                                int ix = x - pad + kx;
+                                if ((uint)ix < (uint)w)
+                                    sum += input[ci * plane + iy * w + ix] *
+                                        weights[(co * ic + ci) * taps + ky * kernel + kx];
+                            }
+                        }
+                    output[co * plane + y * w + x] = sum;
+                }
+    }
+
+    private static void Stride2Ref(ReadOnlySpan<float> input, ReadOnlySpan<float> weights,
+        ReadOnlySpan<float> bias, Span<float> output, int batch, int inputChannels,
+        int height, int width, int outputChannels)
+    {
+        int plane = height * width;
+        for (int b = 0; b < batch; b++)
+            for (int co = 0; co < outputChannels; co++)
+                for (int y = 0; y < height; y++)
+                    for (int x = 0; x < width; x++)
+                    {
+                        float sum = bias.IsEmpty ? 0f : bias[co];
+                        for (int ci = 0; ci < inputChannels; ci++)
+                            for (int ky = 0; ky < 2; ky++)
+                                for (int kx = 0; kx < 2; kx++)
+                                {
+                                    int iy = y + ky, ix = x + kx;
+                                    if ((uint)iy < (uint)height && (uint)ix < (uint)width)
+                                        sum += input[(b * inputChannels + ci) * plane + iy * width + ix] *
+                                            weights[(co * inputChannels + ci) * 4 + ky * 2 + kx];
+                                }
+                        output[(b * outputChannels + co) * plane + y * width + x] = sum;
+                    }
     }
 
     internal static float[] PackMatMul(ReadOnlySpan<float> weights, int inner, int columns)

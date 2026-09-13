@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
@@ -11,6 +12,278 @@ namespace Sdcb.SimdPaddleOCR.Kernels;
 
 internal static partial class Conv1x1
 {
+#if !NETSTANDARD2_0
+    // oneDNN's AVX2 1x1 primitive uses a spatial-major (NHWC) working layout:
+    // a vector contains adjacent output channels, while four spatial rows are
+    // kept live to hide the scalar input broadcasts.  The graph itself stays
+    // NCHW, so this path transposes through ArrayPool scratch for large dense
+    // pointwise convolutions.  Bias is the initial accumulator, preserving the
+    // same per-output accumulation order as the NCHW kernels.
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe bool Conv1x1PackedNhwcAvx2(ReadOnlySpan<float> input,
+        ReadOnlySpan<float> packedOc8, ReadOnlySpan<float> bias, Span<float> output,
+        int batch, int inputChannels, int height, int width, int outputChannels,
+        int intraOpThreads)
+    {
+        if (!Avx2.IsSupported || !Fma.IsSupported || Vector<float>.Count != 8 ||
+            batch <= 0 || inputChannels < 32 || outputChannels < 16 ||
+            (outputChannels & 15) != 0)
+            return false;
+        int plane = checked(height * width), rows = checked(batch * plane);
+        long work = checked((long)inputChannels * outputChannels * plane);
+        // Transpose overhead dominates tiny projections and small detector
+        // tails.  Keep the existing packed kernel for those shapes.
+        if (plane < 32 || plane > 4096 || work < 4_000_000)
+            return false;
+        int inputVolume = checked(rows * inputChannels);
+        int outputVolume = checked(rows * outputChannels);
+        float[] inputNhwc = ArrayPool<float>.Shared.Rent(inputVolume);
+        float[] outputNhwc = ArrayPool<float>.Shared.Rent(outputVolume);
+        try
+        {
+            fixed (float* inputPtr = input, inputWork = inputNhwc,
+                outputWork = outputNhwc, outputPtr = output,
+                weightsPtr = packedOc8, biasPtr = bias)
+            {
+                nint inputAddress = (nint)inputPtr, inputWorkAddress = (nint)inputWork,
+                    outputWorkAddress = (nint)outputWork, outputAddress = (nint)outputPtr,
+                    weightsAddress = (nint)weightsPtr, biasAddress = (nint)biasPtr;
+                // Parallel.For setup is more expensive than the arithmetic for
+                // the small pointwise layers in the detector head.  Keep
+                // those on the caller thread and reserve nested parallelism
+                // for a genuinely compute-heavy projection.
+                int workers = intraOpThreads > 1 && work >= 16_000_000
+                    ? Math.Min(intraOpThreads, Math.Max(1, rows / 4)) : 1;
+                if (workers > 1)
+                {
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int begin = (rows * worker / workers) & ~3;
+                        int end = worker == workers - 1 ? rows : (rows * (worker + 1) / workers) & ~3;
+                        TransposeNchwToNhwc((float*)inputAddress, (float*)inputWorkAddress,
+                            begin, end, plane, inputChannels);
+                    });
+                }
+                else
+                    TransposeNchwToNhwc(inputPtr, inputWork, 0, rows, plane, inputChannels);
+
+                if (workers > 1)
+                {
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int begin = (rows * worker / workers) & ~3;
+                        int end = worker == workers - 1 ? rows : (rows * (worker + 1) / workers) & ~3;
+                        Conv1x1NhwcRows((float*)inputWorkAddress + begin * inputChannels,
+                            (float*)weightsAddress, (float*)biasAddress,
+                            (float*)outputWorkAddress + begin * outputChannels,
+                            end - begin, inputChannels, outputChannels);
+                    });
+                }
+                else
+                    Conv1x1NhwcRows(inputWork, weightsPtr, biasPtr, outputWork,
+                        rows, inputChannels, outputChannels);
+
+                if (workers > 1)
+                {
+                    Parallel.For(0, workers, worker =>
+                    {
+                        int begin = (rows * worker / workers) & ~3;
+                        int end = worker == workers - 1 ? rows : (rows * (worker + 1) / workers) & ~3;
+                        TransposeNhwcToNchw((float*)outputWorkAddress, (float*)outputAddress, begin, end,
+                            plane, outputChannels);
+                    });
+                }
+                else
+                    TransposeNhwcToNchw(outputWork, outputPtr, 0, rows,
+                        plane, outputChannels);
+            }
+            return true;
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(inputNhwc);
+            ArrayPool<float>.Shared.Return(outputNhwc);
+        }
+    }
+
+    // Tile the NCHW↔NHWC conversion for very wide planes.  Keeping one tile
+    // spatial-major lets the 16-OC body reuse each input value across all
+    // output-channel blocks without allocating a full activation transpose.
+    // This is primarily for REC (48 x 320+); the whole-plane path above is
+    // cheaper for detector-sized planes that fit its bounded scratch budget.
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe bool Conv1x1PackedNhwcTiledAvx2(ReadOnlySpan<float> input,
+        ReadOnlySpan<float> packedOc8, ReadOnlySpan<float> bias, Span<float> output,
+        int batch, int inputChannels, int height, int width, int outputChannels,
+        int intraOpThreads)
+    {
+        if (!Avx2.IsSupported || !Fma.IsSupported || Vector<float>.Count != 8 ||
+            batch <= 0 || inputChannels < 32 || outputChannels < 16 ||
+            (outputChannels & 15) != 0)
+            return false;
+        int plane = checked(height * width);
+        long work = checked((long)inputChannels * outputChannels * plane);
+        if (plane <= 4096 || work < 4_000_000)
+            return false;
+
+
+        const int tileSpatial = 64;
+        int tilesPerBatch = (plane + tileSpatial - 1) / tileSpatial;
+        int tileCount = checked(batch * tilesPerBatch);
+        int workers = intraOpThreads > 1
+            ? Math.Min(intraOpThreads, tileCount) : 1;
+
+        fixed (float* inputPtr = input, weightsPtr = packedOc8,
+            biasPtr = bias, outputPtr = output)
+        {
+            nint inputAddress = (nint)inputPtr, weightsAddress = (nint)weightsPtr,
+                biasAddress = (nint)biasPtr, outputAddress = (nint)outputPtr;
+            // The tiled path can have hundreds of tiles for a single REC
+            // sample.  Keep one scratch pair per worker and walk that worker's
+            // tiles in a strided loop; renting two arrays and scheduling a
+            // task for every tile otherwise costs a measurable fraction of
+            // the convolution itself.
+            Action<int> runWorker = worker =>
+            {
+                float[] inScratch = ArrayPool<float>.Shared.Rent(checked(tileSpatial * inputChannels));
+                float[] outScratch = ArrayPool<float>.Shared.Rent(checked(tileSpatial * outputChannels));
+                try
+                {
+                    fixed (float* inWork = inScratch, outWork = outScratch)
+                    {
+                        for (int tileIndex = worker; tileIndex < tileCount; tileIndex += workers)
+                        {
+                            int b = tileIndex / tilesPerBatch;
+                            int tile = tileIndex - b * tilesPerBatch;
+                            int begin = tile * tileSpatial;
+                            int rows = Math.Min(tileSpatial, plane - begin);
+                            float* source = (float*)inputAddress + (long)b * inputChannels * plane + begin;
+                            // Walk each NCHW channel contiguously while writing
+                            // the row-major scratch.  The inverse row-major loop
+                            // would create one hardware-prefetch stream per
+                            // channel.
+                            for (int ci = 0; ci < inputChannels; ci++)
+                            {
+                                float* src = source + (long)ci * plane;
+                                for (int r = 0; r < rows; r++)
+                                    inWork[r * inputChannels + ci] = src[r];
+                            }
+                            Conv1x1NhwcRows(inWork, (float*)weightsAddress, (float*)biasAddress, outWork,
+                                rows, inputChannels, outputChannels);
+                            float* destination = (float*)outputAddress + (long)b * outputChannels * plane + begin;
+                            for (int co = 0; co < outputChannels; co++)
+                            {
+                                float* dst = destination + (long)co * plane;
+                                for (int r = 0; r < rows; r++)
+                                    dst[r] = outWork[r * outputChannels + co];
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    ArrayPool<float>.Shared.Return(inScratch);
+                    ArrayPool<float>.Shared.Return(outScratch);
+                }
+            };
+            if (workers > 1)
+                Parallel.For(0, workers, runWorker);
+            else
+                runWorker(0);
+        }
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void TransposeNchwToNhwc(float* source, float* destination,
+        int rowBegin, int rowEnd, int plane, int channels)
+    {
+        for (int row = rowBegin; row < rowEnd; row++)
+        {
+            int batchIndex = row / plane, spatial = row - batchIndex * plane;
+            float* src = source + batchIndex * channels * plane + spatial;
+            float* dst = destination + row * channels;
+            for (int ci = 0; ci < channels; ci++, src += plane)
+                dst[ci] = *src;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe void TransposeNhwcToNchw(float* source, float* destination,
+        int rowBegin, int rowEnd, int plane, int channels)
+    {
+        for (int row = rowBegin; row < rowEnd; row++)
+        {
+            int batchIndex = row / plane, spatial = row - batchIndex * plane;
+            float* src = source + row * channels;
+            float* dst = destination + batchIndex * channels * plane + spatial;
+            for (int co = 0; co < channels; co++, dst += plane)
+                *dst = src[co];
+        }
+    }
+
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe void Conv1x1NhwcRows(float* input, float* weights,
+        float* bias, float* output, int rows, int inputChannels, int outputChannels)
+    {
+        // The four-row body has the best register balance on Zen 3/4 AVX2;
+        // wider row tiles spill accumulators on this target.
+        Conv1x1NhwcRowsFour(input, weights, bias, output, rows, inputChannels, outputChannels);
+    }
+
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe void Conv1x1NhwcRowsFour(float* input, float* weights,
+        float* bias, float* output, int rows, int inputChannels, int outputChannels)
+    {
+        for (int row = 0; row <= rows - 4; row += 4)
+        {
+            float* in0 = input + row * inputChannels;
+            float* in1 = in0 + inputChannels, in2 = in1 + inputChannels, in3 = in2 + inputChannels;
+            float* out0 = output + row * outputChannels;
+            for (int co = 0; co < outputChannels; co += 16)
+            {
+                Vector256<float> biasLow = bias == null ? Vector256<float>.Zero : Avx.LoadVector256(bias + co);
+                Vector256<float> biasHigh = bias == null ? Vector256<float>.Zero : Avx.LoadVector256(bias + co + 8);
+                Vector256<float> a0 = biasLow, a1 = biasLow, a2 = biasLow, a3 = biasLow;
+                Vector256<float> b0 = biasHigh, b1 = biasHigh, b2 = biasHigh, b3 = biasHigh;
+                float* weight0 = weights + co * inputChannels;
+                float* weight1 = weight0 + inputChannels * 8;
+                for (int ci = 0; ci < inputChannels; ci++, weight0 += 8, weight1 += 8)
+                {
+                    Vector256<float> w0 = Avx.LoadVector256(weight0);
+                    Vector256<float> w1 = Avx.LoadVector256(weight1);
+                    Vector256<float> v0 = Avx.BroadcastScalarToVector256(in0 + ci);
+                    Vector256<float> v1 = Avx.BroadcastScalarToVector256(in1 + ci);
+                    Vector256<float> v2 = Avx.BroadcastScalarToVector256(in2 + ci);
+                    Vector256<float> v3 = Avx.BroadcastScalarToVector256(in3 + ci);
+                    a0 = Fma.MultiplyAdd(v0, w0, a0); b0 = Fma.MultiplyAdd(v0, w1, b0);
+                    a1 = Fma.MultiplyAdd(v1, w0, a1); b1 = Fma.MultiplyAdd(v1, w1, b1);
+                    a2 = Fma.MultiplyAdd(v2, w0, a2); b2 = Fma.MultiplyAdd(v2, w1, b2);
+                    a3 = Fma.MultiplyAdd(v3, w0, a3); b3 = Fma.MultiplyAdd(v3, w1, b3);
+                }
+                Avx.Store(out0 + co, a0); Avx.Store(out0 + co + 8, b0);
+                Avx.Store(out0 + co + outputChannels, a1); Avx.Store(out0 + co + outputChannels + 8, b1);
+                Avx.Store(out0 + co + outputChannels * 2, a2); Avx.Store(out0 + co + outputChannels * 2 + 8, b2);
+                Avx.Store(out0 + co + outputChannels * 3, a3); Avx.Store(out0 + co + outputChannels * 3 + 8, b3);
+            }
+        }
+        for (int row = rows & ~3; row < rows; row++)
+        {
+            float* inPtr = input + row * inputChannels;
+            float* outPtr = output + row * outputChannels;
+            for (int co = 0; co < outputChannels; co++)
+            {
+                float sum = bias == null ? 0f : bias[co];
+                float* weight = weights + (co / 8) * inputChannels * 8 + (co & 7);
+                for (int ci = 0; ci < inputChannels; ci++, weight += 8)
+                    sum += inPtr[ci] * *weight;
+                outPtr[co] = sum;
+            }
+        }
+    }
+
+#endif
+
     // Four adjacent packed four-channel tiles share each input vector.  The
     // sixteen-output kernel is useful for the detector's wide pointwise
     // projections and is restricted to single-threaded execution so the
@@ -418,7 +691,8 @@ internal static partial class Conv1x1
     [MethodImpl(MethodImplCompat.AggressiveOptimization)]
     private static unsafe void Conv1x1PackedUnsafe(ReadOnlySpan<float> input,
         ReadOnlySpan<float> packedWeights, ReadOnlySpan<float> bias, Span<float> output,
-        int batch, int inputChannels, int height, int width, int outputChannels)
+        int batch, int inputChannels, int height, int width, int outputChannels,
+        int spatialBegin = 0, int spatialEnd = -1)
     {
         int plane = checked(height * width), blocks = outputChannels / 4;
         // Every four-output block streams the full input plane, so large
@@ -429,12 +703,15 @@ internal static partial class Conv1x1
         int tileSpatial = plane;
         if (blocks > 1 && (long)inputChannels * plane * 4 > 1_048_576)
             tileSpatial = Math.Max(64, 49152 / inputChannels & ~15);
+        if (spatialEnd < 0) spatialEnd = plane;
+        if ((uint)spatialBegin > (uint)spatialEnd || spatialEnd > plane)
+            throw new ArgumentOutOfRangeException(nameof(spatialBegin));
         fixed (float* inputPtr = input, weightsPtr = packedWeights, biasPtr = bias, outputPtr = output)
         {
             for (int b = 0; b < batch; b++)
-                for (int tileStart = 0; tileStart < plane; tileStart += tileSpatial)
+                for (int tileStart = spatialBegin; tileStart < spatialEnd; tileStart += tileSpatial)
                 {
-                    int tileEnd = Math.Min(plane, tileStart + tileSpatial);
+                    int tileEnd = Math.Min(spatialEnd, tileStart + tileSpatial);
                     for (int block = 0; block < blocks; block++)
                     {
                         int co = block * 4, inputBatch = b * inputChannels * plane;

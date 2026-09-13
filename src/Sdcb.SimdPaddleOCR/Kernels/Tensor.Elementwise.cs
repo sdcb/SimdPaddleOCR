@@ -292,4 +292,78 @@ internal static partial class SimdKernels
             }
         }
     }
+
+    /// <summary>
+    /// Fast rank-4 NumPy broadcast.  Attention blocks commonly multiply
+    /// [N,heads,H,W] by a tensor with one or more leading dimensions equal to
+    /// one.  Decoding every output index into four modulo/division operations
+    /// made batched REC spend more time in Mul than in its convolutions.
+    /// </summary>
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    public static bool TryElementwiseBroadcast4<TOp>(ReadOnlySpan<float> left,
+        ReadOnlySpan<int> leftShape, ReadOnlySpan<float> right, ReadOnlySpan<int> rightShape,
+        Span<float> output, ReadOnlySpan<int> outputShape) where TOp : struct, IBinaryOp
+    {
+        if (leftShape.Length != 4 || rightShape.Length != 4 || outputShape.Length != 4)
+            return false;
+        for (int axis = 0; axis < 4; axis++)
+        {
+            int od = outputShape[axis], ad = leftShape[axis], bd = rightShape[axis];
+            if ((ad != od && ad != 1) || (bd != od && bd != 1)) return false;
+        }
+        int aw = leftShape[3], bw = rightShape[3], ow = outputShape[3];
+        int aS2 = leftShape[3], aS1 = leftShape[2] * aS2, aS0 = leftShape[1] * aS1;
+        int bS2 = rightShape[3], bS1 = rightShape[2] * bS2, bS0 = rightShape[1] * bS1;
+        int oS2 = ow, oS1 = outputShape[2] * oS2, oS0 = outputShape[1] * oS1;
+        TOp op = default;
+        for (int n = 0; n < outputShape[0]; n++)
+            for (int c = 0; c < outputShape[1]; c++)
+                for (int y = 0; y < outputShape[2]; y++)
+                {
+                    int ai = (leftShape[0] == 1 ? 0 : n) * aS0
+                        + (leftShape[1] == 1 ? 0 : c) * aS1
+                        + (leftShape[2] == 1 ? 0 : y) * aS2;
+                    int bi = (rightShape[0] == 1 ? 0 : n) * bS0
+                        + (rightShape[1] == 1 ? 0 : c) * bS1
+                        + (rightShape[2] == 1 ? 0 : y) * bS2;
+                    int oi = n * oS0 + c * oS1 + y * oS2;
+                    if (aw == 1 && bw == 1)
+                        output.Slice(oi, ow).Fill(op.Apply(left[ai], right[bi]));
+                    else if (aw == 1)
+                        ElementwiseLeftScalar<TOp>(left[ai], right.Slice(bi, ow), output.Slice(oi, ow));
+                    else if (bw == 1)
+                        ElementwiseScalar<TOp>(left.Slice(ai, ow), right[bi], output.Slice(oi, ow));
+                    else
+                        Elementwise<TOp>(left.Slice(ai, ow), right.Slice(bi, ow), output.Slice(oi, ow));
+                }
+        return true;
+    }
+
+    [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+    private static unsafe void ElementwiseLeftScalar<TOp>(float left, ReadOnlySpan<float> right,
+        Span<float> output) where TOp : struct, IBinaryOp
+    {
+        TOp op = default;
+        int i = 0, length = right.Length;
+        fixed (float* rightPtr = right, outputPtr = output)
+        {
+#if !NETSTANDARD2_0
+            if (Avx.IsSupported)
+            {
+                Vector256<float> scalar = Vector256.Create(left);
+                for (; i <= length - 8; i += 8)
+                    Avx.Store(outputPtr + i, op.Apply(scalar, Avx.LoadVector256(rightPtr + i)));
+            }
+            else
+#endif
+            if (Vector.IsHardwareAccelerated)
+            {
+                Vector<float> scalar = new(left);
+                int lanes = Vector<float>.Count;
+                for (; i <= length - lanes; i += lanes)
+                    VecStore(outputPtr + i, op.Apply(scalar, VecLoad(rightPtr + i)));
+            }
+            for (; i < length; i++) outputPtr[i] = op.Apply(left, rightPtr[i]);
+        }
+    }
 }
