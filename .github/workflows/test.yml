@@ -310,8 +310,8 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      # GitHub Pro macOS concurrency is 5; extra replicas would just queue.
-      matrix: { replica: [1, 2, 3, 4, 5] }
+      # GitHub Pro macOS concurrency is 5; extra replicas would just queue, and needs to reserve 2 for other jobs.
+      matrix: { replica: [1, 2, 3] }
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
