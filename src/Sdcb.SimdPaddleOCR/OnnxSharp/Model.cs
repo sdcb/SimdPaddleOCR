@@ -495,6 +495,26 @@ public sealed class Model : IDisposable
                 if (!initializers.ContainsKey(shapeInput))
                     node.Inputs.RemoveRange(1, node.Inputs.Count - 1);
             }
+            else if (node.OpType is "Squeeze" or "Unsqueeze" && node.Inputs.Count > 1 &&
+                     initializers.TryGetValue(Resolve(node.Inputs[1]), out OnnxTensorData? axesTensor))
+            {
+                // PaddlePIR-mode exports (opset 13) pass Squeeze/Unsqueeze axes
+                // as a constant input tensor instead of the opset-11 axes
+                // attribute. Leaving that input in place made the shape
+                // inference see zero axes, so Squeeze removed *every*
+                // singleton dimension (e.g. [1,480,1,W] -> [480,W]) and the
+                // following 1x3 Conv received a rank-2 activation. Fold the
+                // constant axes into the attribute so both the parameter
+                // block and shape inference agree. An empty axes tensor means
+                // "squeeze all singleton dimensions", which is exactly the
+                // no-attribute fallback, so it is left untouched.
+                long[] axes = TensorIntegers(axesTensor);
+                if (axes.Length is > 0 and <= 8)
+                {
+                    node.Inputs.RemoveRange(1, node.Inputs.Count - 1);
+                    SetIntsAttribute(node, "axes", axes);
+                }
+            }
             else if (node.OpType == "Resize" && node.Inputs.Count >= 3 &&
                      initializers.TryGetValue(node.Inputs[2], out OnnxTensorData? scaleTensor))
             {
@@ -1045,6 +1065,27 @@ public sealed class Model : IDisposable
         float[] values = new float[data.Length / 4];
         for (int i = 0; i < values.Length; i++)
             values[i] = BitConverterCompat.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(i * 4, 4)));
+        return values;
+    }
+
+    /// <summary>
+    /// Decodes the integer payload of an initializer. Used for ops that take
+    /// small integer metadata as a constant input tensor (Squeeze/Unsqueeze
+    /// axes in opset 13 PIR exports). Returns an empty array for non-integer
+    /// or malformed payloads so callers can fall back to their defaults.
+    /// </summary>
+    private static long[] TensorIntegers(OnnxTensorData tensor)
+    {
+        (DType type, byte[] data) = TensorBytes(tensor);
+        int elementSize = type switch { DType.I64 => 8, DType.I32 => 4, DType.U8 => 1, _ => 0 };
+        if (elementSize == 0 || data.Length == 0 || data.Length % elementSize != 0) return [];
+        long[] values = new long[data.Length / elementSize];
+        for (int i = 0; i < values.Length; i++)
+            values[i] = elementSize == 8
+                ? BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(i * 8, 8))
+                : elementSize == 4
+                    ? BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(i * 4, 4))
+                    : data[i];
         return values;
     }
 
