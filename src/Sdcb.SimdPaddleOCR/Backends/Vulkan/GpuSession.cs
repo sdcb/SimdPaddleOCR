@@ -45,8 +45,9 @@ internal sealed class GpuSession : IOcrSession
     }
 
     public TensorShape InputShape => new(_shape);
+    private int[]? _outputShape;
     public TensorShape OutputShape =>
-        new(_compiled.ResolveShapesFor(_shape)[checked((int)_model.GraphOutputs[0])]);
+        new(_outputShape ??= _compiled.ResolveShapesFor(_shape)[checked((int)_model.GraphOutputs[0])]);
     public Span<float> InputData => _input.AsSpan(0, _curVolume);
     public ResizeWorkspace ResizeWorkspace => _resizeWorkspace;
     public bool InputIsNhwc => false;   // convk_f32n reads NCHW fp32 directly
@@ -67,6 +68,7 @@ internal sealed class GpuSession : IOcrSession
             _input = new float[vol];
             _hwVolume = checked((int)Math.Min(vol, int.MaxValue));
         }
+        _outputShape = null;
         _ctcResolved = false;
         _ctcMatMulIndex = -1;
     }

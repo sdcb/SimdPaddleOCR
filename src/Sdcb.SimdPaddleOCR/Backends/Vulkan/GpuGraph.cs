@@ -303,7 +303,11 @@ internal sealed class GpuDetGraph : IDisposable
         public long Im2colOff;
     }
 
-    private readonly Dictionary<long, Plan> _plans = new();
+    private readonly Dictionary<PlanKey, Plan> _plans = new();
+    public readonly record struct PlanKey(int N, int H, int W, int NodeLimit, int OutTensor);
+
+    private static PlanKey KeyOf(int[] inputShape, int nodeLimit, int outTensor)
+        => new(inputShape[0], inputShape[2], inputShape[3], nodeLimit, outTensor);
     private IntPtr _fence;
     private readonly bool _dbgTime =
         Environment.GetEnvironmentVariable("SIMD_OCR_GPU_TIME") == "1";
@@ -313,16 +317,10 @@ internal sealed class GpuDetGraph : IDisposable
     /// outTensor overrides the readback tensor — used to stop the REC graph before
     /// the vocab projection (activations readback) instead of the graph output.
     /// </summary>
-    private static long PlanKey(int[] inputShape, int nodeLimit, int outTensor)
-        => ((long)inputShape[0] << 40) | ((long)inputShape[2] << 20)
-            | (long)inputShape[3]
-            | ((long)(nodeLimit == int.MaxValue ? 0 : nodeLimit) << 56)
-            | ((long)(outTensor < 0 ? 0 : 1) << 55);
-
     public unsafe float[] Run(int[] inputShape, ReadOnlySpan<float> input,
         int nodeLimit = int.MaxValue, int outTensor = -1)
     {
-        long key = PlanKey(inputShape, nodeLimit, outTensor);
+        PlanKey key = KeyOf(inputShape, nodeLimit, outTensor);
         if (!_plans.TryGetValue(key, out Plan? plan))
         {
             plan = BuildPlan(inputShape, nodeLimit, outTensor);
@@ -354,8 +352,8 @@ internal sealed class GpuDetGraph : IDisposable
         return o;
     }
 
-    public int DispatchCount(long key) => _plans.TryGetValue(key, out Plan? p) ? p.Recs.Count : 0;
-    public long ArenaBytes(long key) => _plans.TryGetValue(key, out Plan? p) ? p.ArenaBytes : 0;
+    public int DispatchCount(PlanKey key) => _plans.TryGetValue(key, out Plan? p) ? p.Recs.Count : 0;
+    public long ArenaBytes(PlanKey key) => _plans.TryGetValue(key, out Plan? p) ? p.ArenaBytes : 0;
 
     private unsafe Plan BuildPlan(int[] inputShape, int nodeLimit, int outTensor)
     {
@@ -1895,7 +1893,7 @@ internal sealed class GpuDetGraph : IDisposable
     public unsafe float[] DebugValues(int tensorIndex, int[] inputShape, int count = 16,
         int nodeLimit = int.MaxValue, int outTensor = -1)
     {
-        Plan plan = _plans[PlanKey(inputShape, nodeLimit, outTensor)];
+        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
         int t = tensorIndex;
         while (plan.Alias[t] != t) t = plan.Alias[t];
         int n = Math.Min(count, (int)plan.Numel[tensorIndex]);
@@ -1925,13 +1923,13 @@ internal sealed class GpuDetGraph : IDisposable
     }
 
     public long Im2colOffset(int[] inputShape)
-        => _plans[PlanKey(inputShape, int.MaxValue, -1)].Im2colOff;
+        => _plans[KeyOf(inputShape, int.MaxValue, -1)].Im2colOff;
 
     /// <summary>Debug: read raw arena elements at element offset after a Run.</summary>
     public long DebugElemOff(int tensorIndex, int[] inputShape,
         int nodeLimit = int.MaxValue, int outTensor = -1)
     {
-        Plan plan = _plans[PlanKey(inputShape, nodeLimit, outTensor)];
+        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
         int t = tensorIndex;
         while (plan.Alias[t] != t) t = plan.Alias[t];
         return plan.Off[t];
@@ -1940,7 +1938,7 @@ internal sealed class GpuDetGraph : IDisposable
     public unsafe float[] DebugValuesRaw(int[] inputShape, long elemOff, int count,
         int nodeLimit = int.MaxValue, int outTensor = -1)
     {
-        Plan plan = _plans[PlanKey(inputShape, nodeLimit, outTensor)];
+        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
         VkBuffer tmp = _dev.NewStorageBuffer((ulong)count * 4, hostVisible: true, preferHost: true);
         IntPtr set = _dev.NewDescriptorSet(_pOut.SetLayout);
         _dev.BindBuffer(set, 0, plan.Arena, (ulong)elemOff * 2);
@@ -1969,7 +1967,7 @@ internal sealed class GpuDetGraph : IDisposable
     public unsafe (float Min, float Max, double Mean) DebugStats(int tensorIndex, int[] inputShape,
         int nodeLimit = int.MaxValue, int outTensor = -1)
     {
-        Plan plan = _plans[PlanKey(inputShape, nodeLimit, outTensor)];
+        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
         int t = tensorIndex;
         while (plan.Alias[t] != t) t = plan.Alias[t];
         int n = (int)plan.Numel[tensorIndex];
@@ -2001,7 +1999,7 @@ internal sealed class GpuDetGraph : IDisposable
     public unsafe void DumpProfile(int[] inputShape,
         int nodeLimit = int.MaxValue, int outTensor = -1)
     {
-        long key = PlanKey(inputShape, nodeLimit, outTensor);
+        PlanKey key = KeyOf(inputShape, nodeLimit, outTensor);
         if (!_plans.TryGetValue(key, out Plan? plan) || plan.QueryPool == IntPtr.Zero)
         { Console.WriteLine("(no profile — set SIMD_OCR_GPU_PROF=1)"); return; }
         ulong[] ts = new ulong[plan.QueryCount];
