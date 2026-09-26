@@ -271,10 +271,12 @@ public class KernelCorrectnessTests
     [InlineData(7, 96, 6624)]
     public void MatMul_ArgMaxMatchesReference(int rows, int inner, int columns)
     {
+        // Random data: a ramp over the inner dim produces near-tied column scores,
+        // and argmax then flips between rounding orders (FMA vs mul+add).
         const int batch = 2;
-        float[] input = Ramp(batch * rows * inner, 0.01f);
-        float[] weights = Ramp(inner * columns, 0.02f);
-        float[] bias = Ramp(columns, 0.03f);
+        float[] input = RandomFill(batch * rows * inner, 1f, seed: 1234);
+        float[] weights = RandomFill(inner * columns, 0.25f, seed: 5678);
+        float[] bias = RandomFill(columns, 0.5f, seed: 9012);
         float[] packed = PackMatMul(weights, inner, columns);
 
         float[] logits = new float[batch * rows * columns];
@@ -372,6 +374,15 @@ public class KernelCorrectnessTests
         float[] values = new float[length];
         for (int i = 0; i < length; i++)
             values[i] = (i % 17 - 8) * scale;
+        return values;
+    }
+
+    internal static float[] RandomFill(int length, float amplitude, int seed)
+    {
+        var rng = new Random(seed);
+        float[] values = new float[length];
+        for (int i = 0; i < length; i++)
+            values[i] = (float)(rng.NextDouble() * 2 - 1) * amplitude;
         return values;
     }
 
