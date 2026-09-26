@@ -288,6 +288,8 @@ internal sealed class GpuDetGraph : IDisposable
 
     private sealed class Plan
     {
+        // Arena/InF32/OutF32 reference the graph-shared grow-only buffers;
+        // a plan never owns them — eviction frees only Cmd/QueryPool/sets.
         public required VkBuffer Arena, InF32, OutF32;
         public required IntPtr Cmd;
         public required List<Rec> Recs;
@@ -301,16 +303,77 @@ internal sealed class GpuDetGraph : IDisposable
         public int[][] Shapes = [];
         public int[] RecOut = [];   // rec index -> output tensor index
         public long Im2colOff;
+        public long LastTick;
     }
 
     private readonly Dictionary<PlanKey, Plan> _plans = new();
     public readonly record struct PlanKey(int N, int H, int W, int NodeLimit, int OutTensor);
+
+    // Variable-shape inputs (DET resizes per image) would otherwise cache one
+    // plan per (H,W) forever — unbounded VRAM + descriptor-pool exhaustion.
+    // The arena and the fp32 input/output buffers are shared grow-only
+    // buffers: growing them invalidates every plan (their descriptor sets
+    // bind the retired buffer handle), and a small LRU caps live plans.
+    private const int MaxPlans = 16;
+    private long _tick;
+    private VkBuffer? _arena; private long _arenaElems;
+    private VkBuffer? _inF32; private long _inF32Elems;
+    private VkBuffer? _outF32; private long _outF32Elems;
+
+    private VkBuffer EnsureArena(long elems)
+    {
+        if (_arena is not null && elems <= _arenaElems) return _arena;
+        long alloc = Math.Max(elems, _arenaElems * 3 / 2);
+        InvalidateAllPlans();
+        _arena?.Free();
+        _arena = _dev.NewStorageBuffer((ulong)alloc * 2, hostVisible: false);
+        _arenaElems = alloc;
+        return _arena;
+    }
+
+    private VkBuffer EnsureHostBuf(ref VkBuffer? buf, ref long elems, long need, bool preferHost)
+    {
+        if (buf is not null && need <= elems) return buf;
+        long alloc = Math.Max(need, elems * 3 / 2);
+        InvalidateAllPlans();
+        buf?.Free();
+        buf = _dev.NewStorageBuffer((ulong)alloc * 4, hostVisible: true, preferHost: preferHost);
+        elems = alloc;
+        return buf;
+    }
+
+    private void InvalidateAllPlans()
+    {
+        foreach (Plan p in _plans.Values) FreePlan(p);
+        _plans.Clear();
+    }
+
+    private unsafe void FreePlan(Plan p)
+    {
+        foreach (Rec r in p.Recs) _dev.FreeDescriptorSet(r.Set);
+        _dev.FreeCommandBuffer(p.Cmd);
+        if (p.QueryPool != IntPtr.Zero)
+            Vk.vkDestroyQueryPool(_dev.Device, p.QueryPool, null);
+    }
+
+    private void EvictPlan()
+    {
+        PlanKey oldest = default;
+        long min = long.MaxValue;
+        foreach ((PlanKey k, Plan p) in _plans)
+            if (p.LastTick < min) { min = p.LastTick; oldest = k; }
+        if (_plans.Remove(oldest, out Plan? victim)) FreePlan(victim);
+    }
 
     private static PlanKey KeyOf(int[] inputShape, int nodeLimit, int outTensor)
         => new(inputShape[0], inputShape[2], inputShape[3], nodeLimit, outTensor);
     private IntPtr _fence;
     private readonly bool _dbgTime =
         Environment.GetEnvironmentVariable("SIMD_OCR_GPU_TIME") == "1";
+    // SIMD_OCR_NOCATABS=1 disables sole-consumer concat-slice writes —
+    // producers then write their own slot so DebugStats stays accurate.
+    private static readonly bool _noCatAbs =
+        Environment.GetEnvironmentVariable("SIMD_OCR_NOCATABS") != null;
 
     /// <summary>Run the graph: input fp32 NCHW [n,C,H,W] → fp32 [graph output].
     /// nodeLimit truncates the emit loop (nodes beyond it are not dispatched) and
@@ -323,9 +386,11 @@ internal sealed class GpuDetGraph : IDisposable
         PlanKey key = KeyOf(inputShape, nodeLimit, outTensor);
         if (!_plans.TryGetValue(key, out Plan? plan))
         {
+            if (_plans.Count >= MaxPlans) EvictPlan();
             plan = BuildPlan(inputShape, nodeLimit, outTensor);
             _plans[key] = plan;
         }
+        plan.LastTick = ++_tick;
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         void* dst = plan.InF32.Map();
         fixed (float* src = input)
@@ -499,13 +564,11 @@ internal sealed class GpuDetGraph : IDisposable
         // +128*512: coopmat A-tile reads pad rows past M
         cursor = im2colOff + maxIm2col + 128 * 512;
         long arenaElems = cursor + (1L << 20);
-        VkBuffer arena = _dev.NewStorageBuffer((ulong)arenaElems * 2, hostVisible: false);
-        _allBufs.Add(arena);
-        VkBuffer outF32 = _dev.NewStorageBuffer((ulong)numel[outIdx] * 4,
-            hostVisible: true, preferHost: true);
-        _allBufs.Add(outF32);
-        VkBuffer inF32 = _dev.NewStorageBuffer((ulong)numel[inIdx] * 4, hostVisible: true);
-        _allBufs.Add(inF32);
+        // Shared grow-only buffers: growing frees every plan (stale descriptor
+        // bindings) and reallocates; steady state is one buffer per kind.
+        VkBuffer arena = EnsureArena(arenaElems);
+        VkBuffer outF32 = EnsureHostBuf(ref _outF32, ref _outF32Elems, numel[outIdx], preferHost: true);
+        VkBuffer inF32 = EnsureHostBuf(ref _inF32, ref _inF32Elems, numel[inIdx], preferHost: false);
         bool inF32Consumed = false;  // stem conv reads fp32 NCHW directly
         bool convTOut = false;   // last convT wrote fp32 out directly
 
@@ -870,6 +933,8 @@ internal sealed class GpuDetGraph : IDisposable
         {
             NodeRecord node = nodes[ni];
             if (skipEmit.Contains(ni)) continue;
+            try
+            {
             int skip = _compiled.FusedSkip(ni);
             ReadOnlySpan<byte> p = _model.GetParameters(node);
             int outPhys = Phys(checked((int)nodes[ni + skip].Outputs[0]));
@@ -992,9 +1057,14 @@ internal sealed class GpuDetGraph : IDisposable
                     {
                         int ge = ni + skip;
                         int j = ge + 1;
+                        // residual Add may only be absorbed when the conv group
+                        // carries no activation: kernels evaluate act(conv+res),
+                        // but act(conv)+res is the ONNX semantics (e.g. relu then
+                        // add must NOT become relu of the sum).
                         if (j < nodes.Length && nodes[j].Operator == OperatorId.Add
                             && !inConvGroup[j] && _compiled.FusedSkip(j) == 0
-                            && !addScale.ContainsKey(j))
+                            && !addScale.ContainsKey(j) && act == 0
+                            && Environment.GetEnvironmentVariable("SIMD_OCR_NOEXTR") == null)
                         {
                             NodeRecord ad = nodes[j];
                             int prev = Phys(checked((int)nodes[ge].Outputs[0]));
@@ -1009,6 +1079,7 @@ internal sealed class GpuDetGraph : IDisposable
                         }
                         if (j < nodes.Length
                             && nodes[j].Operator == OperatorId.Div
+                            && Environment.GetEnvironmentVariable("SIMD_OCR_NOEXTG") == null
                             && _compiled.FusedSkip(j) == 4
                             && Phys(checked((int)nodes[j].Inputs[0]))
                                 == Phys(checked((int)nodes[ge].Outputs[0])))
@@ -1172,7 +1243,7 @@ internal sealed class GpuDetGraph : IDisposable
                             long wO = off[outPhys]; uint dcv = 0, dco = 0;
                             {
                                 List<int>? cs = consumers[outPhys];
-                                if (refCount[outPhys] == 1 && cs != null
+                                if (!_noCatAbs && refCount[outPhys] == 1 && cs != null
                                     && cs.Count == 1
                                     && nodes[cs[0]].Operator == OperatorId.Concat)
                                 {
@@ -1427,7 +1498,7 @@ internal sealed class GpuDetGraph : IDisposable
                         {
                             int rp = outPhys;
                             List<int>? cs = consumers[rp];
-                            if (refCount[rp] == 1 && cs != null && cs.Count == 1
+                            if (!_noCatAbs && refCount[rp] == 1 && cs != null && cs.Count == 1
                                 && nodes[cs[0]].Operator == OperatorId.Concat)
                             {
                                 int cn = cs[0];
@@ -1514,7 +1585,7 @@ internal sealed class GpuDetGraph : IDisposable
                             }
                         }
                         long wO = off[outPhys]; uint dcv = 0, dco = 0;
-                        if (cn >= 0 && nodes[cn].Operator == OperatorId.Concat)
+                        if (!_noCatAbs && cn >= 0 && nodes[cn].Operator == OperatorId.Concat)
                         {
                             int[] ospc = shapes[nodes[cn].Outputs[0]];
                             int co = 0; bool hit = false;
@@ -1783,6 +1854,13 @@ internal sealed class GpuDetGraph : IDisposable
                 default:
                     throw new NotSupportedException($"op {node.Operator} at node {ni}");
             }
+            }
+            catch (Exception ex)
+            {
+                throw new NotSupportedException(
+                    $"BuildPlan failed at node {ni} op={node.Operator} " +
+                    $"in=[{string.Join(',', node.Inputs)}] out=[{string.Join(',', node.Outputs)}]", ex);
+            }
         }
 
         // finalize: graph output → fp32 readback.
@@ -2040,6 +2118,12 @@ internal sealed class GpuDetGraph : IDisposable
     private static uint HsAux(ReadOnlySpan<byte> p) =>
         (uint)Half2Bits(F32(p, 4)) | ((uint)Half2Bits(F32(p, 8)) << 16);
 
-    // VkBuffer lifetime is tied to the device (no per-buffer Dispose in the port).
-    public void Dispose() => _allBufs.Clear();
+    public void Dispose()
+    {
+        InvalidateAllPlans();
+        _arena?.Free(); _inF32?.Free(); _outF32?.Free();
+        _arena = _inF32 = _outF32 = null;
+        foreach (VkBuffer b in _allBufs) b.Free();
+        _allBufs.Clear();
+    }
 }

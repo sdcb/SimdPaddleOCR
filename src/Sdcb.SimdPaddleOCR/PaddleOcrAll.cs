@@ -413,7 +413,10 @@ public sealed class PaddleOcrAll : IDisposable
             }
 
             List<int[]> units;
-            if (_recGpu)
+            // GpuRecAlive flips false once a session reports its rec plan fell
+            // back to CPU — giant single-unit batches only help real GPU runs;
+            // on the CPU fallback they'd serialize lines and pad to max width.
+            if (_recGpu && _recognizer.GpuRecAlive)
             {
                 // GPU: a whole-graph dispatch has fixed submit/plan overhead, so
                 // tiny exact-width groups lose. Sort by width and chunk by

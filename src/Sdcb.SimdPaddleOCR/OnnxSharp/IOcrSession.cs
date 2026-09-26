@@ -18,6 +18,9 @@ internal interface IOcrSession : IDisposable
     int HighWaterInputVolume { get; }
     /// <summary>Hint: only nodes before the CTC projection need to run.</summary>
     bool PlanForCtcProjection { get; set; }
+    /// <summary>False once a GPU session has permanently fallen back to CPU;
+    /// callers should stop choosing GPU-shaped (fewer, wider) batches.</summary>
+    bool GpuAlive { get; }
     bool IsProfilingEnabled { get; }
 
     void Reshape(ReadOnlySpan<int> inputShape);

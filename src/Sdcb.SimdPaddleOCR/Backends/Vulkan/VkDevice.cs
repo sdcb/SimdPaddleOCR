@@ -275,7 +275,9 @@ internal unsafe sealed class VkDevice : IDisposable
         Vk.VkDescriptorPoolCreateInfo dpci = new()
         {
             SType = VkConst.StDescriptorPoolCreateInfo,
-            Flags = 0, MaxSets = 4096, PoolSizeCount = 1, PPoolSizes = &psz,
+            // FREE_DESCRIPTOR_SET_BIT: the GPU graph evicts cached plans
+            // (variable-shape runs) and releases their descriptor sets.
+            Flags = 1, MaxSets = 4096, PoolSizeCount = 1, PPoolSizes = &psz,
         };
         Vk.Check(Vk.vkCreateDescriptorPool(d.Device, &dpci, null, out d._descPool), "vkCreateDescriptorPool");
         return d;
@@ -426,6 +428,18 @@ internal unsafe sealed class VkDevice : IDisposable
         };
         Vk.Check(Vk.vkAllocateDescriptorSets(Device, &ai, &set), "vkAllocateDescriptorSets");
         return set;
+    }
+
+    public void FreeDescriptorSet(IntPtr set)
+    {
+        if (set != IntPtr.Zero)
+            Vk.Check(Vk.vkFreeDescriptorSets(Device, _descPool, 1, &set), "vkFreeDescriptorSets");
+    }
+
+    public void FreeCommandBuffer(IntPtr cmd)
+    {
+        if (cmd != IntPtr.Zero)
+            Vk.vkFreeCommandBuffers(Device, _commandPool, 1, &cmd);
     }
 
     /// <summary>VK_KHR_push_descriptor: write bindings inline into the command buffer
@@ -590,5 +604,11 @@ internal unsafe sealed class VkBuffer
         if (HostCoherent) return;
         Vk.VkMappedMemoryRange r = new() { SType = VkConst.StMappedMemoryRange, Memory = Memory, Offset = offset, Size = size };
         Vk.vkInvalidateMappedMemoryRanges(Dev, 1, &r);
+    }
+
+    public void Free()
+    {
+        if (Buffer != IntPtr.Zero) { Vk.vkDestroyBuffer(Dev, Buffer, null); Buffer = IntPtr.Zero; }
+        if (Memory != IntPtr.Zero) { Vk.vkFreeMemory(Dev, Memory, null); Memory = IntPtr.Zero; }
     }
 }

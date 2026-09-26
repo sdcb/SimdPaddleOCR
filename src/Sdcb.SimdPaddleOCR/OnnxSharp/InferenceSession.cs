@@ -584,6 +584,7 @@ public sealed partial class InferenceSession : IOcrSession
     bool IOcrSession.PlanForCtcProjection { get => PlanForCtcProjection; set => PlanForCtcProjection = value; }
     int IOcrSession.IntraOpThreads { get => IntraOpThreads; set => IntraOpThreads = value; }
     bool IOcrSession.InputIsNhwc => InputIsNhwc;
+    bool IOcrSession.GpuAlive => true;
     Span<float> IOcrSession.InputData => InputData;
     ResizeWorkspace IOcrSession.ResizeWorkspace => ResizeWorkspace;
     bool IOcrSession.IsProfilingEnabled => s_profileEnabled;

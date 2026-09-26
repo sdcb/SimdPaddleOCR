@@ -17,6 +17,11 @@ public sealed class PaddleOcrRecognizer : IDisposable
     private readonly bool _ownsModel;
     private readonly List<IOcrSession> _sessions = [];
     private readonly object _poolLock = new();
+    // Cleared the first time a GPU session reports it has fallen back to CPU
+    // (emission/compile failure for this model). PaddleOcrAll reads it to stop
+    // picking GPU-shaped (fewer, wider) line batches.
+    private volatile bool _gpuRecAlive = true;
+    internal bool GpuRecAlive => _gpuRecAlive;
     private int _pooledCount;
     private bool _disposed;
 
@@ -203,6 +208,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
         finally
         {
             long started = profile ? PipelineProfiler.Now() : 0;
+            if (!session.GpuAlive) _gpuRecAlive = false;
             ReturnSession(session);
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecRelease, started);
         }
@@ -333,6 +339,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
         {
             long started = profile ? PipelineProfiler.Now() : 0;
             PooledArrays.Return(resizedWidths);
+            if (!session.GpuAlive) _gpuRecAlive = false;
             ReturnSession(session);
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecRelease, started);
         }

@@ -20,6 +20,7 @@ internal sealed class GpuSession : IOcrSession
     private readonly Model _model;
     private readonly ResizeWorkspace _resizeWorkspace = new();
     private InferenceSession? _cpuFallback;
+    private float[] _cpuNhwc = [];   // NCHW→NHWC staging for the CPU fallback
 
     private int[] _shape = [];
     private float[] _input = [];
@@ -52,6 +53,7 @@ internal sealed class GpuSession : IOcrSession
     public ResizeWorkspace ResizeWorkspace => _resizeWorkspace;
     public bool InputIsNhwc => false;   // convk_f32n reads NCHW fp32 directly
     public int IntraOpThreads { get; set; }
+    public bool GpuAlive => !_gpuDead;
     public int HighWaterInputVolume => _hwVolume;
     public bool PlanForCtcProjection { get; set; }
     public bool IsProfilingEnabled => InferenceSession.ProfilingEnabled;
@@ -76,16 +78,17 @@ internal sealed class GpuSession : IOcrSession
     public ReadOnlySpan<float> RunInternal(ReadOnlySpan<float> input)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(GpuSession));
-        if (_gpuDead) return Cpu().RunInternal(input);
+        if (_gpuDead) return Cpu().RunInternal(CpuInput(input));
         try
         {
             lock (_dev.Sync)
                 return _graph.Run(_shape, input);
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"[gpu] RunInternal fallback: {ex.GetType().Name} {ex.Message}");
             _gpuDead = true;
-            return Cpu().RunInternal(input);
+            return Cpu().RunInternal(CpuInput(input));
         }
     }
 
@@ -93,7 +96,7 @@ internal sealed class GpuSession : IOcrSession
     {
         operands = default;
         if (_disposed) throw new ObjectDisposedException(nameof(GpuSession));
-        if (_gpuDead) return Cpu().TryRunUntilCtcProjection(input, out operands);
+        if (_gpuDead) return Cpu().TryRunUntilCtcProjection(CpuInput(input), out operands);
         ResolveCtcProjection();
         if (_ctcMatMulIndex < 0) return false;
 
@@ -103,10 +106,11 @@ internal sealed class GpuSession : IOcrSession
             lock (_dev.Sync)
                 act = _graph.Run(_shape, input, _ctcMatMulIndex, _ctcActTensor);
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"[gpu] CtcProj fallback: {ex.GetType().Name} {ex.Message}");
             _gpuDead = true;
-            return Cpu().TryRunUntilCtcProjection(input, out operands);
+            return Cpu().TryRunUntilCtcProjection(CpuInput(input), out operands);
         }
         operands = new CtcProjectionOperands(act,
             MemoryMarshal.Cast<byte, float>(_ctcWBytes),
@@ -128,7 +132,23 @@ internal sealed class GpuSession : IOcrSession
     public ReadOnlySpan<float> RunInternalSkipFinalSoftmax(ReadOnlySpan<float> input, out bool outputIsLogits)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(GpuSession));
-        return Cpu().RunInternalSkipFinalSoftmax(input, out outputIsLogits);
+        return Cpu().RunInternalSkipFinalSoftmax(CpuInput(input), out outputIsLogits);
+    }
+
+    /// <summary>
+    /// Callers always write logical NCHW (this session reports
+    /// <see cref="InputIsNhwc"/> = false). When the compiled model flags its
+    /// graph input as NHWC-physical, the CPU fallback must be fed the
+    /// transposed layout or it decodes garbage.
+    /// </summary>
+    private ReadOnlySpan<float> CpuInput(ReadOnlySpan<float> input)
+    {
+        if (!_compiled.InputIsNhwc) return input;
+        if (_cpuNhwc.Length < input.Length) _cpuNhwc = new float[input.Length];
+        Span<float> dest = _cpuNhwc.AsSpan(0, input.Length);
+        Kernels.Nhwc.NchwToNhwc(input, dest, _shape[0], _shape[1],
+            checked(_shape[2] * _shape[3]), Math.Max(IntraOpThreads, 1));
+        return dest;
     }
 
     public void NoteProfile(OperatorId operation, long started, int nodeIndex)

@@ -359,6 +359,9 @@ internal static unsafe partial class Vk
 
     [LibraryImport(LibName)] public static partial VkResult vkCreateBuffer(IntPtr device, VkBufferCreateInfo* ci, void* alloc, out IntPtr buffer);
     [LibraryImport(LibName)] public static partial void vkDestroyBuffer(IntPtr device, IntPtr buffer, void* alloc);
+    [LibraryImport(LibName)] public static partial void vkFreeCommandBuffers(IntPtr device, IntPtr pool, uint count, IntPtr* buffers);
+    [LibraryImport(LibName)] public static partial VkResult vkFreeDescriptorSets(IntPtr device, IntPtr pool, uint count, IntPtr* sets);
+    [LibraryImport(LibName)] public static partial void vkDestroyCommandPool(IntPtr device, IntPtr pool, void* alloc);
     [LibraryImport(LibName)] public static partial void vkGetBufferMemoryRequirements(IntPtr device, IntPtr buffer, VkMemoryRequirements* req);
     [LibraryImport(LibName)] public static partial VkResult vkAllocateMemory(IntPtr device, VkMemoryAllocateInfo* ai, void* alloc, out IntPtr memory);
     [LibraryImport(LibName)] public static partial void vkFreeMemory(IntPtr device, IntPtr memory, void* alloc);
