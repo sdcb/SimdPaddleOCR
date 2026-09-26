@@ -271,11 +271,11 @@ internal unsafe sealed class VkDevice : IDisposable
         };
         Vk.Check(Vk.vkCreateCommandPool(d.Device, &cpci, null, out d._commandPool), "vkCreateCommandPool");
 
-        Vk.VkDescriptorPoolSize psz = new() { Type = VkConst.DescStorageBuffer, DescriptorCount = 1 << 15 };
+        Vk.VkDescriptorPoolSize psz = new() { Type = VkConst.DescStorageBuffer, DescriptorCount = 1 << 20 };
         Vk.VkDescriptorPoolCreateInfo dpci = new()
         {
             SType = VkConst.StDescriptorPoolCreateInfo,
-            Flags = 0, MaxSets = 4096, PoolSizeCount = 1, PPoolSizes = &psz,
+            Flags = 0, MaxSets = 1 << 16, PoolSizeCount = 1, PPoolSizes = &psz,
         };
         Vk.Check(Vk.vkCreateDescriptorPool(d.Device, &dpci, null, out d._descPool), "vkCreateDescriptorPool");
         return d;
@@ -375,9 +375,7 @@ internal unsafe sealed class VkDevice : IDisposable
         {
             SType = VkConst.StDescriptorSetLayoutCreateInfo,
             BindingCount = (uint)bindings, PBindings = dslb,
-            // VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR — required when the
-            // layout is written via vkCmdPushDescriptorSetKHR.
-            Flags = PushDescriptors ? 1u : 0u,
+            Flags = 0u,
         };
         Vk.Check(Vk.vkCreateDescriptorSetLayout(Device, &dslci, null, out setLayout), "vkCreateDescriptorSetLayout");
 
