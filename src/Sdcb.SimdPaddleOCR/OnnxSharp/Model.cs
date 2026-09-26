@@ -21,8 +21,13 @@ public sealed class Model : IDisposable
     // on the activation H/W, so one pack can be reused by every CompiledModel
     // (i.e. every input shape) of this model. Keyed by (weightTensorIndex,
     // packKind); computed lazily and thread-safe.
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<(int WeightIndex, int Kind), float[]?> _packedWeights = new();
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, PackedConv1x1Int8?> _packedConv1x1Int8 = new();
+    // Lazy<> values: GetOrAdd runs the factory once per concurrent caller on
+    // a cold miss, so packing directly under it lets every line worker that
+    // misses simultaneously build (and discard) a duplicate multi-MB pack —
+    // measured at ~110 MB of garbage on the first image's rec_reshape alone.
+    // The Lazy is what gets deduplicated; its Value computes exactly once.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(int WeightIndex, int Kind), Lazy<float[]?>> _packedWeights = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<int, Lazy<PackedConv1x1Int8?>> _packedConv1x1Int8 = new();
 
     private Model(ModelInfo info, uint[] inputs, uint[] outputs,
         TensorRecord[] tensors, NodeRecord[] nodes, byte[][] tensorData, byte[][] nodeParameters)
@@ -81,7 +86,9 @@ public sealed class Model : IDisposable
         if (node.Inputs.Length < 2) return null;
         int weightIndex = checked((int)node.Inputs[1]);
         NodeRecord captured = node; // capture by value; lambda cannot take 'in'
-        return _packedWeights.GetOrAdd((weightIndex, packKind), _ => ComputePacked(captured, packKind));
+        return _packedWeights.GetOrAdd((weightIndex, packKind),
+            _ => new Lazy<float[]?>(() => ComputePacked(captured, packKind),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
     /// <summary>Returns symmetric per-output-channel INT8 weights in VNNI dpbusd layout.</summary>
@@ -90,7 +97,9 @@ public sealed class Model : IDisposable
         if (node.Inputs.Length < 2) return null;
         int weightIndex = checked((int)node.Inputs[1]);
         NodeRecord captured = node;
-        return _packedConv1x1Int8.GetOrAdd(weightIndex, _ => ComputePackedConv1x1Int8(captured));
+        return _packedConv1x1Int8.GetOrAdd(weightIndex,
+            _ => new Lazy<PackedConv1x1Int8?>(() => ComputePackedConv1x1Int8(captured),
+                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
     }
 
     private PackedConv1x1Int8? ComputePackedConv1x1Int8(in NodeRecord node)
