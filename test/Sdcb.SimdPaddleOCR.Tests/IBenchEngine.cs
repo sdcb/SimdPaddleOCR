@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Sdcb.SimdPaddleOCR;
 using Sdcb.SimdPaddleOCR.ModelProvider;
 using Sdcb.SimdPaddleOCR.Models.ChineseV6Medium;
 using Sdcb.SimdPaddleOCR.Models.ChineseV6Small;
@@ -44,9 +45,13 @@ static class BenchEngines
 {
     public static IBenchEngine Create(string engine, string modelType, int workers, string cAssetsDir) => engine switch
     {
-        "sharp" => new SharpEngine(modelType, workers),
+        // sharp pins Cpu so historical baselines stay comparable; "auto" lets
+        // the factory pick (Vulkan when a usable device exists).
+        "sharp" => new SharpEngine(modelType, workers, OcrBackend.Cpu),
+        "vulkan" => new SharpEngine(modelType, workers, OcrBackend.Vulkan),
+        "auto" => new SharpEngine(modelType, workers, OcrBackend.Auto),
         "c" => new CEngine(cAssetsDir, workers, modelType),
-        _ => throw new ArgumentException("--engine must be sharp or c"),
+        _ => throw new ArgumentException("--engine must be sharp, vulkan, auto, or c"),
     };
 
     public static PaddleOcrModelBundle Bundle(string modelType) => modelType switch

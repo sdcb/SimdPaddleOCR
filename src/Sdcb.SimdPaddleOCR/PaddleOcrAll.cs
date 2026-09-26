@@ -538,11 +538,13 @@ public sealed class PaddleOcrAll : IDisposable
     {
         for (int i = first; i < count; i += stride)
         {
+            int rotation = 0;
             if ((labels[i] & 1u) != 0 && clsScores[i] > _options.ClassifierThreshold)
             {
                 PPOCRCrop.Rotate180(cropBuffer.AsSpan(offsets[i], bytes[i]), widths[i], heights[i]);
-                rotations[i] = 180;
+                rotation = 180;
             }
+            rotations[i] = rotation;   // rented array — must write every slot
             recWidths[i] = _recognizer.SelectWidthForCrop(widths[i], heights[i]);
         }
     }

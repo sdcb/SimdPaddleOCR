@@ -16,7 +16,7 @@ using ImageSharpImage = SixLabors.ImageSharp.Image;
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
-    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|c] [--smoke|--benchmark] [--benchmark-kind simd|engine] [--count N] [--warmup N] [--case-id ID] [--replica N] [--c-assets <dir>]");
+    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|vulkan|auto|c] [--smoke|--benchmark] [--benchmark-kind simd|engine] [--count N] [--warmup N] [--case-id ID] [--replica N] [--c-assets <dir>]");
     Console.WriteLine("       --summarize <file...> [--input <dataset>] [--out-md <path>]");
     return args.Length == 0 ? 2 : 0;
 }
@@ -64,8 +64,8 @@ if (workers is < 1 or > 16)
     throw new ArgumentException("--workers must be 1..16");
 if (modelType is not ("tiny" or "small" or "medium"))
     throw new ArgumentException("--model must be tiny, small, or medium");
-if (engineName is not ("sharp" or "c"))
-    throw new ArgumentException("--engine must be sharp or c");
+if (engineName is not ("sharp" or "vulkan" or "auto" or "c"))
+    throw new ArgumentException("--engine must be sharp, vulkan, auto, or c");
 if (benchmarkKind is not ("simd" or "engine"))
     throw new ArgumentException("--benchmark-kind must be simd or engine");
 if (count is < 1 or > 100)

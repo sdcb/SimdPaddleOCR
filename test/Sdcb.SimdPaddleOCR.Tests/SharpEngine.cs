@@ -13,18 +13,22 @@ sealed class SharpEngine : IBenchEngine
     private (double Milliseconds, long Calls)[] _prevStages;
     private (long Ticks, long Calls)[] _prevOp;
     private (long Ticks, long Calls)[] _prevConv;
+    private readonly OcrBackend _backend;
 
-    public SharpEngine(string modelType, int workers)
+    public SharpEngine(string modelType, int workers, OcrBackend backend)
     {
+        _backend = backend;
         _ocr = PaddleOcrAll.Load(BenchEngines.Bundle(modelType), new PaddleOcrOptions
         {
             LineWorkerCount = workers,
-            Detector = new PaddleOcrDetectorOptions { MaxSessionCacheEntries = CacheEntries },
-            Recognizer = new PaddleOcrRecognizerOptions { AdaptiveWidth = true, TargetWidth = 320 },
+            Detector = new PaddleOcrDetectorOptions { MaxSessionCacheEntries = CacheEntries, Backend = backend },
+            Recognizer = new PaddleOcrRecognizerOptions { AdaptiveWidth = true, TargetWidth = 320, Backend = backend },
+            Classifier = new PaddleOcrClassifierOptions { Backend = backend },
         });
         PipelineProfiler.Enable(true);
         InferenceSession.EnableProfiling(true);
         Extra["cacheEntries"] = CacheEntries;
+        Extra["backend"] = backend.ToString().ToLowerInvariant();
         Extra["effectiveWorkers"] = _ocr.EffectiveLineWorkerCount;
         _workers = workers;
         _prevStages = PipelineProfiler.Snapshot();
@@ -35,7 +39,7 @@ sealed class SharpEngine : IBenchEngine
     public string Name => "sharp";
     public JsonObject Extra { get; } = [];
     public string LoadedMessage(double workingSetMb) =>
-        $"loaded working_set={workingSetMb:F1} MB engine=sharp workers={_ocr.EffectiveLineWorkerCount}/{_workers} cpu={Environment.ProcessorCount}";
+        $"loaded working_set={workingSetMb:F1} MB engine=sharp backend={_backend.ToString().ToLowerInvariant()} workers={_ocr.EffectiveLineWorkerCount}/{_workers} cpu={Environment.ProcessorCount}";
 
     public BenchEngineOutput Run(byte[] bgr, int width, int height, int stride)
     {
