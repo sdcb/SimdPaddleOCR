@@ -30,6 +30,8 @@ public sealed class PaddleOcrAll : IDisposable
     private readonly int _cropWorkers;
     private readonly int _recIntraOpBase;
     private readonly int _recIntraOpMax;
+    private readonly bool _recGpu;
+    private readonly int _recBatchEffective;
     private readonly List<byte[]> _cropBuffers = [];
     private readonly object _cropLock = new();
     private bool _disposed;
@@ -128,6 +130,9 @@ public sealed class PaddleOcrAll : IDisposable
         _recognizer = new PaddleOcrRecognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)),
             dictionaryUtf8, _options.Recognizer, ownsModel: false,
             _recIntraOpBase);
+        _recGpu = OnnxSharp.OcrSessionFactory.IsGpuBackend(_options.Recognizer.Backend);
+        _recBatchEffective = _options.HasExplicitRecBatchLines ? _options.RecBatchLines
+            : _recGpu ? 16 : _options.RecBatchLines;
     }
 
     private static byte[] ReadDictionary(Stream source)
@@ -271,8 +276,10 @@ public sealed class PaddleOcrAll : IDisposable
             int recIntraOp = LineIntraOpBudget(count);
             // Same-width batched REC is opt-in: it is numerically exact, but
             // per-op whole-batch execution inflates the activation working set
-            // and measured slower than per-line REC on desktop CPUs.
-            int maxBatch = Math.Max(1, _options.RecBatchLines);
+            // and measured slower than per-line REC on desktop CPUs. On a GPU
+            // backend batching is the main win, so the default is raised there
+            // unless the caller set RecBatchLines explicitly.
+            int maxBatch = Math.Max(1, _recBatchEffective);
             if (maxBatch > 1)
             {
                 ProcessLinesBatched(count, workerCount, maxBatch, cropBuffer, cropOffsets,
@@ -386,22 +393,44 @@ public sealed class PaddleOcrAll : IDisposable
                         widths, heights, labels, clsScores, rotations, recWidths));
             }
 
-            Dictionary<int, List<int>> groups = [];
-            List<int[]> units = [];
-            for (int i = 0; i < count; i++)
+            List<int[]> units;
+            if (_recGpu)
             {
-                if (!groups.TryGetValue(recWidths[i], out List<int>? members))
-                    groups[recWidths[i]] = members = [];
-                members.Add(i);
-                if (members.Count == maxBatch)
+                // GPU: a whole-graph dispatch has fixed submit/plan overhead, so
+                // tiny exact-width groups lose. Sort by width and chunk by
+                // maxBatch; each unit runs at its max member width — right-side
+                // zero padding only adds blank columns to the CTC output.
+                int[] order = Enumerable.Range(0, count).ToArray();
+                Array.Sort(order, (a, b) => recWidths[a].CompareTo(recWidths[b]));
+                units = [];
+                for (int s = 0; s < count; s += maxBatch)
                 {
-                    units.Add([.. members]);
-                    members.Clear();
+                    int[] unit = order[s..Math.Min(s + maxBatch, count)];
+                    int wMax = 0;
+                    foreach (int li in unit) wMax = Math.Max(wMax, recWidths[li]);
+                    foreach (int li in unit) recWidths[li] = wMax;
+                    units.Add(unit);
                 }
             }
-            foreach (List<int> members in groups.Values)
-                if (members.Count > 0)
-                    units.Add([.. members]);
+            else
+            {
+                Dictionary<int, List<int>> groups = [];
+                units = [];
+                for (int i = 0; i < count; i++)
+                {
+                    if (!groups.TryGetValue(recWidths[i], out List<int>? members))
+                        groups[recWidths[i]] = members = [];
+                    members.Add(i);
+                    if (members.Count == maxBatch)
+                    {
+                        units.Add([.. members]);
+                        members.Clear();
+                    }
+                }
+                foreach (List<int> members in groups.Values)
+                    if (members.Count > 0)
+                        units.Add([.. members]);
+            }
 
             int unitWorkers = Math.Max(1, Math.Min(workerCount, units.Count));
             // Idle workers' cores go to the units actually running: a single

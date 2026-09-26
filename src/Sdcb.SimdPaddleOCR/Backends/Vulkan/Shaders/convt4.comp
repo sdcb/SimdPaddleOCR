@@ -1,0 +1,57 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// ConvTranspose 2x2 stride 2, NHWC fp16, 4 output channels per thread.
+//   OUT[oy,ox,co4*4..+4] = act(bias4 + sum_ci X[iy,ix,ci] * Wt4[tap, ci, co4])
+// Weights repacked to [tap][ci][co] fp16 (tap = dy*2+dx), vec4 per (ci, co4).
+// Requires Cin%4==0, Cout%4==0.  PC: outW, outH, Cout, Cin, inW, flags(bit0 bias, bit3 scalarBias, bits4-6 act)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { float16_t bias[]; };
+layout(set = 0, binding = 3) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint Cout; uint Cin; uint inW; uint flags;
+} p;
+
+float16_t actf(float v, uint act)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint nv = p.Cout >> 2;
+    if (gid >= p.outW * p.outH * nv) return;
+    uint co4 = gid % nv;
+    uint px = gid / nv;
+    uint oy = px / p.outW, ox = px % p.outW;
+    uint iy = oy >> 1, ix = ox >> 1;
+    uint dy = oy & 1u, dx = ox & 1u;
+
+    vec4 acc = vec4(0.0);
+    uint xb = (iy * p.inW + ix) * (p.Cin >> 2);
+    uint tap = dy * 2u + dx;
+    uint civ = p.Cin >> 2;
+    for (uint ci4 = 0u; ci4 < civ; ci4++) {
+        vec4 xv = vec4(x[xb + ci4]);
+        uint wbase = (tap * p.Cin + ci4 * 4u) * nv + co4;
+        for (uint i = 0u; i < 4u; i++)
+            acc += xv[i] * vec4(w[wbase + i * nv]);
+    }
+    if ((p.flags & 1u) != 0u) {
+        if ((p.flags & 8u) != 0u) acc += vec4(float(bias[0]));
+        else acc += vec4(float(bias[co4 * 4u]), float(bias[co4 * 4u + 1u]),
+                         float(bias[co4 * 4u + 2u]), float(bias[co4 * 4u + 3u]));
+    }
+    uint act = (p.flags >> 4) & 7u;
+    o[gid] = f16vec4(actf(acc.x, act), actf(acc.y, act), actf(acc.z, act), actf(acc.w, act));
+}

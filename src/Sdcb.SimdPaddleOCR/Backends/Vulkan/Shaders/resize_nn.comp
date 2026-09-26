@@ -1,0 +1,27 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Nearest-neighbour integer-factor upscale on NHWC fp16.
+//   o[oy,ox,c] = x[oy/fh, ox/fw, c]
+// PC: outW, outH, C, fh, fw
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float16_t x[]; };
+layout(set = 0, binding = 1) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC { uint outW; uint outH; uint C; uint fh; uint fw; } p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = p.outW * p.outH * p.C;
+    if (gid >= total) return;
+    uint c = gid % p.C;
+    uint px = gid / p.C;
+    uint oy = px / p.outW, ox = px % p.outW;
+    uint inW = p.outW / p.fw;
+    o[gid] = x[((oy / p.fh) * inW + (ox / p.fw)) * p.C + c];
+}

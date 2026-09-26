@@ -1,0 +1,68 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Small dense conv on NHWC fp16 (2x2/3x3, any stride/pad):
+//   OUT[px, co] = act(bias[co] + sum_{ci,dy,dx} w[co,ci,dy,dx] * X[oy*s+dy-pt, ox*s+dx-pl, ci])
+// One thread per output element. W stored OIHW flattened [Cout, Cin*kH*kW].
+// PC: outW, outH, Cout, Cin, kH, kW, sh, sw, pt, pl, inW, inH, flags(bit0 bias, bits4-6 act)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float16_t x[]; };
+layout(set = 0, binding = 1) readonly buffer W { float16_t w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { float16_t bias[]; };
+layout(set = 0, binding = 3) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint Cout; uint Cin;
+    uint kH; uint kW; uint sh; uint sw; uint pt; uint pl; uint inW; uint inH; uint flags;
+} p;
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+float16_t actf(float v, uint act, uint flg)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 2u) return float16_t(0.5 * v * (1.0 + erf1(v * 0.70710678118654752)));
+    if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return float16_t(v * hs); }
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = p.outW * p.outH * p.Cout;
+    if (gid >= total) return;
+    uint co = gid % p.Cout;
+    uint px = gid / p.Cout;
+    uint oy = px / p.outW, ox = px % p.outW;
+    int iy0 = int(oy * p.sh) - int(p.pt);
+    int ix0 = int(ox * p.sw) - int(p.pl);
+    uint kSpan = p.kH * p.kW;     // per-ci weight stride in OIHW
+
+    float acc = 0.0;
+    for (uint dy = 0u; dy < p.kH; dy++) {
+        int iy = iy0 + int(dy);
+        if (iy < 0 || iy >= int(p.inH)) continue;
+        for (uint dx = 0u; dx < p.kW; dx++) {
+            int ix = ix0 + int(dx);
+            if (ix < 0 || ix >= int(p.inW)) continue;
+            uint xbase = (uint(iy) * p.inW + uint(ix)) * p.Cin;
+            uint wbase = co * (p.Cin * kSpan) + dy * p.kW + dx;
+            for (uint ci = 0u; ci < p.Cin; ci++)
+                acc += float(w[wbase + ci * kSpan]) * float(x[xbase + ci]);
+        }
+    }
+    if ((p.flags & 1u) != 0u) acc += float(bias[co]);
+    o[gid] = actf(acc, (p.flags >> 4) & 7u, p.flags);
+}

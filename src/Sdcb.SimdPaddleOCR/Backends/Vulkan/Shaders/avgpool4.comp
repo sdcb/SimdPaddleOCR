@@ -1,0 +1,52 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// AveragePool on NHWC fp16, 4 channels per thread (C%4==0):
+//   OUT[oy, ox, c4:c4+4] = mean over the kH x kW window, OOB pixels excluded
+//   (onnx AveragePool default is count_include_pad=0).
+// Padding is symmetric-ish: pt/pl top/left; window clipped at bottom/right.
+// gy = batch index; all tensors are per-batch slabs in the arena.
+// PC: outW, outH, C, kH, kW, sh, sw, pt, pl, inW, inH
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint C; uint kH; uint kW;
+    uint sh; uint sw; uint pt; uint pl; uint inW; uint inH;
+} p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint b = gl_GlobalInvocationID.y;       // batch index
+    uint cv = p.C >> 2;
+    uint total = p.outW * p.outH * cv;
+    if (gid >= total) return;
+    uint c4 = gid % cv;
+    uint px = gid / cv;
+    uint oy = px / p.outW, ox = px % p.outW;
+    int iy0 = int(oy * p.sh) - int(p.pt);
+    int ix0 = int(ox * p.sw) - int(p.pl);
+    uint xb = b * p.inH * p.inW * cv;
+
+    vec4 acc = vec4(0.0);
+    uint cnt = 0u;
+    for (uint dy = 0u; dy < p.kH; dy++) {
+        int iy = iy0 + int(dy);
+        if (iy < 0 || iy >= int(p.inH)) continue;
+        uint rowBase = xb + uint(iy) * p.inW * cv;
+        for (uint dx = 0u; dx < p.kW; dx++) {
+            int ix = ix0 + int(dx);
+            if (ix < 0 || ix >= int(p.inW)) continue;
+            acc += vec4(x[rowBase + uint(ix) * cv + c4]);
+            cnt++;
+        }
+    }
+    if (cnt == 0u) cnt = 1u;
+    o[b * total + gid] = f16vec4(acc / float(cnt));
+}

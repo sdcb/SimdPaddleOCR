@@ -1,0 +1,39 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// MaxPool 2x2 stride 1, pad-end (right/bottom 1), NHWC fp16, 4 ch (C%4==0).
+// PC: W, H, C, dstCv, dstCoff
+//   dstCv != 0: write into a wider-C tensor (concat slice).
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC { uint W; uint H; uint C; uint dstCv; uint dstCoff; } p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint cv = p.C >> 2;
+    if (gid >= p.W * p.H * cv) return;
+    uint c4 = gid % cv;
+    uint px = gid / cv;
+    uint y = px / p.W, xx = px % p.W;
+
+    f16vec4 m = f16vec4(float16_t(-1.0e4));
+    for (uint dy = 0u; dy < 2u; dy++) {
+        uint iy = y + dy;
+        if (iy >= p.H) continue;
+        for (uint dx = 0u; dx < 2u; dx++) {
+            uint ix = xx + dx;
+            if (ix >= p.W) continue;
+            f16vec4 v = x[(iy * p.W + ix) * cv + c4];
+            m = max(m, v);
+        }
+    }
+    uint dcv = p.dstCv != 0u ? p.dstCv : cv;
+    o[px * dcv + p.dstCoff + c4] = m;
+}

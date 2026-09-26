@@ -1,0 +1,36 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// MaxPool 2x2 stride 1, pad-end (right/bottom 1) on NHWC fp16 — same HxW out.
+// PC: W, H, C
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float16_t x[]; };
+layout(set = 0, binding = 1) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC { uint W; uint H; uint C; } p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = p.W * p.H * p.C;
+    if (gid >= total) return;
+    uint c = gid % p.C;
+    uint px = gid / p.C;
+    uint y = px / p.W, xx = px % p.W;
+
+    float m = -1.0e30;
+    for (uint dy = 0u; dy < 2u; dy++) {
+        uint iy = y + dy;
+        if (iy >= p.H) continue;
+        for (uint dx = 0u; dx < 2u; dx++) {
+            uint ix = xx + dx;
+            if (ix >= p.W) continue;
+            m = max(m, float(x[(iy * p.W + ix) * p.C + c]));
+        }
+    }
+    o[gid] = float16_t(m);
+}

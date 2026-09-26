@@ -1,0 +1,37 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Fused nearest-neighbour integer-factor upscale + elementwise add (FPN
+// top-down merge): o = a + resize(x).  NHWC fp16, 4 ch per thread (C%4==0).
+// PC: outW, outH, C, fh, fw
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer A { f16vec4 a[]; };
+layout(set = 0, binding = 2) writeonly buffer O { f16vec4 o[]; };
+layout(set = 0, binding = 3) readonly buffer RA { f16vec4 ra[]; };
+layout(set = 0, binding = 4) readonly buffer SE { f16vec4 se[]; };
+
+layout(push_constant) uniform PC { uint outW; uint outH; uint C; uint fh; uint fw;
+    uint flags; } p;
+// flags bit8: x input is unfused addps -> x[i]*se[c4]+ra[i]
+//       bit9: a input is unfused addps -> a[i]*se[c4]+ra[i]
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint cv = p.C >> 2;
+    if (gid >= p.outW * p.outH * cv) return;
+    uint c4 = gid % cv;
+    uint px = gid / cv;
+    uint oy = px / p.outW, ox = px % p.outW;
+    uint inW = p.outW / p.fw;
+    uint idx = ((oy / p.fh) * inW + (ox / p.fw)) * cv + c4;
+    vec4 xv = vec4(x[idx]), av = vec4(a[gid]);
+    if ((p.flags & 256u) != 0u) xv = xv * vec4(se[c4]) + vec4(ra[idx]);
+    if ((p.flags & 512u) != 0u) av = av * vec4(se[c4]) + vec4(ra[gid]);
+    o[gid] = f16vec4(av + xv);
+}

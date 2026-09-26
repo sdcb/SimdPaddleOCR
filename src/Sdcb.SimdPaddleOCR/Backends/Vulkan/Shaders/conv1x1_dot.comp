@@ -1,0 +1,134 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Pointwise (1x1 or im2col'd) conv as direct dot product, m4×n4 tile per thread:
+//   O[m0:m0+4, n0:n0+4] = act(bias + res + A[m,k]·Wt[k, n0:n0+4])
+// A rows fp16 contiguous, row stride kv4 vec4s. Weights repacked k-major fp16
+// [K, N], read as vec4 column blocks. Requires N%4==0; m-tail is guarded.
+// PC: M, N, K, kv4, flags, scMod, mImg.
+//   flags: bit0 bias, bit1 residual, bit2 input prescale (SE), bit3 dual-write
+//          (o2 = gelu(o) — conv out feeds both a residual add and a gelu),
+//          bits4-6 act, hi16 hsAlpha
+//   prescale: a4 *= s4[(m/mImg)*scMod + k4 % scMod] — scale indexed by
+//          (batch, input-channel group); mImg = output pixels per batch
+//          (0 means the scale tensor is batch-free)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { f16vec4 bias[]; };
+layout(set = 0, binding = 3) readonly buffer Res { f16vec4 res[]; };
+layout(set = 0, binding = 4) writeonly buffer O { f16vec4 o[]; };
+layout(set = 0, binding = 5) readonly buffer Scale { f16vec4 s[]; };
+layout(set = 0, binding = 6) writeonly buffer O2 { f16vec4 o2[]; };
+layout(set = 0, binding = 7) readonly buffer RA { f16vec4 ra[]; };
+
+layout(push_constant) uniform PC {
+    uint M; uint N; uint K; uint kv4; uint flags; uint scMod; uint mImg;
+} p;
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+float16_t actf(float v, uint act, uint flg)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 2u) return float16_t(0.5 * v * (1.0 + erf1(v * 0.70710678118654752)));
+    if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return float16_t(v * hs); }
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint nv = p.N >> 2;
+    uint mv = (p.M + 3u) >> 2;
+    if (gid >= mv * nv) return;
+    uint n4 = gid % nv;
+    uint m0 = (gid / nv) * 4u;
+
+    vec4 acc0 = vec4(0.0), acc1 = vec4(0.0), acc2 = vec4(0.0), acc3 = vec4(0.0);
+    bool preScale = (p.flags & 4u) != 0u;
+    bool apsorb = (p.flags & 512u) != 0u;
+    // per-row scale base when the scale tensor is per-batch (mImg > 0)
+    uint sb0 = 0u, sb1 = 0u, sb2 = 0u, sb3 = 0u;
+    if (p.mImg != 0u && (preScale || apsorb)) {
+        sb0 = (m0 / p.mImg) * p.scMod;
+        sb1 = ((m0 + 1u) / p.mImg) * p.scMod;
+        sb2 = ((m0 + 2u) / p.mImg) * p.scMod;
+        sb3 = ((m0 + 3u) / p.mImg) * p.scMod;
+    }
+    uint kv4t = (p.K + 3u) >> 2;
+    for (uint k4 = 0u; k4 < kv4t; k4++) {
+        vec4 a0 = m0 < p.M ? vec4(x[m0 * p.kv4 + k4]) : vec4(0.0);
+        vec4 a1 = m0 + 1u < p.M ? vec4(x[(m0 + 1u) * p.kv4 + k4]) : vec4(0.0);
+        vec4 a2 = m0 + 2u < p.M ? vec4(x[(m0 + 2u) * p.kv4 + k4]) : vec4(0.0);
+        vec4 a3 = m0 + 3u < p.M ? vec4(x[(m0 + 3u) * p.kv4 + k4]) : vec4(0.0);
+        if (apsorb) {
+            // input is an unfused addps output: a = x*s + ra per element
+            if (m0 < p.M)       a0 = a0 * vec4(s[sb0 + k4]) + vec4(ra[m0 * p.kv4 + k4]);
+            if (m0 + 1u < p.M)  a1 = a1 * vec4(s[sb1 + k4]) + vec4(ra[(m0 + 1u) * p.kv4 + k4]);
+            if (m0 + 2u < p.M)  a2 = a2 * vec4(s[sb2 + k4]) + vec4(ra[(m0 + 2u) * p.kv4 + k4]);
+            if (m0 + 3u < p.M)  a3 = a3 * vec4(s[sb3 + k4]) + vec4(ra[(m0 + 3u) * p.kv4 + k4]);
+        }
+        if (preScale) {
+            a0 *= vec4(s[sb0 + k4 % p.scMod]);
+            a1 *= vec4(s[sb1 + k4 % p.scMod]);
+            a2 *= vec4(s[sb2 + k4 % p.scMod]);
+            a3 *= vec4(s[sb3 + k4 % p.scMod]);
+        }
+        uint wRow = k4 * 4u * nv + n4;
+        for (uint i = 0u; i < 4u; i++) {
+            uint k = k4 * 4u + i;
+            if (k >= p.K) break;
+            vec4 wv = vec4(w[wRow + i * nv]);
+            acc0 += a0[i] * wv; acc1 += a1[i] * wv;
+            acc2 += a2[i] * wv; acc3 += a3[i] * wv;
+        }
+    }
+    if ((p.flags & 1u) != 0u) {
+        vec4 bv = vec4(bias[n4]);
+        acc0 += bv; acc1 += bv; acc2 += bv; acc3 += bv;
+    }
+    uint act = (p.flags >> 4) & 7u;
+    if ((p.flags & 2u) != 0u) {
+        if (m0 < p.M)      acc0 += vec4(res[(m0 * p.N >> 2) + n4]);
+        if (m0 + 1u < p.M) acc1 += vec4(res[((m0 + 1u) * p.N >> 2) + n4]);
+        if (m0 + 2u < p.M) acc2 += vec4(res[((m0 + 2u) * p.N >> 2) + n4]);
+        if (m0 + 3u < p.M) acc3 += vec4(res[((m0 + 3u) * p.N >> 2) + n4]);
+    }
+    vec4 av0 = vec4(actf(acc0.x, act, p.flags), actf(acc0.y, act, p.flags), actf(acc0.z, act, p.flags), actf(acc0.w, act, p.flags));
+    vec4 av1 = vec4(actf(acc1.x, act, p.flags), actf(acc1.y, act, p.flags), actf(acc1.z, act, p.flags), actf(acc1.w, act, p.flags));
+    vec4 av2 = vec4(actf(acc2.x, act, p.flags), actf(acc2.y, act, p.flags), actf(acc2.z, act, p.flags), actf(acc2.w, act, p.flags));
+    vec4 av3 = vec4(actf(acc3.x, act, p.flags), actf(acc3.y, act, p.flags), actf(acc3.z, act, p.flags), actf(acc3.w, act, p.flags));
+    if (m0 < p.M)      o[m0 * nv + n4]       = f16vec4(av0);
+    if (m0 + 1u < p.M) o[(m0 + 1u) * nv + n4] = f16vec4(av1);
+    if (m0 + 2u < p.M) o[(m0 + 2u) * nv + n4] = f16vec4(av2);
+    if (m0 + 3u < p.M) o[(m0 + 3u) * nv + n4] = f16vec4(av3);
+    if ((p.flags & 8u) != 0u) {
+        // dual-write: o2 = gelu(o) — conv out feeds a residual AND a gelu chain;
+        // bit10 (1024): o2 = raw acc instead (pre-act value for gelu groups)
+        vec4 g0, g1, g2, g3;
+        if ((p.flags & 1024u) != 0u) { g0 = acc0; g1 = acc1; g2 = acc2; g3 = acc3; }
+        else {
+        g0 = 0.5 * av0 * (vec4(1.0) + vec4(erf1(av0.x * 0.70710678), erf1(av0.y * 0.70710678), erf1(av0.z * 0.70710678), erf1(av0.w * 0.70710678)));
+        g1 = 0.5 * av1 * (vec4(1.0) + vec4(erf1(av1.x * 0.70710678), erf1(av1.y * 0.70710678), erf1(av1.z * 0.70710678), erf1(av1.w * 0.70710678)));
+        g2 = 0.5 * av2 * (vec4(1.0) + vec4(erf1(av2.x * 0.70710678), erf1(av2.y * 0.70710678), erf1(av2.z * 0.70710678), erf1(av2.w * 0.70710678)));
+        g3 = 0.5 * av3 * (vec4(1.0) + vec4(erf1(av3.x * 0.70710678), erf1(av3.y * 0.70710678), erf1(av3.z * 0.70710678), erf1(av3.w * 0.70710678)));
+        }
+        if (m0 < p.M)      o2[m0 * nv + n4]       = f16vec4(g0);
+        if (m0 + 1u < p.M) o2[(m0 + 1u) * nv + n4] = f16vec4(g1);
+        if (m0 + 2u < p.M) o2[(m0 + 2u) * nv + n4] = f16vec4(g2);
+        if (m0 + 3u < p.M) o2[(m0 + 3u) * nv + n4] = f16vec4(g3);
+    }
+}
