@@ -160,6 +160,21 @@ x64 / ARM64 本库 peak 大约少 **300 MB**。c 仍然略省，但更慢。Open
 
 1.4.2 JSON：`bench-out/local-5800x-{tiny,small,medium}-4w.json`、`bench-out/local-5800x-ns2-{tiny,small,medium}-4w.json`。1.3：`bench-out/local-5800x-v13-{net10,ns2}-{tiny,small,medium}-4w.json`。
 
+### Vulkan GPU（RTX 3080 Ti，`b9ff975`）
+
+同机同尺：HOME-MAIN 5800X + RTX 3080 Ti（Vulkan 1.1，sg32 coopmat 路径，`conv1x1_cm_sg32`），PR #18 的 `--engine vulkan --workers 4`，同一 `dataset/` 100 张变尺寸图（对 GPU 最不利的逐图新 shape 场景）。CPU 列即上表 1.4.2 net10 AVX2。墙钟 n=99，warmup=1。
+
+| 模型   | Vulkan mean | CPU mean | 比值（越低越好） | Vulkan peak WS | Vulkan exact_lines | CPU exact_lines | Vulkan CER | CPU CER |
+| ------ | ----------: | -------: | ---------------: | -------------: | -----------------: | --------------: | ---------: | ------: |
+| tiny   |    **58.6** |    63.1  |           0.93×  |       1035 MB  |        679/1036    |      742/1036   |     2.89%  |  2.37%  |
+| small  |   **172.3** |   200.0  |           0.86×  |        998 MB  |        949/1036    |      950/1036   |     0.40%  |  0.41%  |
+| medium |   **542.7** |   585.0  |           0.93×  |       1460 MB  |       1003/1036    |     1004/1036   |     0.15%  |  0.14%  |
+
+- 三档墙钟全部反超 CPU（0.86–0.93×）；det 与 cls 全程走 GPU。small/medium 的 rec 尾部 SVTR 算子（Transpose/Slice/ReduceMean[-1]/MaxPool n>1）尚未 emit、整段回落 CPU，与 B580 同构——`rec_graph` 因此仍是最大头（medium 1173ms mean）。
+- small/medium 准确率与纯 CPU 持平（差 1 行以内、CER 持平）；tiny 差 63 行，逐行 diff 显示大头是 fp16 近平局翻转的空格/单字符噪声（`fox`→`foX`、`320像素的 REC`→`REC`），另有 img-001 / img-014 各丢一个 det 框。
+- 工作集已有界：plan LRU=16 + 共享 grow-only arena/inF32/outF32 + `vkFreeDescriptorSets`/`vkFreeCommandBuffers` 真释放；peak 后不再爬升。
+- JSON：`bench-out/vk2/{tiny,small,medium}-4w.json`（本分支 worktree）。复现：`--engine vulkan --workers 4 --model {tiny,small,medium} --input dataset`。
+
 ### lw.PPOCR.C 4w（`20d0de6`）
 
 当前树 harness、`--engine c`、`--c-assets bench-out/c-runtime`，DLL [`lw_ppocr_c.20260914.20d0de6.dll`](https://cv-public.sdcb.ai/2026/lw_ppocr_c.20260914.20d0de6.dll)。同一尺子。C 没有 stage / operator 剖析。
