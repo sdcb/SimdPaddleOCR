@@ -32,11 +32,15 @@ public sealed class PaddleOcrDetectorOptions
     internal bool HasExplicitBoxThreshold => _boxThresholdSet;
     public float UnclipRatio { get; init; } = 1.4f;
     public long MaxImagePixels { get; init; } = 40_000_000;
+    /// <summary>Compute backend for the detection graph. Default <see cref="OcrBackend.Auto"/>.</summary>
+    public OcrBackend Backend { get; init; } = OcrBackend.Auto;
 }
 
 /// <summary>Options for the direction classifier.</summary>
 public sealed class PaddleOcrClassifierOptions
 {
+    /// <summary>Compute backend for the classification graph. Default <see cref="OcrBackend.Auto"/>.</summary>
+    public OcrBackend Backend { get; init; } = OcrBackend.Auto;
     public long MaxImagePixels { get; init; } = 40_000_000;
     /// <summary>
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool
@@ -62,6 +66,8 @@ public sealed class PaddleOcrRecognizerOptions
     /// <summary>Uses OpenVINO-style 32-pixel width buckets without a 320-pixel cap.</summary>
     public bool AdaptiveWidth { get; init; } = true;
     public long MaxImagePixels { get; init; } = 40_000_000;
+    /// <summary>Compute backend for the recognition graph. Default <see cref="OcrBackend.Auto"/>.</summary>
+    public OcrBackend Backend { get; init; } = OcrBackend.Auto;
 }
 
 /// <summary>
@@ -109,8 +115,13 @@ public sealed class PaddleOcrOptions
     /// operator processes the whole batch before the next one runs, which
     /// inflates the activation working set and measured ~20% slower than
     /// per-line REC on an 8-core Zen 3. Raise only after profiling.
+    /// When the recognizer runs on a GPU backend and this is left unset, a
+    /// batch of 16 is used — line batching is the main GPU win.
     /// </summary>
-    public int RecBatchLines { get; init; } = 1;
+    public int RecBatchLines { get => _recBatchLines; init { _recBatchLines = value; _recBatchLinesSet = true; } }
+    private int _recBatchLines = 1;
+    private bool _recBatchLinesSet;
+    internal bool HasExplicitRecBatchLines => _recBatchLinesSet;
     public long MaxCropPixels { get; init; } = 16_000_000;
     public PaddleOcrDetectorOptions Detector { get; init; } = new();
     public PaddleOcrClassifierOptions Classifier { get; init; } = new();

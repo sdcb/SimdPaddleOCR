@@ -64,7 +64,10 @@ public sealed class CompiledModel
             foreach (uint t in node.Outputs) nhwc |= t != uint.MaxValue && _tensors[t].IsNhwc;
             _nodeNhwc[ni] = nhwc;
         }
-        ExtendLastUseForFusedKernels();
+        // SIMD_OCR_NOFUSE=1 disables all fused-skip planning: the runtime then
+        // executes every node unfused — a debugging golden path.
+        if (Environment.GetEnvironmentVariable("SIMD_OCR_NOFUSE") != "1")
+            ExtendLastUseForFusedKernels();
     }
 
     /// <summary>Creates a compiled model whose requests default to <paramref name="inputShape"/>.</summary>

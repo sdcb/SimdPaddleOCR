@@ -1,0 +1,77 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Depthwise conv on NHWC fp16, 4 channels per thread (requires C%4==0).
+//   OUT[px, c4:c4+4] = act(bias4 + sum_{dy,dx} w4[tap] * X[py*s+dy-pad, px*s+dx-pad, c4:c4+4])
+// Weights are pre-packed tap-major: W[(dy*kW+dx)*C + c] (fp16, vec4 reads).
+// PC: outW, outH, C, kH, kW, strideH, strideW, padT, padL, inW, inH, flags(bit0 bias, bits4-6 act)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { float16_t bias[]; };
+layout(set = 0, binding = 3) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint C; uint kH; uint kW;
+    uint sh; uint sw; uint pt; uint pl; uint inW; uint inH; uint flags;
+} p;
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+float16_t actf(float v, uint act, uint flg)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 2u) return float16_t(0.5 * v * (1.0 + erf1(v * 0.70710678118654752)));
+    if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return float16_t(v * hs); }
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint b = gl_GlobalInvocationID.y;       // batch index (gy); 0 for DET
+    uint cv = p.C >> 2;
+    uint total = p.outW * p.outH * cv;
+    if (gid >= total) return;
+    uint xb = b * p.inH * p.inW * cv;       // input base (vec4 units)
+    uint c4 = gid % cv;                // vec4 channel index
+    uint px = gid / cv;
+    uint oy = px / p.outW, ox = px % p.outW;
+    int iy0 = int(oy * p.sh) - int(p.pt);
+    int ix0 = int(ox * p.sw) - int(p.pl);
+
+    vec4 acc = vec4(0.0);
+    for (uint dy = 0u; dy < p.kH; dy++) {
+        int iy = iy0 + int(dy);
+        if (iy < 0 || iy >= int(p.inH)) continue;
+        uint rowBase = xb + uint(iy) * p.inW * cv;
+        for (uint dx = 0u; dx < p.kW; dx++) {
+            int ix = ix0 + int(dx);
+            if (ix < 0 || ix >= int(p.inW)) continue;
+            uint tap = dy * p.kW + dx;
+            vec4 wv = vec4(w[tap * cv + c4]);
+            vec4 xv = vec4(x[rowBase + uint(ix) * cv + c4]);
+            acc += wv * xv;
+        }
+    }
+    if ((p.flags & 1u) != 0u) {
+        uint cb = c4 * 4u;
+        acc += vec4(float(bias[cb]), float(bias[cb + 1u]),
+                    float(bias[cb + 2u]), float(bias[cb + 3u]));
+    }
+    uint act = (p.flags >> 4) & 7u;
+    o[b * total + gid] = f16vec4(actf(acc.x, act, p.flags), actf(acc.y, act, p.flags),
+                     actf(acc.z, act, p.flags), actf(acc.w, act, p.flags));
+}

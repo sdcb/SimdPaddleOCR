@@ -1,0 +1,64 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// im2col gather for dense kxk conv on NHWC fp16, tap-major ordering:
+//   k = (dy*kW + dx)*Cin + ci   over [0, K);  k in [K, K_pad) writes 0
+//   A[m, k] = X[(oy*sH+dy-pT), (ox*sW+dx-pL), ci]   (0 when out of bounds)
+// Weight rows must be repacked to the same order: w'[co][tap*Cin+ci].
+// Each thread emits 4 consecutive k (Kp%4==0) packed as 2 uints (8B store).
+// When Cin%4==0 the 4-elem group lies within one tap → single f16vec4 load;
+// flags bit0 selects the fully-scalar fallback for other Cin.
+// PC: outW, outH, Cin, kH, kW, sH, sW, pT, pL, inW, inH, K, K_pad, flags(bit0: scalar)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) writeonly buffer A { uint a[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint Cin; uint kH; uint kW;
+    uint sH; uint sW; uint pT; uint pL; uint inW; uint inH;
+    uint K; uint Kp; uint flags;
+} p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint kv = p.Kp >> 2;
+    uint total = p.outW * p.outH * kv;
+    if (gid >= total) return;
+    uint k4 = (gid % kv) * 4u;
+    uint m = gid / kv;
+    uint oy = m / p.outW, ox = m % p.outW;
+    f16vec4 v = f16vec4(0.0);
+    if ((p.flags & 1u) == 0u) {
+        // vec4: k4%4==0 and Cin%4==0 → the group stays inside one tap
+        if (k4 < p.K) {
+            uint tap = k4 / p.Cin;
+            uint ci = k4 - tap * p.Cin;
+            uint dy = tap / p.kW, dx = tap % p.kW;
+            int iy = int(oy * p.sH + dy) - int(p.pT);
+            int ix = int(ox * p.sW + dx) - int(p.pL);
+            if (iy >= 0 && iy < int(p.inH) && ix >= 0 && ix < int(p.inW))
+                v = x[(uint(iy) * p.inW + uint(ix)) * (p.Cin >> 2) + (ci >> 2)];
+        }
+    } else {
+        for (uint i = 0u; i < 4u; i++) {
+            uint k = k4 + i;
+            if (k < p.K) {
+                uint tap = k / p.Cin, ci = k - tap * p.Cin;
+                uint dy = tap / p.kW, dx = tap % p.kW;
+                int iy = int(oy * p.sH + dy) - int(p.pT);
+                int ix = int(ox * p.sW + dx) - int(p.pL);
+                if (iy >= 0 && iy < int(p.inH) && ix >= 0 && ix < int(p.inW)) {
+                    uint xb = (uint(iy) * p.inW + uint(ix)) * p.Cin + ci;
+                    v[i] = x[xb >> 2][xb & 3u];
+                }
+            }
+        }
+    }
+    a[gid * 2u]      = packHalf2x16(vec2(v.x, v.y));
+    a[gid * 2u + 1u] = packHalf2x16(vec2(v.z, v.w));
+}

@@ -1,0 +1,53 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// ConvTranspose 2x2 stride 2 on NHWC fp16 (PP-OCR FPN head).
+// For s=2,k=2,pad=0 each output pixel (oy,ox) depends on exactly one input
+// pixel (oy/2, ox/2) and the (dy=oy%2, dx=ox%2) tap:
+//   OUT[oy,ox,co] = act(bias[co] + sum_ci X[iy,ix,ci] * Wt[ci,co,dy,dx])
+// W stored [Cin, Cout, 2, 2] flattened.
+// PC: outW, outH, Cout, Cin, inW, flags(bit0 bias, bit3 scalarBias,
+//     bits4-6 act, bit7 fp32-out)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float16_t x[]; };
+layout(set = 0, binding = 1) readonly buffer W { float16_t w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { float16_t bias[]; };
+layout(set = 0, binding = 3) writeonly buffer O { float16_t o[]; };
+layout(set = 0, binding = 4) writeonly buffer OF { float of[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint Cout; uint Cin; uint inW; uint flags;
+} p;
+
+float16_t actf(float v, uint act)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = p.outW * p.outH * p.Cout;
+    if (gid >= total) return;
+    uint co = gid % p.Cout;
+    uint px = gid / p.Cout;
+    uint oy = px / p.outW, ox = px % p.outW;
+    uint iy = oy >> 1, ix = ox >> 1;
+    uint dy = oy & 1u, dx = ox & 1u;
+
+    float acc = 0.0;
+    uint xbase = (iy * p.inW + ix) * p.Cin;
+    uint tap = dy * 2u + dx;
+    for (uint ci = 0u; ci < p.Cin; ci++)
+        acc += float(w[(ci * p.Cout + co) * 4u + tap]) * float(x[xbase + ci]);
+    if ((p.flags & 1u) != 0u) acc += float(bias[(p.flags & 8u) != 0u ? 0u : co]); // bit3: scalar bias
+    // bit7: graph-output mode — write fp32 to of[] instead of fp16 to o[]
+    if ((p.flags & 128u) != 0u) of[gid] = actf(acc, (p.flags >> 4) & 7u);
+    else o[gid] = actf(acc, (p.flags >> 4) & 7u);
+}

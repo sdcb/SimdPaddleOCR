@@ -1,0 +1,56 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// SE finalize: partial sums -> mean -> fc1+relu -> fc2 -> hardsigmoid.
+// Second stage of the fused squeeze+excite (partials come from reduce_hw4).
+// One workgroup, 256 threads. Weights fp32 ONNX layout: w1[R,C], w2[C,R].
+// PC: S(partitions), C, hw, R, alpha, beta
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Part { float part[]; };
+layout(set = 0, binding = 1) readonly buffer W1 { float w1[]; };
+layout(set = 0, binding = 2) readonly buffer B1 { float b1[]; };
+layout(set = 0, binding = 3) readonly buffer W2 { float w2[]; };
+layout(set = 0, binding = 4) readonly buffer B2 { float b2[]; };
+layout(set = 0, binding = 5) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC { uint S; uint C; uint hw; uint R; float alpha; float beta; } p;
+
+shared float zf[256];
+shared float hf[64];
+
+void main()
+{
+    uint lane = gl_LocalInvocationID.x;
+
+    if (lane < p.C) {
+        float a = 0.0;
+        for (uint s = 0u; s < p.S; s++) a += part[s * p.C + lane];
+        zf[lane] = a / float(p.hw);
+    }
+    barrier();
+
+    if (lane < p.R) {
+        float s = b1[lane];
+        for (uint c = 0u; c < p.C; c++)
+            s += zf[c] * w1[lane * p.C + c];
+        hf[lane] = max(s, 0.0);
+    }
+    barrier();
+
+    uint cv = p.C >> 2;
+    if (lane < cv) {
+        float16_t v[4];
+        for (uint i = 0u; i < 4u; i++) {
+            uint c = lane * 4u + i;
+            float s = b2[c];
+            for (uint r = 0u; r < p.R; r++)
+                s += hf[r] * w2[c * p.R + r];
+            v[i] = float16_t(clamp(p.alpha * s + p.beta, 0.0, 1.0));
+        }
+        o[lane] = f16vec4(v[0], v[1], v[2], v[3]);
+    }
+}

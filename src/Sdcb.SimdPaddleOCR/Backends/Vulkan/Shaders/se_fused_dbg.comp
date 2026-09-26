@@ -1,0 +1,99 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// SE single-pass: S workgroups write per-partition partial sums; the last WG
+// to finish (atomic ticket) runs the finalize inline: mean -> fc1+relu ->
+// fc2 -> hardsigmoid. Counter self-resets to 0 so the plan can be replayed.
+// Part buffer offset convention: part[0 .. S*C) floats; ctr lives in its own
+// binding slot at byte offset S*C*4 (zeroed once at plan build).
+// PC: hw, C, S, P, cvP, R, alpha, beta
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) coherent volatile buffer Part { float part[]; };
+layout(set = 0, binding = 2) coherent volatile buffer Ctr { uint ctr[]; };
+layout(set = 0, binding = 3) readonly buffer W1 { float w1[]; };
+layout(set = 0, binding = 4) readonly buffer B1 { float b1[]; };
+layout(set = 0, binding = 5) readonly buffer W2 { float w2[]; };
+layout(set = 0, binding = 6) readonly buffer B2 { float b2[]; };
+layout(set = 0, binding = 7) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC {
+    uint hw; uint C; uint S; uint P; uint cvP; uint R; float alpha; float beta;
+} p;
+
+shared vec4 sm[256];
+shared uint isLast;
+shared float zf[256];
+shared float hf[64];
+
+void main()
+{
+    uint s = gl_WorkGroupID.x;
+    uint cv = p.C >> 2;
+    uint lane = gl_LocalInvocationID.x;
+    uint strips = 256u / p.cvP;
+    uint strip = lane / p.cvP;
+    uint cLane = lane - strip * p.cvP;
+    vec4 acc = vec4(0.0);
+    uint beg = s * p.P;
+    uint end = min(beg + p.P, p.hw);
+    if (cLane < cv)
+        for (uint px = beg + strip; px < end; px += strips)
+            acc += vec4(x[px * cv + cLane]);
+    sm[lane] = acc;
+    barrier();
+    for (uint st = strips >> 1; st > 0u; st >>= 1) {
+        if (strip < st) sm[lane] += sm[lane + st * p.cvP];
+        barrier();
+    }
+    if (strip == 0u && cLane < cv) {
+        uint ob = s * p.C + cLane * 4u;
+        part[ob]      = sm[lane].x;
+        part[ob + 1u] = sm[lane].y;
+        part[ob + 2u] = sm[lane].z;
+        part[ob + 3u] = sm[lane].w;
+    }
+
+    // all writes out of this WG visible before claiming the ticket
+    memoryBarrierBuffer();
+    barrier();
+    if (lane == 0u)
+        atomicAdd(ctr[0], 1u); isLast = 1u;
+    barrier();
+    if (isLast == 0u) return;
+
+    // last WG: other WGs' partial writes become visible now
+    memoryBarrierBuffer();
+    if (lane == 0u) ctr[0] = 0u;   // self-reset for the next run
+
+    if (lane < p.C) {
+        float a = 0.0;
+        for (uint si = 0u; si < p.S; si++) a += part[si * p.C + lane];
+        zf[lane] = a / float(p.hw);
+    }
+    barrier();
+
+    if (lane < p.R) {
+        float acc2 = b1[lane];
+        for (uint c = 0u; c < p.C; c++)
+            acc2 += zf[c] * w1[lane * p.C + c];
+        hf[lane] = max(acc2, 0.0);
+    }
+    barrier();
+
+    if (lane < cv) {
+        float16_t v[4];
+        for (uint i = 0u; i < 4u; i++) {
+            uint c = lane * 4u + i;
+            float acc3 = b2[c];
+            for (uint r = 0u; r < p.R; r++)
+                acc3 += hf[r] * w2[c * p.R + r];
+            v[i] = float16_t(clamp(p.alpha * acc3 + p.beta, 0.0, 1.0));
+        }
+        o[lane] = f16vec4(v[0], v[1], v[2], v[3]);
+    }
+}

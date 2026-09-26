@@ -1,0 +1,39 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Scaled residual add on NHWC fp16: o[i] = a[i] + x[i] * s[c(i)]
+// where c(i) is the channel index — s is a per-channel fp16 vector with
+// cv4 = C/4 vec4 groups. Folds Mul(x, se) feeding an Add when the Mul is
+// skipped (its value reconstructed on the fly). Requires n%4==0 && C%4==0.
+// PC: n (elements), cv4.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer A { uint a[]; };
+layout(set = 0, binding = 1) readonly buffer X { uint x[]; };
+layout(set = 0, binding = 2) readonly buffer S { uint s[]; };
+layout(set = 0, binding = 3) writeonly buffer O { uint o[]; };
+
+layout(push_constant) uniform PC {
+    uint n; uint cv4;
+} p;
+
+void main()
+{
+    uint i0 = gl_GlobalInvocationID.x * 4u;
+    if (i0 >= p.n) return;
+
+    uint si = ((i0 >> 2) % p.cv4) * 4u;
+    vec4 sv = vec4(unpackHalf2x16(s[si >> 1]).x, unpackHalf2x16(s[si >> 1]).y,
+                   unpackHalf2x16(s[(si >> 1) + 1u]).x, unpackHalf2x16(s[(si >> 1) + 1u]).y);
+    vec4 va = vec4(unpackHalf2x16(a[i0 >> 1]).x, unpackHalf2x16(a[i0 >> 1]).y,
+                   unpackHalf2x16(a[(i0 >> 1) + 1u]).x, unpackHalf2x16(a[(i0 >> 1) + 1u]).y);
+    vec4 vx = vec4(unpackHalf2x16(x[i0 >> 1]).x, unpackHalf2x16(x[i0 >> 1]).y,
+                   unpackHalf2x16(x[(i0 >> 1) + 1u]).x, unpackHalf2x16(x[(i0 >> 1) + 1u]).y);
+
+    vec4 r = va + vx * sv;
+    o[i0 >> 1]       = packHalf2x16(r.xy);
+    o[(i0 >> 1) + 1] = packHalf2x16(r.zw);
+}

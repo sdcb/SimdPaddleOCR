@@ -1,0 +1,82 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Fused channel-concat where each input slice is a (nearest) resize of a
+// possibly addps-absorbed source. Up to 4 slices; slice s occupies output
+// channel-quads [off4_s, off4_s + cq4_s). A slice with fh=fw=1 is a plain
+// copy (identity resize). Per-slice flags bit0 = addps absorb
+// (v = x[i]*se[q] + ra[i]).
+// Binds: x0,ra0,se0, x1,ra1,se1, x2,ra2,se2, x3,ra3,se3, o   (13)
+// PC: outW, outH, Cout,
+//     then per slice: {off4|cq4<<16, inW, fh|fw<<16, flags}  (4 x 4)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X0 { f16vec4 x0[]; };
+layout(set = 0, binding = 1) readonly buffer R0 { f16vec4 r0[]; };
+layout(set = 0, binding = 2) readonly buffer S0 { f16vec4 s0[]; };
+layout(set = 0, binding = 3) readonly buffer X1 { f16vec4 x1[]; };
+layout(set = 0, binding = 4) readonly buffer R1 { f16vec4 r1[]; };
+layout(set = 0, binding = 5) readonly buffer S1 { f16vec4 s1[]; };
+layout(set = 0, binding = 6) readonly buffer X2 { f16vec4 x2[]; };
+layout(set = 0, binding = 7) readonly buffer R2 { f16vec4 r2[]; };
+layout(set = 0, binding = 8) readonly buffer S2 { f16vec4 s2[]; };
+layout(set = 0, binding = 9) readonly buffer X3 { f16vec4 x3[]; };
+layout(set = 0, binding = 10) readonly buffer R3 { f16vec4 r3[]; };
+layout(set = 0, binding = 11) readonly buffer S3 { f16vec4 s3[]; };
+layout(set = 0, binding = 12) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint Cout;
+    uint off4a; uint inWa; uint fha; uint fla;
+    uint off4b; uint inWb; uint fhb; uint flb;
+    uint off4c; uint inWc; uint fhc; uint flc;
+    uint off4d; uint inWd; uint fhd; uint fld;
+} p;
+
+f16vec4 src(uint s, uint idx, uint q)
+{
+    f16vec4 v; vec4 vv;
+    switch (s) {
+    case 0u: v = x0[idx]; vv = vec4(v);
+        if ((p.fla & 1u) != 0u) vv = vv * vec4(s0[q]) + vec4(r0[idx]);
+        return f16vec4(vv);
+    case 1u: v = x1[idx]; vv = vec4(v);
+        if ((p.flb & 1u) != 0u) vv = vv * vec4(s1[q]) + vec4(r1[idx]);
+        return f16vec4(vv);
+    case 2u: v = x2[idx]; vv = vec4(v);
+        if ((p.flc & 1u) != 0u) vv = vv * vec4(s2[q]) + vec4(r2[idx]);
+        return f16vec4(vv);
+    default: v = x3[idx]; vv = vec4(v);
+        if ((p.fld & 1u) != 0u) vv = vv * vec4(s3[q]) + vec4(r3[idx]);
+        return f16vec4(vv);
+    }
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint cv4 = p.Cout >> 2;
+    if (gid >= p.outW * p.outH * cv4) return;
+    uint c4 = gid % cv4;
+    uint px = gid / cv4;
+    uint oy = px / p.outW, ox = px % p.outW;
+
+    for (uint s = 0u; s < 4u; s++) {
+        uint offc, inW, fhfw, fl;
+        switch (s) {
+        case 0u: offc = p.off4a; inW = p.inWa; fhfw = p.fha; fl = p.fla; break;
+        case 1u: offc = p.off4b; inW = p.inWb; fhfw = p.fhb; fl = p.flb; break;
+        case 2u: offc = p.off4c; inW = p.inWc; fhfw = p.fhc; fl = p.flc; break;
+        default: offc = p.off4d; inW = p.inWd; fhfw = p.fhd; fl = p.fld; break;
+        }
+        uint off4 = offc & 0xffffu, cq4 = offc >> 16;
+        if (cq4 == 0u || c4 < off4 || c4 >= off4 + cq4) continue;
+        uint q = c4 - off4;
+        uint sy = oy / (fhfw & 0xffffu), sx = ox / (fhfw >> 16);
+        o[gid] = src(s, (sy * inW + sx) * cq4 + q, q);
+        return;
+    }
+}

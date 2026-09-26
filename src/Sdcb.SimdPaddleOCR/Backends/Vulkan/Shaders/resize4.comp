@@ -1,0 +1,38 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Nearest-neighbour integer-factor upscale, NHWC fp16, 4 ch per thread (C%4==0):
+//   o4[oy,ox,c4] = x4[oy/fh, ox/fw, c4]
+// PC: outW, outH, C, fh, fw, dstCv, dstCoff
+//   dstCv != 0: write into a wider-C tensor (concat slice) — o index
+//   px * dstCv + dstCoff + c4  instead of  px * cv + c4
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) writeonly buffer O { f16vec4 o[]; };
+layout(set = 0, binding = 2) readonly buffer RA { f16vec4 ra[]; };
+layout(set = 0, binding = 3) readonly buffer SE { f16vec4 se[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint C; uint fh; uint fw; uint dstCv; uint dstCoff;
+    uint flags;   // bit8: input is unfused addps -> x reads x[i]*se[c4]+ra[i]
+} p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint cv = p.C >> 2;
+    if (gid >= p.outW * p.outH * cv) return;
+    uint c4 = gid % cv;
+    uint px = gid / cv;
+    uint oy = px / p.outW, ox = px % p.outW;
+    uint inW = p.outW / p.fw;
+    uint dcv = p.dstCv != 0u ? p.dstCv : cv;
+    uint idx = ((oy / p.fh) * inW + (ox / p.fw)) * cv + c4;
+    f16vec4 v = x[idx];
+    if ((p.flags & 256u) != 0u) v = f16vec4(vec4(v) * vec4(se[c4]) + vec4(ra[idx]));
+    o[px * dcv + p.dstCoff + c4] = v;
+}

@@ -18,7 +18,12 @@
     <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
     <None Include="linqpad-samples\*.linq" Pack="true" PackagePath="linqpad-samples" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Backends\Vulkan\Shaders\*.spv" />
+    <None Remove="Backends\Vulkan\Shaders\*.spv" />
+  </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <Compile Remove="Backends/**/*.cs" />
     <PackageReference Include="Microsoft.Bcl.Numerics" Version="10.0.11" />
     <PackageReference Include="System.Memory" Version="4.6.3" />
     <PackageReference Include="System.Numerics.Vectors" Version="4.6.1" />

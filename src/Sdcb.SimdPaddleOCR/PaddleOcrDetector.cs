@@ -14,7 +14,7 @@ public sealed class PaddleOcrDetector : IDisposable
     private readonly PaddleOcrDetectorOptions _options;
     private readonly int _intraOpThreads;
     private readonly CompiledModel _compiled;
-    private readonly ConcurrentBag<InferenceSession> _sessions = [];
+    private readonly ConcurrentBag<IOcrSession> _sessions = [];
     private readonly ConcurrentBag<DbPostprocess.Workspace> _postprocess = [];
     private readonly int _postprocessPixels;
     private readonly bool _ownsModel;
@@ -82,7 +82,8 @@ public sealed class PaddleOcrDetector : IDisposable
             BitmapThreshold = source.BitmapThreshold,
             BoxThreshold = boxThreshold,
             UnclipRatio = source.UnclipRatio,
-            MaxImagePixels = source.MaxImagePixels
+            MaxImagePixels = source.MaxImagePixels,
+            Backend = source.Backend
         };
     }
 
@@ -131,7 +132,7 @@ public sealed class PaddleOcrDetector : IDisposable
         try
         {
             (int Width, int Height, float WidthRatio, float HeightRatio) size = PPOCRPreprocess.ComputeDetSize(sourceWidth, sourceHeight, _options.LimitSideLength);
-            InferenceSession session = RentSession();
+            IOcrSession session = RentSession();
             DbPostprocess.Workspace postprocess = RentPostprocess();
             session.Reshape([1, 3, size.Height, size.Width]);
             Span<float> inputSpan = session.InputData;
@@ -176,18 +177,18 @@ public sealed class PaddleOcrDetector : IDisposable
         }
     }
 
-    private InferenceSession RentSession()
+    private IOcrSession RentSession()
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrDetector));
-        if (_sessions.TryTake(out InferenceSession? session))
+        if (_sessions.TryTake(out IOcrSession? session))
         {
             Interlocked.Decrement(ref _pooledCount);
             return session;
         }
-        return _compiled.CreateRequest();
+        return OnnxSharp.OcrSessionFactory.Create(_compiled, _options.Backend);
     }
 
-    private void ReturnSession(InferenceSession session)
+    private void ReturnSession(IOcrSession session)
     {
         if (_disposed)
         {
@@ -245,7 +246,7 @@ public sealed class PaddleOcrDetector : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        while (_sessions.TryTake(out InferenceSession? session))
+        while (_sessions.TryTake(out IOcrSession? session))
             session.Dispose();
         _compiled.Dispose();
         if (_ownsModel) _model.Dispose();

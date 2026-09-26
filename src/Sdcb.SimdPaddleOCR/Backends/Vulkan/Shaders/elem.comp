@@ -1,0 +1,73 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Generic elementwise on NHWC fp16 activations.
+//   unary:  o[i] = f(a[i])                        (op 0-7)
+//   binary: o[i] = a[ai(i)] OP b[bi(i)]           (op 8+)
+// Broadcast modes per operand (aMode/bMode): 0=full index, 1=channel vector
+//   (index % C), 2=scalar (index 0).
+// PC: n, C, op, aMode, bMode, aux
+//   op unary: 0=copy 1=relu 2=gelu 3=hardsigmoid(alpha/beta in aux) 4=sigmoid 5=erf 6=sqrt
+//   op binary: 8=add 9=mul 10=sub 11=div 12=max
+// aux = packed fp16 pair (alpha lo16, beta hi16) for hardsigmoid; models mix
+// alpha=0.2 (hardsigmoid) and alpha=1/6 (hardswish) so it must come from the node.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer A { float16_t a[]; };
+layout(set = 0, binding = 1) readonly buffer B { float16_t b[]; };
+layout(set = 0, binding = 2) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC {
+    uint n; uint C; uint op; uint aMode; uint bMode; uint aux;
+} p;
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+uint idx(uint i, uint mode)
+{
+    if (mode == 1u) return i % p.C;
+    if (mode == 2u) return 0u;
+    // mode 3: per-image channel vector [n,C,1,1] — aux = elements per image
+    if (mode == 3u) return (i / p.aux) * p.C + i % p.C;
+    return i;
+}
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= p.n) return;
+    float va = float(a[idx(i, p.aMode)]);
+    float r;
+    if (p.op < 8u || p.op == 14u) {
+        switch (p.op) {
+        case 1u: r = max(va, 0.0); break;
+        case 2u: r = 0.5 * va * (1.0 + erf1(va * 0.70710678118654752)); break;
+        case 3u: { vec2 ab = unpackHalf2x16(p.aux); r = clamp(va * ab.x + ab.y, 0.0, 1.0); break; }   // hardsigmoid
+        case 4u: r = 1.0 / (1.0 + exp(-va)); break;
+        case 5u: r = erf1(va); break;
+        case 6u: r = sqrt(max(va, 0.0)); break;
+        case 14u: { vec2 ab = unpackHalf2x16(p.aux); r = va * clamp(va * ab.x + ab.y, 0.0, 1.0); break; }  // hardswish
+        default: r = va; break;                                // copy
+        }
+    } else {
+        float vb = float(b[idx(i, p.bMode)]);
+        switch (p.op) {
+        case 9u: r = va * vb; break;
+        case 10u: r = va - vb; break;
+        case 11u: r = va / vb; break;
+        case 12u: r = max(va, vb); break;
+        default: r = va + vb; break;                           // add
+        }
+    }
+    o[i] = float16_t(r);
+}

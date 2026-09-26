@@ -1,0 +1,100 @@
+#version 450
+
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// C[M,N] = X[M,K](fp16) * W[N,K](fp16)^T — conv1x1-as-GEMM for PP-OCR
+// (X = NHWC pixels [H*W, Cin], W = OIHW weights flattened [Cout, Cin]).
+// Adapted from HyMT2Sharp pf_gemm_cm_g (B580: tile 512x64, 8x16x16 fp16 XMX).
+// Requires: kDim % 4 == 0; X rows allocated to strip multiples (reads may
+// touch pad rows inside the tile — callers over-allocate, stores bounded).
+
+#ifndef TSM
+#define TSM 4u        // acc rows per strip (strip M = TSM*8)
+#endif
+#ifndef TSN
+#define TSN 2u        // acc cols per strip (strip N = TSN*16)
+#endif
+#ifndef SGX
+#define SGX 4u        // sg grid X (N direction)
+#endif
+#ifndef SGY
+#define SGY 4u        // sg grid Y (M direction)
+#endif
+#ifndef NTHR
+#define NTHR 256      // threads (must be SGX*SGY*16)
+#endif
+
+layout(local_size_x = NTHR) in;
+
+const uint STRM = TSM * 8u;
+const uint STRN = TSN * 16u;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) buffer C { float c[]; };
+
+layout(push_constant) uniform PC { uint mDim; uint nDim; uint kDim; uint flags; } p;
+
+shared float stage[NTHR / 16 * 8 * 16];
+
+void main()
+{
+    uint sg = gl_SubgroupID;
+    uint lane = gl_SubgroupInvocationID;
+    uint sgx = sg & (SGX - 1u), sgy = sg / SGX;
+    uint m0 = gl_WorkGroupID.x * (SGY * STRM);
+    uint n0 = gl_WorkGroupID.y * (SGX * STRN);
+
+    bool fullTile = (m0 + SGY * STRM <= p.mDim) && (n0 + SGX * STRN <= p.nDim);
+
+    coopmat<float, gl_ScopeSubgroup, 8, 16, gl_MatrixUseAccumulator> acc[TSM][TSN];
+    for (uint i = 0u; i < TSM; i++)
+        for (uint j = 0u; j < TSN; j++)
+            acc[i][j] = coopmat<float, gl_ScopeSubgroup, 8, 16, gl_MatrixUseAccumulator>(0.0f);
+
+    uint kv = p.kDim >> 2;             // kDim in vec4 units
+    uint xa = (m0 + sgy * STRM) * kv;  // A strip base (vec4 elems)
+    uint wb = (n0 + sgx * STRN) * kv;  // B strip base
+
+    coopmat<float16_t, gl_ScopeSubgroup, 8, 16, gl_MatrixUseA> ma[TSM];
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb[TSN];
+    for (uint kb = 0u; kb < kv; kb += 4u) {
+        for (uint i = 0u; i < TSM; i++)
+            coopMatLoad(ma[i], x, xa + i * 8u * kv + kb, kv, gl_CooperativeMatrixLayoutRowMajor);
+        for (uint j = 0u; j < TSN; j++)
+            coopMatLoad(mb[j], w, wb + j * 16u * kv + kb, kv, gl_CooperativeMatrixLayoutColumnMajor);
+        for (uint i = 0u; i < TSM; i++)
+            for (uint j = 0u; j < TSN; j++)
+                acc[i][j] = coopMatMulAdd(ma[i], mb[j], acc[i][j]);
+    }
+
+    if (fullTile) {
+        for (uint i = 0u; i < TSM; i++)
+            for (uint j = 0u; j < TSN; j++)
+                coopMatStore(acc[i][j], c,
+                    (m0 + sgy * STRM + i * 8u) * p.nDim + (n0 + sgx * STRN + j * 16u),
+                    p.nDim, gl_CooperativeMatrixLayoutRowMajor);
+        return;
+    }
+    for (uint i = 0u; i < TSM; i++) {
+        for (uint j = 0u; j < TSN; j++) {
+            coopMatStore(acc[i][j], stage, sg * 128u, 8u, gl_CooperativeMatrixLayoutColumnMajor);
+            barrier();
+            uint rm = sgy * STRM + i * 8u;
+            uint cn = sgx * STRN + j * 16u;
+            for (uint l = 0u; l < 8u; l++) {
+                uint e = lane * 8u + l;
+                uint mm = e >> 4, nn = e & 15u;
+                uint gmr = m0 + rm + mm;
+                uint gnc = n0 + cn + nn;
+                if (gmr < p.mDim && gnc < p.nDim)
+                    c[gmr * p.nDim + gnc] = stage[sg * 128u + nn * 8u + mm];
+            }
+            barrier();
+        }
+    }
+}

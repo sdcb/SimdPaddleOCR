@@ -1,0 +1,108 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Depthwise conv, shared-tile variant of conv_dw4 (requires C%4==0, k<=5, s<=2).
+// Workgroup = 256 threads covering a 16x16 output tile x 4 channels.
+// The (16*s+k-1)^2 input halo tile is staged once in shared memory instead of
+// every thread re-reading kH*kW global values.
+// PC: outW, outH, C, kH, kW, strideH, strideW, padT, padL, inW, inH, flags
+//   (bit0 bias, bits4-6 act, bit8: input is unfused addps -> x reads
+//    xm[i]*se[c4]+ra[i]); grid x = tilesX*tilesY*(C/4) groups of 256.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { float16_t bias[]; };
+layout(set = 0, binding = 3) writeonly buffer O { f16vec4 o[]; };
+layout(set = 0, binding = 4) readonly buffer RA { f16vec4 ra[]; };
+layout(set = 0, binding = 5) readonly buffer SE { f16vec4 se[]; };
+
+layout(push_constant) uniform PC {
+    uint outW; uint outH; uint C; uint kH; uint kW;
+    uint sh; uint sw; uint pt; uint pl; uint inW; uint inH; uint flags;
+} p;
+
+// worst tile: s=2,k=5 -> 16*2+4 = 36 px per side -> 1296 f16vec4 = 10.4 KB
+shared f16vec4 shTile[36 * 36];
+shared f16vec4 shW[25];   // kH*kW <= 25 taps for this channel-quad
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+float16_t actf(float v, uint act, uint flg)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 2u) return float16_t(0.5 * v * (1.0 + erf1(v * 0.70710678118654752)));
+    if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return float16_t(v * hs); }
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint cv = p.C >> 2;
+    uint b = gl_WorkGroupID.y;              // batch index (gy); 0 for DET
+    uint xb = b * p.inH * p.inW * cv;       // input base (vec4 units)
+    uint seb = b * cv;                      // per-batch SE scale base
+    uint tilesX = (p.outW + 15u) / 16u;
+    uint tilesY = (p.outH + 15u) / 16u;
+    uint g = gl_WorkGroupID.x;
+    uint c4 = g % cv;
+    uint tile = g / cv;
+    uint tx = tile % tilesX, ty = tile / tilesX;
+
+    // input tile origin in global input px (can be negative -> zero fill)
+    int iyT = int(ty * 16u * p.sh) - int(p.pt);
+    int ixT = int(tx * 16u * p.sw) - int(p.pl);
+    uint stW = 16u * p.sw + p.kW - 1u;
+    uint stH = 16u * p.sh + p.kH - 1u;
+    uint tileElems = stW * stH;
+
+    // cooperative stage: vec4 per (iy, ix) at fixed c4
+    for (uint e = gl_LocalInvocationID.x; e < tileElems; e += 256u) {
+        uint iy = e / stW, ix = e - iy * stW;
+        int gy = iyT + int(iy), gx2 = ixT + int(ix);
+        f16vec4 v = f16vec4(0.0);
+        if (gy >= 0 && uint(gy) < p.inH && gx2 >= 0 && uint(gx2) < p.inW) {
+            uint gi = xb + (uint(gy) * p.inW + uint(gx2)) * cv + c4;
+            v = x[gi];
+            if ((p.flags & 256u) != 0u)
+                v = f16vec4(vec4(v) * vec4(se[seb + c4]) + vec4(ra[gi]));
+        }
+        shTile[e] = v;
+    }
+    uint taps = p.kH * p.kW;
+    for (uint e = gl_LocalInvocationID.x; e < taps; e += 256u)
+        shW[e] = w[e * cv + c4];
+    barrier();
+
+    uint tid = gl_LocalInvocationID.x;
+    uint ox = tx * 16u + (tid & 15u);
+    uint oy = ty * 16u + (tid >> 4);
+    if (ox >= p.outW || oy >= p.outH) return;
+
+    uint lx0 = (tid & 15u) * p.sw;
+    uint ly0 = (tid >> 4) * p.sh;
+    vec4 acc = vec4(0.0);
+    for (uint dy = 0u; dy < p.kH; dy++)
+        for (uint dx = 0u; dx < p.kW; dx++)
+            acc += vec4(shW[dy * p.kW + dx]) * vec4(shTile[(ly0 + dy) * stW + lx0 + dx]);
+    if ((p.flags & 1u) != 0u) {
+        uint cb = c4 * 4u;
+        acc += vec4(float(bias[cb]), float(bias[cb + 1u]),
+                    float(bias[cb + 2u]), float(bias[cb + 3u]));
+    }
+    uint act = (p.flags >> 4) & 7u;
+    o[b * p.outH * p.outW * cv + (oy * p.outW + ox) * cv + c4] =
+        f16vec4(actf(acc.x, act, p.flags), actf(acc.y, act, p.flags),
+                actf(acc.z, act, p.flags), actf(acc.w, act, p.flags));
+}

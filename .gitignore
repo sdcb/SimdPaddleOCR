@@ -21,4 +21,4 @@ fonts/
 c-assets/
 dataset/
 bench-out/
-.wrangler/
+.wrangler/test/Sdcb.SimdPaddleOCR.GpuPoc/

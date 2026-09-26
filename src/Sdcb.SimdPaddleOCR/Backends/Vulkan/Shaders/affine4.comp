@@ -1,0 +1,27 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Per-channel affine on NHWC fp16 (folded BatchNormalization):
+//   o[i] = x[i] * s[c4] + t[c4]      i = flat vec4 index, c4 = i % cv
+// Works for rank-3 [n, C, w] tensors too: channel-last physical layout makes
+// the channel index i % cv regardless of the rank.
+// PC: total vec4 count (per call incl. batch), cv (vec4 channels per image-row)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer S { f16vec4 s[]; };
+layout(set = 0, binding = 2) readonly buffer T { f16vec4 t[]; };
+layout(set = 0, binding = 3) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC { uint n; uint cv; } p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= p.n) return;
+    uint c4 = gid % p.cv;
+    o[gid] = f16vec4(vec4(x[gid]) * vec4(s[c4]) + vec4(t[c4]));
+}

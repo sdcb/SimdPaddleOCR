@@ -1,0 +1,51 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Phase 1 of spatial mean over NHWC fp16: per-pixel-partition partial sums.
+// Workgroup s covers pixel range [s*P, s*P+P); its 256 lanes are laid out
+// (strip = lane / cv, cLane = lane % cv) so neighbouring lanes read
+// neighbouring vec4 channel groups (coalesced). Each lane accumulates a vec4,
+// then shared-reduce over strips and write partial[s*C + c4*4 + i] (fp32).
+// PC: hw, C, S(partitions), P(elems per partition)
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) writeonly buffer Part { float part[]; };
+
+layout(push_constant) uniform PC { uint hw; uint C; uint S; uint P; } p;
+
+shared vec4 sm[256];
+
+void main()
+{
+    uint s = gl_WorkGroupID.x;
+    uint b = gl_WorkGroupID.y;              // batch index (gy); 0 for DET
+    uint cv = p.C >> 2;
+    uint pb = b * p.S * p.C;                // partials base
+    uint xb = b * p.hw * cv;
+    uint lane = gl_LocalInvocationID.x;
+    uint strips = 256u / cv;
+    uint strip = lane / cv;
+    uint cLane = lane - strip * cv;
+    vec4 acc = vec4(0.0);
+    uint beg = s * p.P;
+    uint end = min(beg + p.P, p.hw);
+    for (uint px = beg + strip; px < end; px += strips)
+        acc += vec4(x[xb + px * cv + cLane]);
+    sm[lane] = acc;
+    barrier();
+    for (uint st = strips >> 1; st > 0u; st >>= 1) {
+        if (strip < st) sm[lane] += sm[lane + st * cv];
+        barrier();
+    }
+    if (strip == 0u) {
+        uint ob = pb + (s * p.C) + cLane * 4u;
+        part[ob]      = sm[lane].x;
+        part[ob + 1u] = sm[lane].y;
+        part[ob + 2u] = sm[lane].z;
+        part[ob + 3u] = sm[lane].w;
+    }
+}

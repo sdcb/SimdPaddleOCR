@@ -15,7 +15,7 @@ namespace Sdcb.SimdPaddleOCR.OnnxSharp;
 /// <see cref="Reshape"/> to retarget the session to a new input shape without
 /// recompiling the model.
 /// </summary>
-public sealed partial class InferenceSession : IDisposable
+public sealed partial class InferenceSession : IOcrSession
 {
     private static bool s_profileEnabled;
     private static readonly bool s_dumpConv = Environment.GetEnvironmentVariable("PPOCR_DUMP_CONV") is not null;
@@ -665,9 +665,30 @@ public sealed partial class InferenceSession : IDisposable
     }
 
     internal bool IsProfilingEnabled => s_profileEnabled;
+    internal static bool ProfilingEnabled => s_profileEnabled;
 
     internal void NoteProfile(OperatorId operation, long started, int nodeIndex)
         => AddProfile((int)operation, started, nodeIndex);
+
+    internal static void NoteProfileStatic(OperatorId operation, long started, int nodeIndex)
+        => AddProfile((int)operation, started, nodeIndex);
+
+    // IOcrSession forwards for members that stay internal on this class.
+    int IOcrSession.HighWaterInputVolume => HighWaterInputVolume;
+    bool IOcrSession.PlanForCtcProjection { get => PlanForCtcProjection; set => PlanForCtcProjection = value; }
+    int IOcrSession.IntraOpThreads { get => IntraOpThreads; set => IntraOpThreads = value; }
+    bool IOcrSession.InputIsNhwc => InputIsNhwc;
+    bool IOcrSession.GpuAlive => true;
+    Span<float> IOcrSession.InputData => InputData;
+    ResizeWorkspace IOcrSession.ResizeWorkspace => ResizeWorkspace;
+    bool IOcrSession.IsProfilingEnabled => s_profileEnabled;
+    ReadOnlySpan<float> IOcrSession.RunInternal(ReadOnlySpan<float> input) => RunInternal(input);
+    bool IOcrSession.TryRunUntilCtcProjection(ReadOnlySpan<float> input, out CtcProjectionOperands operands)
+        => TryRunUntilCtcProjection(input, out operands);
+    ReadOnlySpan<float> IOcrSession.RunInternalSkipFinalSoftmax(ReadOnlySpan<float> input, out bool outputIsLogits)
+        => RunInternalSkipFinalSoftmax(input, out outputIsLogits);
+    void IOcrSession.NoteProfile(OperatorId operation, long started, int nodeIndex)
+        => NoteProfile(operation, started, nodeIndex);
 
     private bool TryResolveCtcProjection(out NodeRecord matMul, out int matMulIndex,
         out ReadOnlySpan<float> bias, out float[]? packed, out int batch, out int rows,
@@ -730,7 +751,10 @@ public sealed partial class InferenceSession : IDisposable
             projectedOutput.ElementCount != checked((long)batch * rows * columns))
             return false;
         _compiled.TryGetPackedMatMul(matMul.Inputs[1], out packed);
-        return global::Sdcb.SimdPaddleOCR.Kernels.MatMul.CanFuseArgMax(rows, inner, columns, packed);
+        // The operand split itself is column-agnostic; the ArgMax fusion gate
+        // lives inside MatMul.TryArgMax, which callers consult separately —
+        // small-column heads (e.g. the cls [inner,2] classifier) resolve too.
+        return columns > 0;
     }
 
     private bool HasSkippableOutputSoftmax(out NodeRecord softmax)
@@ -888,11 +912,12 @@ public sealed partial class InferenceSession : IDisposable
     {
         if (_disposed) throw new ObjectDisposedException(nameof(InferenceSession));
         EnsureShape();
-        CopyInputUnlessAliased(input, _tensors[_inputIndex]);
+        input = EnsureFullPlan(input);
+        BindPublicInput(input, _tensors[_inputIndex]);
         NodeTrace[] traces = new NodeTrace[_model.Nodes.Length];
         for (int ni = 0; ni < _model.Nodes.Length; ni++)
         {
-            ExecuteNode(_model.Nodes[ni], ni);
+            ni += ExecuteStep(ni);
             TensorValue o = _tensors[_model.Nodes[ni].Outputs[0]];
             Span<float> data = o.Data;
             float min = float.PositiveInfinity, max = float.NegativeInfinity;
@@ -901,6 +926,18 @@ public sealed partial class InferenceSession : IDisposable
             traces[ni] = new NodeTrace(ni, _model.Nodes[ni].Operator, [.. o.Shape], min, max, sum / data.Length);
         }
         return traces;
+    }
+
+    /// <summary>Debug: run node-by-node like Trace but keep tensor contents.</summary>
+    internal float[] TraceNodeValues(ReadOnlySpan<float> input, int nodeIndex)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(InferenceSession));
+        EnsureShape();
+        input = EnsureFullPlan(input);
+        BindPublicInput(input, _tensors[_inputIndex]);
+        for (int ni = 0; ni <= nodeIndex; ni++)
+            ni += ExecuteStep(ni);
+        return [.. _tensors[_model.Nodes[nodeIndex].Outputs[0]].Data];
     }
 
     internal (int Index, string Operator, int[] Shape, int DataLength)[] ResolvedNodeShapes()

@@ -1,0 +1,24 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Phase 2 of spatial mean: out[c] = (sum_s part[s][c]) / hw, fp16 out.
+// One thread per channel. PC: S, C, hw
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer Part { float part[]; };
+layout(set = 0, binding = 1) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC { uint S; uint C; uint hw; } p;
+
+void main()
+{
+    uint c = gl_GlobalInvocationID.x;
+    uint b = gl_GlobalInvocationID.y;         // batch index (gy); 0 for DET
+    if (c >= p.C) return;
+    float acc = 0.0;
+    for (uint s = 0u; s < p.S; s++) acc += part[b * p.S * p.C + s * p.C + c];
+    o[b * p.C + c] = float16_t(acc / float(p.hw));
+}

@@ -1,0 +1,84 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Vectorized elementwise on NHWC fp16 (packed as uint pairs).
+// Each thread handles 4 consecutive elements. Eligible only when n%4==0 and
+// (mode==1 implies C%4==0) — emit falls back to elem.comp otherwise.
+// Broadcast modes: 0=full index, 1=channel vector (index % C), 2=scalar.
+// PC: n, C, op, aMode, bMode, aux — same op table as elem.comp.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer A { uint a[]; };
+layout(set = 0, binding = 1) readonly buffer B { uint b[]; };
+layout(set = 0, binding = 2) writeonly buffer O { uint o[]; };
+
+layout(push_constant) uniform PC {
+    uint n; uint C; uint op; uint aMode; uint bMode; uint aux;
+} p;
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint i0 = gid * 4u;
+    if (i0 >= p.n) return;
+
+    vec4 va;
+    {
+        // mode 3 = per-image channel vector: aux = elements per image
+        uint base = p.aMode == 1u ? i0 % p.C
+                  : p.aMode == 3u ? (i0 / p.aux) * p.C + i0 % p.C : i0;
+        if (p.aMode == 2u) {
+            va = vec4(unpackHalf2x16(a[0]).x);
+        } else {
+            vec2 l = unpackHalf2x16(a[base >> 1]);
+            vec2 h = unpackHalf2x16(a[(base >> 1) + 1u]);
+            va = vec4(l.x, l.y, h.x, h.y);
+        }
+    }
+
+    vec4 r;
+    if (p.op < 8u || p.op == 14u) {
+        if (p.op == 1u) r = max(va, vec4(0.0));
+        else if (p.op == 2u) {
+            for (int i = 0; i < 4; i++)
+                r[i] = 0.5 * va[i] * (1.0 + erf1(va[i] * 0.70710678118654752));
+        }
+        else if (p.op == 3u) { vec2 ab = unpackHalf2x16(p.aux); r = clamp(va * ab.x + ab.y, vec4(0.0), vec4(1.0)); }
+        else if (p.op == 4u) r = vec4(1.0) / (vec4(1.0) + exp(-va));
+        else if (p.op == 5u) { for (int i = 0; i < 4; i++) r[i] = erf1(va[i]); }
+        else if (p.op == 6u) r = sqrt(max(va, vec4(0.0)));
+        else if (p.op == 14u) { vec2 ab = unpackHalf2x16(p.aux); r = va * clamp(va * ab.x + ab.y, vec4(0.0), vec4(1.0)); }   // hardswish
+        else r = va;
+    } else {
+        vec4 vb;
+        uint base = p.bMode == 1u ? i0 % p.C
+                  : p.bMode == 3u ? (i0 / p.aux) * p.C + i0 % p.C : i0;
+        if (p.bMode == 2u) {
+            vb = vec4(unpackHalf2x16(b[0]).x);
+        } else {
+            vec2 l = unpackHalf2x16(b[base >> 1]);
+            vec2 h = unpackHalf2x16(b[(base >> 1) + 1u]);
+            vb = vec4(l.x, l.y, h.x, h.y);
+        }
+        if (p.op == 9u) r = va * vb;
+        else if (p.op == 10u) r = va - vb;
+        else if (p.op == 11u) r = va / vb;
+        else if (p.op == 12u) r = max(va, vb);
+        else r = va + vb;
+    }
+
+    o[i0 >> 1]       = packHalf2x16(r.xy);
+    o[(i0 >> 1) + 1] = packHalf2x16(r.zw);
+}

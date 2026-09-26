@@ -1,0 +1,25 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// NHWC channel-concat slice copy: o[px, cOff + c] = x[px, c], c < Cin.
+// One dispatch per concat input.
+// PC: hw (H*W), Cin, Cout, cOff
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float16_t x[]; };
+layout(set = 0, binding = 1) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC { uint hw; uint Cin; uint Cout; uint cOff; } p;
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint total = p.hw * p.Cin;
+    if (gid >= total) return;
+    uint c = gid % p.Cin;
+    uint px = gid / p.Cin;
+    o[px * p.Cout + p.cOff + c] = x[gid];
+}

@@ -1,0 +1,35 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Per-channel spatial mean (SE squeeze / global avg pool) on NHWC fp16:
+//   out[c] = mean over px of x[px, c]
+// One workgroup per channel; 256 threads strided-reduce into shared, fp32 acc.
+// PC: hw (H*W), C
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float16_t x[]; };
+layout(set = 0, binding = 1) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC { uint hw; uint C; } p;
+
+shared float sm[256];
+
+void main()
+{
+    uint c = gl_WorkGroupID.x;
+    uint b = gl_WorkGroupID.y;              // batch index (gy); 0 for DET
+    uint lane = gl_LocalInvocationID.x;
+    float acc = 0.0;
+    for (uint px = lane; px < p.hw; px += 256u)
+        acc += float(x[b * p.hw * p.C + px * p.C + c]);
+    sm[lane] = acc;
+    barrier();
+    for (uint s = 128u; s > 0u; s >>= 1) {
+        if (lane < s) sm[lane] += sm[lane + s];
+        barrier();
+    }
+    if (lane == 0u) o[b * p.C + c] = float16_t(sm[0] / float(p.hw));
+}

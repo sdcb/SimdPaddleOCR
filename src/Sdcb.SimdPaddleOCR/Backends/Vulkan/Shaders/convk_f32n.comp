@@ -1,0 +1,109 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// convk_dot variant whose A side reads the fp32 NCHW graph input directly
+// (stem conv, cin <= 4 -> a single vec4 column per tap). Removes the
+// nchw2nhwc dispatch + the fp16 input round-trip.
+//   a = x[ci * inHW + iy * inW + ix]   (0 when OOB or ci >= cin)
+// PC: M, N, outW, inW, inH, cin4v(=1), taps, kW, sH, sW, padT, padL, flags,
+//     dstCv, dstCoff, cin, inHW
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { f16vec4 bias[]; };
+layout(set = 0, binding = 3) readonly buffer Res { f16vec4 res[]; };
+layout(set = 0, binding = 4) writeonly buffer O { f16vec4 o[]; };
+
+layout(push_constant) uniform PC {
+    uint M; uint N; uint outW; uint inW; uint inH; uint cin4v;
+    uint taps; uint kW; uint sH; uint sW; uint padT; uint padL; uint flags;
+    uint dstCv; uint dstCoff; uint cin; uint inHW;
+} p;
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+float16_t actf(float v, uint act, uint flg)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 2u) return float16_t(0.5 * v * (1.0 + erf1(v * 0.70710678118654752)));
+    if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return float16_t(v * hs); }
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint gid = gl_GlobalInvocationID.x;
+    uint b = gl_WorkGroupID.y;              // batch index (gy); 0 for DET
+    uint nv = p.N >> 2;
+    uint mv = (p.M + 3u) >> 2;
+    if (gid >= mv * nv) return;
+    uint n4 = gid % nv;
+    uint m0 = (gid / nv) * 4u;
+    uint xb = b * p.cin * p.inHW;           // NCHW batch base (fp32 elems)
+    uint rb = b * (p.M * p.N >> 2);         // residual base
+    uint dcv0 = p.dstCv != 0u ? p.dstCv : nv;
+    uint ob = b * p.M * dcv0;               // output base
+
+    vec4 acc0 = vec4(0.0), acc1 = vec4(0.0), acc2 = vec4(0.0), acc3 = vec4(0.0);
+    uint oh[4], ow[4];
+    bool ok[4];
+    for (uint i = 0u; i < 4u; i++) {
+        uint m = m0 + i;
+        ok[i] = m < p.M;
+        oh[i] = m / p.outW;
+        ow[i] = m - oh[i] * p.outW;
+    }
+
+    for (uint t = 0u; t < p.taps; t++) {
+        uint ky = t / p.kW, kx = t - ky * p.kW;
+        vec4 a0 = vec4(0.0), a1 = vec4(0.0), a2 = vec4(0.0), a3 = vec4(0.0);
+        for (uint i = 0u; i < 4u; i++) {
+            if (!ok[i]) continue;
+            int ih = int(oh[i] * p.sH + ky) - int(p.padT);
+            int iw = int(ow[i] * p.sW + kx) - int(p.padL);
+            if (ih < 0 || uint(ih) >= p.inH || iw < 0 || uint(iw) >= p.inW)
+                continue;
+            uint px = uint(ih) * p.inW + uint(iw);
+            vec4 v = vec4(0.0);
+            for (uint ci = 0u; ci < 4u; ci++)
+                if (ci < p.cin) v[ci] = x[xb + ci * p.inHW + px];
+            if (i == 0u) a0 = v; else if (i == 1u) a1 = v;
+            else if (i == 2u) a2 = v; else a3 = v;
+        }
+        uint wRow = (t * p.cin4v) * 4u * nv + n4;
+        for (uint i = 0u; i < 4u; i++) {
+            vec4 wv = vec4(w[wRow + i * nv]);
+            acc0 += a0[i] * wv; acc1 += a1[i] * wv;
+            acc2 += a2[i] * wv; acc3 += a3[i] * wv;
+        }
+    }
+    if ((p.flags & 1u) != 0u) {
+        vec4 bv = vec4(bias[n4]);
+        acc0 += bv; acc1 += bv; acc2 += bv; acc3 += bv;
+    }
+    uint act = (p.flags >> 4) & 7u;
+    if ((p.flags & 2u) != 0u) {
+        if (m0 < p.M)      acc0 += vec4(res[rb + (m0 * p.N >> 2) + n4]);
+        if (m0 + 1u < p.M) acc1 += vec4(res[rb + ((m0 + 1u) * p.N >> 2) + n4]);
+        if (m0 + 2u < p.M) acc2 += vec4(res[rb + ((m0 + 2u) * p.N >> 2) + n4]);
+        if (m0 + 3u < p.M) acc3 += vec4(res[rb + ((m0 + 3u) * p.N >> 2) + n4]);
+    }
+    uint dcv = dcv0;
+    uint obase = p.dstCoff + n4;
+    if (m0 < p.M)      o[ob + m0 * dcv + obase]       = f16vec4(actf(acc0.x, act, p.flags), actf(acc0.y, act, p.flags), actf(acc0.z, act, p.flags), actf(acc0.w, act, p.flags));
+    if (m0 + 1u < p.M) o[ob + (m0 + 1u) * dcv + obase] = f16vec4(actf(acc1.x, act, p.flags), actf(acc1.y, act, p.flags), actf(acc1.z, act, p.flags), actf(acc1.w, act, p.flags));
+    if (m0 + 2u < p.M) o[ob + (m0 + 2u) * dcv + obase] = f16vec4(actf(acc2.x, act, p.flags), actf(acc2.y, act, p.flags), actf(acc2.z, act, p.flags), actf(acc2.w, act, p.flags));
+    if (m0 + 3u < p.M) o[ob + (m0 + 3u) * dcv + obase] = f16vec4(actf(acc3.x, act, p.flags), actf(acc3.y, act, p.flags), actf(acc3.z, act, p.flags), actf(acc3.w, act, p.flags));
+}

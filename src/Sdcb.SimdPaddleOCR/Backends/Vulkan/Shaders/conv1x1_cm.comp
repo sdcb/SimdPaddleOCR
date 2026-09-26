@@ -1,0 +1,128 @@
+#version 450
+
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Conv1x1 as GEMM on NHWC activations:
+//   OUT[M=H*W, N=Cout] = act(X[M, K=Cin] * W[N=Cout, K]^T + bias + residual)
+// All tensors fp16 in memory; accumulate fp32 (XMX coopmat 8x16x16).
+// Requires kDim % 4 == 0; X over-allocated to tile rows (reads may touch pad).
+//
+// flags: bit0 hasBias, bit1 hasResidual, bits[4:7] activation
+//   act: 0=none 1=relu 2=gelu 3=hardswish(x*hs(x)) 4=sigmoid
+// bias is a [Cout] fp16 vector (broadcast scalar when nDimBias==1 not needed:
+// OCR convs always have per-channel bias; scalar bias handled by elem kernel).
+
+#ifndef TSM
+#define TSM 4u        // acc rows per strip (strip M = TSM*8)
+#endif
+#ifndef TSN
+#define TSN 2u        // acc cols per strip (strip N = TSN*16)
+#endif
+#ifndef SGX
+#define SGX 4u        // sg grid X (N direction)
+#endif
+#ifndef SGY
+#define SGY 4u        // sg grid Y (M direction)
+#endif
+#ifndef NTHR
+#define NTHR 256      // threads (must be SGX*SGY*16)
+#endif
+
+layout(local_size_x = NTHR) in;
+
+const uint STRM = TSM * 8u;
+const uint STRN = TSN * 16u;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { float16_t bias[]; };
+layout(set = 0, binding = 3) readonly buffer Res { float16_t res[]; };
+layout(set = 0, binding = 4) writeonly buffer O { float16_t o[]; };
+layout(set = 0, binding = 5) writeonly buffer O2 { float16_t o2[]; };
+
+layout(push_constant) uniform PC { uint mDim; uint nDim; uint kDim; uint flags; } p;
+
+shared float stage[NTHR / 16 * 8 * 16];
+
+// Abramowitz-Stegun style erf, |err| < 1.5e-4 — plenty for fp16 outputs
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float p = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - p * exp(-v * v));
+}
+
+float16_t actf(float v, uint act, uint flg)
+{
+    if (act == 1u) return float16_t(max(v, 0.0));
+    if (act == 2u) return float16_t(0.5 * v * (1.0 + erf1(v * 0.70710678118654752)));
+    if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return float16_t(v * hs); }
+    if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    return float16_t(v);
+}
+
+void main()
+{
+    uint sg = gl_SubgroupID;
+    uint lane = gl_SubgroupInvocationID;
+    uint sgx = sg & (SGX - 1u), sgy = sg / SGX;
+    uint m0 = gl_WorkGroupID.x * (SGY * STRM);
+    uint n0 = gl_WorkGroupID.y * (SGX * STRN);
+
+    uint act = (p.flags >> 4) & 7u;
+    bool hasBias = (p.flags & 1u) != 0u;
+    bool hasRes = (p.flags & 2u) != 0u;
+
+    coopmat<float, gl_ScopeSubgroup, 8, 16, gl_MatrixUseAccumulator> acc[TSM][TSN];
+    for (uint i = 0u; i < TSM; i++)
+        for (uint j = 0u; j < TSN; j++)
+            acc[i][j] = coopmat<float, gl_ScopeSubgroup, 8, 16, gl_MatrixUseAccumulator>(0.0f);
+
+    uint kv = p.kDim >> 2;             // kDim in vec4 units
+    uint xa = (m0 + sgy * STRM) * kv;  // A strip base (vec4 elems)
+    uint wb = (n0 + sgx * STRN) * kv;  // B strip base
+
+    coopmat<float16_t, gl_ScopeSubgroup, 8, 16, gl_MatrixUseA> ma[TSM];
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb[TSN];
+    for (uint kb = 0u; kb < kv; kb += 4u) {
+        for (uint i = 0u; i < TSM; i++)
+            coopMatLoad(ma[i], x, xa + i * 8u * kv + kb, kv, gl_CooperativeMatrixLayoutRowMajor);
+        for (uint j = 0u; j < TSN; j++)
+            coopMatLoad(mb[j], w, wb + j * 16u * kv + kb, kv, gl_CooperativeMatrixLayoutColumnMajor);
+        for (uint i = 0u; i < TSM; i++)
+            for (uint j = 0u; j < TSN; j++)
+                acc[i][j] = coopMatMulAdd(ma[i], mb[j], acc[i][j]);
+    }
+
+    // always go through shared stage: epilogue needs element access
+    for (uint i = 0u; i < TSM; i++) {
+        for (uint j = 0u; j < TSN; j++) {
+            coopMatStore(acc[i][j], stage, sg * 128u, 8u, gl_CooperativeMatrixLayoutColumnMajor);
+            barrier();
+            uint rm = sgy * STRM + i * 8u;
+            uint cn = sgx * STRN + j * 16u;
+            for (uint l = 0u; l < 8u; l++) {
+                uint e = lane * 8u + l;
+                uint mm = e >> 4, nn = e & 15u;
+                uint gmr = m0 + rm + mm;
+                uint gnc = n0 + cn + nn;
+                if (gmr < p.mDim && gnc < p.nDim) {
+                    float v = stage[sg * 128u + nn * 8u + mm];
+                    if (hasBias) v += float(bias[gnc]);
+                    if (hasRes) v += float(res[gmr * p.nDim + gnc]);
+                    o[gmr * p.nDim + gnc] = actf(v, act, p.flags);
+                    if ((p.flags & 8u) != 0u)
+                        o2[gmr * p.nDim + gnc] = (p.flags & 1024u) != 0u
+                            ? float16_t(v) : actf(v, 2u, p.flags);
+                }
+            }
+            barrier();
+        }
+    }
+}

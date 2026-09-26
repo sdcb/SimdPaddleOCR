@@ -15,8 +15,13 @@ public sealed class PaddleOcrRecognizer : IDisposable
     private readonly PaddleOcrRecognizerOptions _options;
     private readonly CompiledModel _compiled;
     private readonly bool _ownsModel;
-    private readonly List<InferenceSession> _sessions = [];
+    private readonly List<IOcrSession> _sessions = [];
     private readonly object _poolLock = new();
+    // Cleared the first time a GPU session reports it has fallen back to CPU
+    // (emission/compile failure for this model). PaddleOcrAll reads it to stop
+    // picking GPU-shaped (fewer, wider) line batches.
+    private volatile bool _gpuRecAlive = true;
+    internal bool GpuRecAlive => _gpuRecAlive;
     private int _pooledCount;
     private bool _disposed;
 
@@ -159,7 +164,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
         int targetWidth = SelectTargetWidth(sourceWidth, sourceHeight);
         if (profile) PipelineProfiler.Add(PipelineProfiler.RecCacheGet, t);
         t = profile ? PipelineProfiler.Now() : 0;
-        InferenceSession session = RentSession(1, targetWidth);
+        IOcrSession session = RentSession(1, targetWidth);
         // Rented sessions may carry a boosted budget from a previous pooled
         // call; always rebind so the compiled default is the fallback.
         session.IntraOpThreads = intraOpThreads;
@@ -203,19 +208,20 @@ public sealed class PaddleOcrRecognizer : IDisposable
         finally
         {
             long started = profile ? PipelineProfiler.Now() : 0;
+            if (!session.GpuAlive) _gpuRecAlive = false;
             ReturnSession(session);
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecRelease, started);
         }
     }
 
-    private InferenceSession RentSession(int batch, int width)
+    private IOcrSession RentSession(int batch, int width)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
         int volume = checked(batch * 3 * 48 * width);
-        InferenceSession? session = TryTakeBestFit(volume);
+        IOcrSession? session = TryTakeBestFit(volume);
         if (session is null)
         {
-            session = _compiled.CreateRequest();
+            session = OnnxSharp.OcrSessionFactory.Create(_compiled, _options.Backend);
             // RunCtcGraph stops before the vocab MatMul; do not plan the
             // [T×vocab] logits/softmax planes that path never writes.
             session.PlanForCtcProjection = true;
@@ -228,7 +234,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
     // seen. Same photo, next request: a different worker ate that max and
     // grew again. Best-fit keeps the fat buffer on the sessions that
     // already paid for it.
-    private InferenceSession? TryTakeBestFit(int volume)
+    private IOcrSession? TryTakeBestFit(int volume)
     {
         lock (_poolLock)
         {
@@ -251,7 +257,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
                 }
             }
             int take = bestFit >= 0 ? bestFit : largest;
-            InferenceSession session = _sessions[take];
+            IOcrSession session = _sessions[take];
             int last = count - 1;
             if (take != last) _sessions[take] = _sessions[last];
             _sessions.RemoveAt(last);
@@ -276,7 +282,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
         int n = lineIndices.Length;
         bool profile = PipelineProfiler.Enabled;
         long t = profile ? PipelineProfiler.Now() : 0;
-        InferenceSession session = RentSession(n, targetWidth);
+        IOcrSession session = RentSession(n, targetWidth);
         session.IntraOpThreads = intraOpThreads;
         if (profile) PipelineProfiler.Add(PipelineProfiler.RecRent, t);
         t = profile ? PipelineProfiler.Now() : 0;
@@ -333,6 +339,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
         {
             long started = profile ? PipelineProfiler.Now() : 0;
             PooledArrays.Return(resizedWidths);
+            if (!session.GpuAlive) _gpuRecAlive = false;
             ReturnSession(session);
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecRelease, started);
         }
@@ -343,7 +350,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
     /// method owns compact ArgMax scratch via ArrayPool (Recognizer is
     /// concurrent across rented sessions, so instance fields are unsafe).
     /// </summary>
-    private CtcDecodeInput RunCtcGraph(InferenceSession session, ReadOnlySpan<float> input)
+    private CtcDecodeInput RunCtcGraph(IOcrSession session, ReadOnlySpan<float> input)
     {
         if (session.TryRunUntilCtcProjection(input, out CtcProjectionOperands ops))
         {
@@ -368,7 +375,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
         return CtcDecodeInput.FromDense(dense, logits);
     }
 
-    private void ReturnSession(InferenceSession session)
+    private void ReturnSession(IOcrSession session)
     {
         lock (_poolLock)
         {
@@ -522,7 +529,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
 
     public void Dispose()
     {
-        InferenceSession[] draining;
+        IOcrSession[] draining;
         lock (_poolLock)
         {
             if (_disposed) return;
@@ -531,7 +538,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
             _sessions.Clear();
             _pooledCount = 0;
         }
-        foreach (InferenceSession session in draining)
+        foreach (IOcrSession session in draining)
             session.Dispose();
         _compiled.Dispose();
         if (_ownsModel) _model.Dispose();
