@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.Arm;
 using System.Runtime.Intrinsics.X86;
 #endif
 using System.Threading.Tasks;
@@ -38,6 +39,10 @@ internal static partial class MatMul
                 MatMulRows4(input, weights, output, batch, rows, inner, columns);
             else
                 MatMulRows1(input, weights, output, batch, 0, rows, inner, columns);
+        }
+        else if (AdvSimd.Arm64.IsSupported)
+        {
+            TryAdvSimd(input, weights, output, batch, rows, inner, columns, packedWeights);
         }
         else
 #endif

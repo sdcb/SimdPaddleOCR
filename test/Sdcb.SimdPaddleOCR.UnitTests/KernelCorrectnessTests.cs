@@ -228,6 +228,9 @@ public class KernelCorrectnessTests
     [InlineData(5, 32, 40)]
     [InlineData(4, 64, 1040)]
     [InlineData(5, 64, 1040)]
+    [InlineData(4, 32, 39)]
+    [InlineData(6, 32, 37)]
+    [InlineData(7, 96, 1037)]
     public void MatMul_VectorMatchesReference(int rows, int inner, int columns)
     {
         const int batch = 2;
@@ -259,6 +262,46 @@ public class KernelCorrectnessTests
         float[] actual = new float[expected.Length];
         Assert.True(MatMul.Try(input, weights, actual, batch, rows, inner, columns, packed));
         AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Theory]
+    [InlineData(4, 64, 1040)]
+    [InlineData(5, 96, 1037)]
+    [InlineData(3, 64, 1030)]
+    [InlineData(7, 96, 6624)]
+    public void MatMul_ArgMaxMatchesReference(int rows, int inner, int columns)
+    {
+        // Random data: a ramp over the inner dim produces near-tied column scores,
+        // and argmax then flips between rounding orders (FMA vs mul+add).
+        const int batch = 2;
+        float[] input = RandomFill(batch * rows * inner, 1f, seed: 1234);
+        float[] weights = RandomFill(inner * columns, 0.25f, seed: 5678);
+        float[] bias = RandomFill(columns, 0.5f, seed: 9012);
+        float[] packed = PackMatMul(weights, inner, columns);
+
+        float[] logits = new float[batch * rows * columns];
+        MatMulRef(input, weights, logits, batch, rows, inner, columns);
+        int[] expectedIndex = new int[batch * rows];
+        float[] expectedScore = new float[batch * rows];
+        for (int r = 0; r < batch * rows; r++)
+        {
+            int best = 0;
+            float max = logits[r * columns] + bias[0];
+            for (int c = 1; c < columns; c++)
+            {
+                float value = logits[r * columns + c] + bias[c];
+                if (value > max) { max = value; best = c; }
+            }
+            expectedIndex[r] = best;
+            expectedScore[r] = max;
+        }
+
+        int[] indices = new int[batch * rows];
+        float[] scores = new float[batch * rows];
+        Assert.True(MatMul.TryArgMax(input, weights, bias, indices, scores,
+            batch, rows, inner, columns, packed, threads: 3));
+        Assert.Equal(expectedIndex, indices);
+        AssertClose(expectedScore, scores, rtol: 5e-5f, atol: 5e-5f);
     }
 
     [Fact]
@@ -331,6 +374,15 @@ public class KernelCorrectnessTests
         float[] values = new float[length];
         for (int i = 0; i < length; i++)
             values[i] = (i % 17 - 8) * scale;
+        return values;
+    }
+
+    internal static float[] RandomFill(int length, float amplitude, int seed)
+    {
+        var rng = new Random(seed);
+        float[] values = new float[length];
+        for (int i = 0; i < length; i++)
+            values[i] = (float)(rng.NextDouble() * 2 - 1) * amplitude;
         return values;
     }
 
