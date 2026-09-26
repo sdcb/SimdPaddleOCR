@@ -381,7 +381,26 @@ public sealed class PaddleOcrAll : IDisposable
         PaddleOcrRecognitionResult[] recResults = new PaddleOcrRecognitionResult[count];
         try
         {
-            if (workerCount <= 1)
+            if (_classifier is { GpuCapable: true })
+            {
+                // GPU: one batched classify for all lines (fixed [n,3,80,160]
+                // input — single submit, head resolved on CPU), then the cheap
+                // rotate/width-select tail fans out across workers.
+                _classifier.ClassifyBatch(cropBuffer, offsets, bytes, widths, heights,
+                    count, labels, clsScores);
+                if (workerCount <= 1)
+                {
+                    PostClassifyRange(0, count, 1, cropBuffer, offsets, bytes, widths,
+                        heights, labels, clsScores, rotations, recWidths);
+                }
+                else
+                {
+                    Parallel.For(0, workerCount, worker =>
+                        PostClassifyRange(worker, count, workerCount, cropBuffer, offsets,
+                            bytes, widths, heights, labels, clsScores, rotations, recWidths));
+                }
+            }
+            else if (workerCount <= 1)
             {
                 ClassifyRange(0, count, 1, cropBuffer, offsets, bytes, widths, heights,
                     labels, clsScores, rotations, recWidths);
@@ -405,7 +424,9 @@ public sealed class PaddleOcrAll : IDisposable
                 units = [];
                 for (int s = 0; s < count; s += maxBatch)
                 {
-                    int[] unit = order[s..Math.Min(s + maxBatch, count)];
+                    int len = Math.Min(s + maxBatch, count) - s;
+                    int[] unit = new int[len];
+                    Array.Copy(order, s, unit, 0, len);
                     int wMax = 0;
                     foreach (int li in unit) wMax = Math.Max(wMax, recWidths[li]);
                     foreach (int li in unit) recWidths[li] = wMax;
@@ -504,6 +525,24 @@ public sealed class PaddleOcrAll : IDisposable
             labels[i] = label;
             clsScores[i] = clsScore;
             rotations[i] = rotation;
+            recWidths[i] = _recognizer.SelectWidthForCrop(widths[i], heights[i]);
+        }
+    }
+
+    // Post-batch tail of ClassifyRange: rotates 180°-flagged crops in place and
+    // fills per-line REC target widths. Runs after a batched classifier call
+    // that already produced labels/clsScores for every line.
+    private void PostClassifyRange(int first, int count, int stride, byte[] cropBuffer,
+        int[] offsets, int[] bytes, int[] widths, int[] heights, uint[] labels,
+        float[] clsScores, int[] rotations, int[] recWidths)
+    {
+        for (int i = first; i < count; i += stride)
+        {
+            if ((labels[i] & 1u) != 0 && clsScores[i] > _options.ClassifierThreshold)
+            {
+                PPOCRCrop.Rotate180(cropBuffer.AsSpan(offsets[i], bytes[i]), widths[i], heights[i]);
+                rotations[i] = 180;
+            }
             recWidths[i] = _recognizer.SelectWidthForCrop(widths[i], heights[i]);
         }
     }

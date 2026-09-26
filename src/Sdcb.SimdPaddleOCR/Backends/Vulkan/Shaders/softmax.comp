@@ -1,0 +1,31 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Row softmax on fp16 activations: y[r,:] = softmax(x[r,:]) over the last axis.
+// One invocation per row; cols is small in practice (cls head = 2) and the
+// two extra exp passes keep it correct for any row length without scratch.
+// PC: rows, cols
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer A { float16_t x[]; };
+layout(set = 0, binding = 1) writeonly buffer B { float16_t y[]; };
+
+layout(push_constant) uniform PC {
+    uint rows; uint cols;
+} p;
+
+void main()
+{
+    uint r = gl_GlobalInvocationID.x;
+    if (r >= p.rows) return;
+    uint b = r * p.cols;
+    float m = -3.4e38;
+    for (uint j = 0; j < p.cols; j++) m = max(m, float(x[b + j]));
+    float s = 0.0;
+    for (uint j = 0; j < p.cols; j++) s += exp(float(x[b + j]) - m);
+    float inv = 1.0 / s;
+    for (uint j = 0; j < p.cols; j++) y[b + j] = float16_t(exp(float(x[b + j]) - m) * inv);
+}

@@ -39,6 +39,8 @@ public sealed class PaddleOcrDetectorOptions
 /// <summary>Options for the direction classifier.</summary>
 public sealed class PaddleOcrClassifierOptions
 {
+    /// <summary>Compute backend for the classification graph. Default <see cref="OcrBackend.Auto"/>.</summary>
+    public OcrBackend Backend { get; init; } = OcrBackend.Auto;
     public long MaxImagePixels { get; init; } = 40_000_000;
     /// <summary>
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool

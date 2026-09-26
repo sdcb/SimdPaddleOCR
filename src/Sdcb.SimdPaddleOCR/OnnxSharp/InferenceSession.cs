@@ -656,7 +656,10 @@ public sealed partial class InferenceSession : IOcrSession
             projectedOutput.ElementCount != checked((long)batch * rows * columns))
             return false;
         _compiled.TryGetPackedMatMul(matMul.Inputs[1], out packed);
-        return global::Sdcb.SimdPaddleOCR.Kernels.MatMul.CanFuseArgMax(rows, inner, columns, packed);
+        // The operand split itself is column-agnostic; the ArgMax fusion gate
+        // lives inside MatMul.TryArgMax, which callers consult separately —
+        // small-column heads (e.g. the cls [inner,2] classifier) resolve too.
+        return columns > 0;
     }
 
     private bool HasSkippableOutputSoftmax(out NodeRecord softmax)

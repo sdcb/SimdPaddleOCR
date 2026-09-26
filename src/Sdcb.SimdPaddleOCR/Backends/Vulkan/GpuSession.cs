@@ -203,7 +203,9 @@ internal sealed class GpuSession : IOcrSession
         foreach (int d in projOut) projCount *= Math.Max(d, 1);
         if (projOut[^1] != columns || projCount != (long)batch * rows * columns) return;
         _compiled.TryGetPackedMatMul(matMul.Inputs[1], out float[]? packed);
-        if (!Kernels.MatMul.CanFuseArgMax(rows, inner, columns, packed)) return;
+        // Column count does not gate here (unlike the recognizer's ArgMax
+        // fusion): small-column heads like the cls [inner,2] tail resolve too.
+        if (columns <= 0) return;
 
         _ctcMatMulIndex = matMulIndex;
         _ctcActTensor = checked((int)matMul.Inputs[0]);

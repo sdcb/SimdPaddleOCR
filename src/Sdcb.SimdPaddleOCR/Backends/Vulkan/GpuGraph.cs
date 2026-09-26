@@ -17,6 +17,7 @@ internal sealed class GpuDetGraph : IDisposable
     private readonly Model _model;
     private readonly CompiledModel _compiled;
 
+    private readonly VkPipeline _pSoftmax;
     private readonly VkPipeline _pConv1x1, _pConv1x1N64, _pConv1x1N32, _pDot,
         _pDw, _pDw4, _pDw4T, _pDense, _pConvT, _pConvT4, _pElem, _pElem4,
         _pReduce, _pReduce4, _pReduce4b, _pPool, _pPool4,
@@ -171,6 +172,7 @@ internal sealed class GpuDetGraph : IDisposable
         _pOut = Pipe("sigmoid_out", 2, 8);
         _pAvg4 = Pipe("avgpool4", 2, 44);
         _pAffine = Pipe("affine4", 4, 8);
+        _pSoftmax = Pipe("softmax", 2, 8);
     }
 
     private VkPipeline Pipe(string name, int bindings, int pcBytes, uint reqSg = 0)
@@ -1719,6 +1721,21 @@ internal sealed class GpuDetGraph : IDisposable
                          (VecF16(s), 0, 2), (VecF16(t), 0, 2),
                          (arena, off[outPhys], 2)],
                         [(uint)(n / 4), (uint)(cc / 4)], Div256(n / 4));
+                    break;
+                }
+
+                case OperatorId.Softmax:
+                {
+                    // last-axis softmax (cls head [n,2]); one invocation per row.
+                    int[] ssp = shapes[node.Inputs[0]];
+                    long cols = ssp[^1];
+                    long rows = numel[outPhys] / cols;
+                    if (cols <= 0 || rows <= 0 || rows * cols != numel[outPhys])
+                        throw new NotSupportedException($"softmax at node {ni}");
+                    Emit(_pSoftmax, $"softmax n{ni} {rows}x{cols}",
+                        [(arena, SlotOf(node.Inputs[0]), 2),
+                         (arena, off[outPhys], 2)],
+                        [(uint)rows, (uint)cols], Div256(rows));
                     break;
                 }
 
