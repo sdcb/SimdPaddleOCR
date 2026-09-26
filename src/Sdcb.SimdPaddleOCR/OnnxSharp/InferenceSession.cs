@@ -155,6 +155,15 @@ public sealed partial class InferenceSession : IDisposable
                 if (same) return;
             }
         }
+        if (TryGetPlan(inputShape, forCtc: PlanForCtcProjection, out ShapePlan? plan))
+        {
+            for (int i = 0; i < _tensors.Length; i++)
+                _tensors[i].SetShape(plan.Resolved[i]);
+            ApplyPlan(plan);
+            _hasShape = true;
+            return;
+        }
+
         int[][] resolved = _compiled.ResolveShapesFor(inputShape);
         for (int i = 0; i < _tensors.Length; i++)
             _tensors[i].SetShape(resolved[i]);
@@ -162,14 +171,80 @@ public sealed partial class InferenceSession : IDisposable
         if (PlanForCtcProjection &&
             TryResolveCtcProjection(out _, out int matMulIndex, out _, out _, out _, out _, out _, out _))
             nodeLimit = matMulIndex;
-        PlanWorkspace(nodeLimit);
+        plan = ComputeWorkspacePlan(nodeLimit);
+        plan.InputShape = inputShape.ToArray();
+        plan.ForCtc = PlanForCtcProjection;
+        plan.Resolved = resolved;
+        CachePlan(plan);
+        ApplyPlan(plan);
         _hasShape = true;
+    }
+
+    /// <summary>Immutable result of shape resolution + workspace planning for
+    /// one input shape; replayed verbatim when the same shape recurs.</summary>
+    private sealed class ShapePlan
+    {
+        public required int[] InputShape;
+        public required bool ForCtc;
+        public required int NodeLimit;
+        public required int[][] Resolved;
+        public required int[] Offsets;
+        public required int[] Lengths;
+        public required int Bump;
+    }
+
+    // Adaptive-width REC revisits a handful of width buckets per session; a
+    // small MRU-front list covers them without unbounded growth.
+    private const int PlanCacheCapacity = 8;
+    private readonly List<ShapePlan> _planCache = [];
+
+    private bool TryGetPlan(ReadOnlySpan<int> inputShape, bool forCtc, out ShapePlan? plan)
+    {
+        for (int i = 0; i < _planCache.Count; i++)
+        {
+            ShapePlan entry = _planCache[i];
+            int[] s = entry.InputShape;
+            if (entry.ForCtc != forCtc || s.Length != inputShape.Length) continue;
+            bool match = true;
+            for (int d = 0; d < s.Length; d++)
+                if (s[d] != inputShape[d]) { match = false; break; }
+            if (!match) continue;
+            if (i != 0) { _planCache.RemoveAt(i); _planCache.Insert(0, entry); }
+            plan = entry;
+            return true;
+        }
+        plan = null;
+        return false;
+    }
+
+    private void CachePlan(ShapePlan plan)
+    {
+        if (_planCache.Count >= PlanCacheCapacity)
+            _planCache.RemoveAt(_planCache.Count - 1);
+        _planCache.Insert(0, plan);
     }
 
     private void EnsureFullPlan()
     {
-        if (_plannedNodeCount < _model.Nodes.Length)
-            PlanWorkspace(_model.Nodes.Length);
+        if (_plannedNodeCount >= _model.Nodes.Length) return;
+        int nodeLimit = _model.Nodes.Length;
+        int[] inputShape = _tensors[_inputIndex].Shape;
+        ShapePlan? plan = null;
+        for (int i = 0; i < _planCache.Count; i++)
+            if (_planCache[i].NodeLimit == nodeLimit && SameDims(_planCache[i].InputShape, inputShape))
+            { plan = _planCache[i]; break; }
+        if (plan is null)
+        {
+            plan = ComputeWorkspacePlan(nodeLimit);
+            plan.InputShape = (int[])inputShape.Clone();
+            plan.ForCtc = false;
+            int[][] resolved = new int[_tensors.Length][];
+            for (int i = 0; i < _tensors.Length; i++)
+                resolved[i] = _tensors[i].Shape;
+            plan.Resolved = resolved;
+            CachePlan(plan);
+        }
+        ApplyPlan(plan);
     }
 
     // Re-planning may replace the unmanaged block; an input span that aliased
@@ -178,7 +253,7 @@ public sealed partial class InferenceSession : IDisposable
     {
         if (_plannedNodeCount >= _model.Nodes.Length) return input;
         float[]? copy = input.Overlaps(_tensors[_inputIndex].Data) ? input.ToArray() : null;
-        PlanWorkspace(_model.Nodes.Length);
+        EnsureFullPlan();
         return copy ?? input;
     }
 
@@ -189,7 +264,7 @@ public sealed partial class InferenceSession : IDisposable
     // to 16 floats (64 bytes). Only allocation locations change — kernels
     // never depend on addresses. Nodes at or past nodeLimit are not planned;
     // their outputs stay unbound.
-    private void PlanWorkspace(int nodeLimit)
+    private ShapePlan ComputeWorkspacePlan(int nodeLimit)
     {
         const int Align = 16;
         int tensorCount = _tensors.Length, nodeCount = _model.Nodes.Length;
@@ -396,6 +471,25 @@ public sealed partial class InferenceSession : IDisposable
         for (int i = 0; i < tensorCount; i++)
             if (group[i] >= 0) offsets[i] = groupOffset[group[i]] + intraOffset[i];
 
+        return new ShapePlan
+        {
+            InputShape = null!,
+            ForCtc = false,
+            NodeLimit = nodeLimit,
+            Resolved = null!,
+            Offsets = offsets,
+            Lengths = lengths,
+            Bump = bump,
+        };
+    }
+
+    // Applies a computed (or cached) plan: grow the unmanaged block if needed,
+    // then rebind every non-constant tensor to its planned offset.
+    private void ApplyPlan(ShapePlan plan)
+    {
+        int[] offsets = plan.Offsets, lengths = plan.Lengths;
+        int bump = plan.Bump;
+        int tensorCount = _tensors.Length;
         // Grow-only: shrinking here reallocates a large block on every
         // smaller REC (n, width), which showed up as ~70–250 ms rec_reshape
         // and regressed tiny 1w / small 4w. The recognizer pool routes wide
@@ -407,7 +501,7 @@ public sealed partial class InferenceSession : IDisposable
             _workspace?.Dispose();
             _workspace = new NativeWorkspace(bump);
         }
-        _plannedNodeCount = nodeLimit;
+        _plannedNodeCount = plan.NodeLimit;
         if (s_dumpPlan)
             DumpPlan(offsets, lengths, bump);
         int[] inputDims = _tensors[_inputIndex].Shape;
