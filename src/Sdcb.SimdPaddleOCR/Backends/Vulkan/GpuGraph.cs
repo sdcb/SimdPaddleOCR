@@ -18,6 +18,7 @@ internal sealed class GpuDetGraph : IDisposable
     private readonly CompiledModel _compiled;
 
     private readonly VkPipeline _pSoftmax;
+    private bool _sg32; // device cannot run sg16 coopmat pipes (NVIDIA/AMD)
     private readonly VkPipeline _pConv1x1, _pConv1x1N64, _pConv1x1N32, _pDot,
         _pDw, _pDw4, _pDw4T, _pDense, _pConvT, _pConvT4, _pElem, _pElem4,
         _pReduce, _pReduce4, _pReduce4b, _pPool, _pPool4,
@@ -138,9 +139,20 @@ internal sealed class GpuDetGraph : IDisposable
         _dev = dev;
         _compiled = compiled;
         _model = compiled.Model;
-        _pConv1x1 = Pipe("conv1x1_cm", 6, 16, 16);
-        _pConv1x1N64 = Pipe("conv1x1_cm_n64", 6, 16, 16);
-        _pConv1x1N32 = Pipe("conv1x1_cm_n32", 6, 16, 16);
+        // sg16-only coopmat shaders: NVIDIA (sg 32-32) and AMD wave64 cannot
+        // satisfy requiredSubgroupSize=16 — swap in the sg32 variant.
+        _sg32 = dev.SubgroupMin > 16 && dev.SubgroupMax >= 32;
+        if (_sg32)
+        {
+            _pConv1x1 = Pipe("conv1x1_cm_sg32", 6, 16, 32);
+            _pConv1x1N64 = _pConv1x1N32 = _pConv1x1;
+        }
+        else
+        {
+            _pConv1x1 = Pipe("conv1x1_cm", 6, 16, 16);
+            _pConv1x1N64 = Pipe("conv1x1_cm_n64", 6, 16, 16);
+            _pConv1x1N32 = Pipe("conv1x1_cm_n32", 6, 16, 16);
+        }
         _pDot = Pipe("conv1x1_dot", 8, 28);
         _pDw = Pipe("conv_dw", 4, 48);
         _pDw4 = Pipe("conv_dw4", 4, 48);
@@ -757,8 +769,10 @@ internal sealed class GpuDetGraph : IDisposable
         }
         uint Div256(long n) => (uint)((n + 255) / 256);
         // coopmat tile: cout<=32 -> 512x32, cout<=64 -> 256x64, else 128x128
+        // sg32 variant only ships the 128x128 tile — always use it there.
         (VkPipeline pipe, uint tm, uint tn) CmTile(int c) =>
-            c <= 32 ? (_pConv1x1N32, 512u, 32u)
+            _sg32 ? (_pConv1x1, 128u, 128u)
+            : c <= 32 ? (_pConv1x1N32, 512u, 32u)
             : c <= 64 ? (_pConv1x1N64, 256u, 64u)
             : (_pConv1x1, 128u, 128u);
         (VkBuffer, long, uint) Operand(int t, int chan, long n)
