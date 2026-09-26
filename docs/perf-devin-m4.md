@@ -16,18 +16,18 @@
 | 选项 | `AdaptiveWidth=true, TargetWidth=320`，`--warmup 1` |
 | commit | `8025058`（含 AdvSimd MatMul + plan/pack 去重） |
 
-注：M4 (Virtual) 为虚拟化核数，`1w` 数字接近物理单线程，`4w`/`8w` 受调度影响。
+注：M4 (Virtual) 为虚拟化核数，`1w` 数字接近物理单线程，`4w` 受调度影响。
 
 ## 端到端（median ms/图，越小越好）
 
-| 模型 | 1w | 4w | 8w |
-| --- | ---: | ---: | ---: |
-| tiny | 111.9 | 80.6 | 68.6 |
-| small | 306.3 | 257.8 | 233.3 |
-| medium | 1030.6 | 907.5 | 962.3 |
+| 模型 | 1w | 4w |
+| --- | ---: | ---: |
+| tiny | 111.9 | 80.6 |
+| small | 306.3 | 257.8 |
+| medium | 1030.6 | 907.5 |
 
-img/s（mean）：tiny 8.8→14.4，small 3.4→4.2，medium 0.98→1.10→1.04。
-**medium 在 4w 已饱和**（8w 反而略退）；small 4w→8w 还有 ~10%。
+img/s（mean）：tiny 8.8→12.2，small 3.4→3.8，medium 0.98→1.10。
+**medium 在 4w 已饱和**（加到 8w 反而略退）。
 
 ## 准确率（满勤 100 张）
 
@@ -73,7 +73,7 @@ MatMul 已有 AdvSimd 直写 kernel（较旧 `Vector<T>` 档 ~2.5–3×），占
 ```bash
 dotnet build test/Sdcb.SimdPaddleOCR.Tests -c Release
 ./test/Sdcb.SimdPaddleOCR.Tests/bin/Release/net10.0/Sdcb.SimdPaddleOCR.Tests \
-  --model {tiny|small|medium} --input dataset --out out.json --workers {1|4|8} --warmup 1
+  --model {tiny|small|medium} --input dataset --out out.json --workers {1|4} --warmup 1
 # 数据集：dotnet run --project test/Sdcb.SimdPaddleOCR.TestData -c Release -- --out dataset
 #         （需要 CJK 字体：PPOCR_FONTS_DIR=<dir-of-otf/ttf>）
 ```
