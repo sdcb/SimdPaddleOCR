@@ -228,6 +228,9 @@ public class KernelCorrectnessTests
     [InlineData(5, 32, 40)]
     [InlineData(4, 64, 1040)]
     [InlineData(5, 64, 1040)]
+    [InlineData(4, 32, 39)]
+    [InlineData(6, 32, 37)]
+    [InlineData(7, 96, 1037)]
     public void MatMul_VectorMatchesReference(int rows, int inner, int columns)
     {
         const int batch = 2;
@@ -259,6 +262,44 @@ public class KernelCorrectnessTests
         float[] actual = new float[expected.Length];
         Assert.True(MatMul.Try(input, weights, actual, batch, rows, inner, columns, packed));
         AssertClose(expected, actual, rtol: 5e-5f, atol: 5e-5f);
+    }
+
+    [Theory]
+    [InlineData(4, 64, 1040)]
+    [InlineData(5, 96, 1037)]
+    [InlineData(3, 64, 1030)]
+    [InlineData(7, 96, 6624)]
+    public void MatMul_ArgMaxMatchesReference(int rows, int inner, int columns)
+    {
+        const int batch = 2;
+        float[] input = Ramp(batch * rows * inner, 0.01f);
+        float[] weights = Ramp(inner * columns, 0.02f);
+        float[] bias = Ramp(columns, 0.03f);
+        float[] packed = PackMatMul(weights, inner, columns);
+
+        float[] logits = new float[batch * rows * columns];
+        MatMulRef(input, weights, logits, batch, rows, inner, columns);
+        int[] expectedIndex = new int[batch * rows];
+        float[] expectedScore = new float[batch * rows];
+        for (int r = 0; r < batch * rows; r++)
+        {
+            int best = 0;
+            float max = logits[r * columns] + bias[0];
+            for (int c = 1; c < columns; c++)
+            {
+                float value = logits[r * columns + c] + bias[c];
+                if (value > max) { max = value; best = c; }
+            }
+            expectedIndex[r] = best;
+            expectedScore[r] = max;
+        }
+
+        int[] indices = new int[batch * rows];
+        float[] scores = new float[batch * rows];
+        Assert.True(MatMul.TryArgMax(input, weights, bias, indices, scores,
+            batch, rows, inner, columns, packed, threads: 3));
+        Assert.Equal(expectedIndex, indices);
+        AssertClose(expectedScore, scores, rtol: 5e-5f, atol: 5e-5f);
     }
 
     [Fact]
