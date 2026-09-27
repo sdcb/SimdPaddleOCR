@@ -606,6 +606,7 @@ internal sealed class GpuGraphModel
         int inCinPad = shapes[inIdx][1] % 4 != 0 ? 4 : 0;
 
         var off = new long[nT];
+        var slabElems = new long[nT];
         long cursor = 0;
         long maxIm2col = 0;   // shared scratch: max M*K_pad over emitted im2col convs
         for (int i = 0; i < nT; i++)
@@ -619,7 +620,8 @@ internal sealed class GpuGraphModel
             long sz = numel[i];
             if (i == inIdx && inCinPad != 0)
                 sz = numel[i] / shapes[i][1] * inCinPad;
-            cursor += (sz + 7) / 8 * 8 + 128 * 64;
+            slabElems[i] = (sz + 7) / 8 * 8 + 128 * 64;
+            cursor += slabElems[i];
         }
         // the im2col scratch sits past every slab; its size (and the arena
         // total) is settled after emit, so convs that take a direct or
@@ -2140,6 +2142,9 @@ internal sealed class GpuGraphModel
             for (int ri = 0; ri < recs.Count; ri++)
                 Console.Error.WriteLine($"rec[{ri}] {recs[ri].Tag} gx={recs[ri].Gx} gy={recs[ri].Gy}");
 
+        // device-independent, but the sg16 (Arc) kernel set has not been
+        // verified against packed slabs yet
+        if (_sg32) PackSlabs(recs, arena, off, slabElems, ref im2colOff);
         // +128*512: coopmat A-tile reads pad rows past M
         long arenaElems = im2colOff + maxIm2col + 128 * 512 + (1L << 20);
         return new GpuSchedule
@@ -2149,6 +2154,112 @@ internal sealed class GpuGraphModel
             Off = off, Alias = alias, Numel = numel, Shapes = shapes,
             Im2colOff = im2colOff,
         };
+    }
+
+    /// <summary>
+    /// Re-packs the one-slab-per-tensor arena by lifetime: a slab lives from
+    /// the first to the last rec that binds it, and slabs with disjoint
+    /// lifetimes share memory (every rec is followed by a barrier, so a later
+    /// writer never races an earlier reader). Rewrites the arena bindings,
+    /// <paramref name="off"/> and the im2col scratch offset in place. Leaves
+    /// everything untouched when a rec binds the arena anywhere but a slab
+    /// start or the scratch. Afterwards only slabs still live at the end of
+    /// the schedule keep their values for the debug readers.
+    /// </summary>
+    private static void PackSlabs(List<GpuRec> recs, VkBuffer arena, long[] off,
+        long[] slabElems, ref long im2colOff)
+    {
+        var slabAt = new Dictionary<long, int>();
+        for (int i = 0; i < off.Length; i++)
+            if (off[i] >= 0) slabAt[off[i]] = i;
+        var first = new int[off.Length];
+        var last = new int[off.Length];
+        Array.Fill(first, -1);
+        for (int r = 0; r < recs.Count; r++)
+            foreach (GpuBind b in recs[r].Binds)
+            {
+                if (!ReferenceEquals(b.Buf, arena)) continue;
+                long e = (long)(b.ByteOffset / 2);
+                if (e == im2colOff) continue;
+                if ((b.ByteOffset & 1) != 0 || !slabAt.TryGetValue(e, out int i)) return;
+                if (first[i] < 0) first[i] = r;
+                last[i] = r;
+            }
+
+        var order = new List<int>();
+        for (int i = 0; i < off.Length; i++)
+            if (first[i] >= 0) order.Add(i);
+        order.Sort((a, b) => first[a] != first[b] ? first[a].CompareTo(first[b]) : a.CompareTo(b));
+        var newOff = new long[off.Length];
+        Array.Fill(newOff, -1L);
+        var free = new List<(long Off, long Len)>();   // sorted by offset, coalesced
+        var live = new List<int>();
+        long top = 0;
+        foreach (int i in order)
+        {
+            for (int k = live.Count - 1; k >= 0; k--)
+            {
+                int j = live[k];
+                if (last[j] >= first[i]) continue;
+                live.RemoveAt(k);
+                Release(free, newOff[j], slabElems[j]);
+            }
+            long need = slabElems[i];
+            int best = -1;
+            for (int k = 0; k < free.Count; k++)
+                if (free[k].Len >= need && (best < 0 || free[k].Len < free[best].Len)) best = k;
+            if (best >= 0)
+            {
+                newOff[i] = free[best].Off;
+                if (free[best].Len == need) free.RemoveAt(best);
+                else free[best] = (free[best].Off + need, free[best].Len - need);
+            }
+            else if (free.Count > 0 && free[^1].Off + free[^1].Len == top)
+            {
+                newOff[i] = free[^1].Off;
+                top = newOff[i] + need;
+                free.RemoveAt(free.Count - 1);
+            }
+            else
+            {
+                newOff[i] = top;
+                top += need;
+            }
+            live.Add(i);
+        }
+
+        long newIm2col = (top + 63) / 64 * 64;
+        foreach (GpuRec rec in recs)
+        {
+            GpuBind[] bb = (GpuBind[])rec.Binds.Clone();
+            for (int k = 0; k < bb.Length; k++)
+            {
+                if (!ReferenceEquals(bb[k].Buf, arena)) continue;
+                long e = (long)(bb[k].ByteOffset / 2);
+                bb[k] = new GpuBind(arena, (ulong)(e == im2colOff ? newIm2col : newOff[slabAt[e]]) * 2);
+            }
+            rec.Binds = bb;
+        }
+        for (int i = 0; i < off.Length; i++)
+            if (off[i] >= 0) off[i] = newOff[i];
+        im2colOff = newIm2col;
+
+        static void Release(List<(long Off, long Len)> free, long o, long len)
+        {
+            int k = 0;
+            while (k < free.Count && free[k].Off < o) k++;
+            free.Insert(k, (o, len));
+            if (k + 1 < free.Count && free[k].Off + free[k].Len == free[k + 1].Off)
+            {
+                free[k] = (free[k].Off, free[k].Len + free[k + 1].Len);
+                free.RemoveAt(k + 1);
+            }
+            if (k > 0 && free[k - 1].Off + free[k - 1].Len == free[k].Off)
+            {
+                free[k - 1] = (free[k - 1].Off, free[k - 1].Len + free[k].Len);
+                free.RemoveAt(k);
+            }
+        }
     }
 
     private static byte[] Pcu(params uint[] v)
