@@ -52,7 +52,9 @@ small/medium 的 rec 回落 CPU 后输出与纯 CPU 逐行一致,残余 ~0.3% �
 | small | 678MB | 5781MB → 1036MB |
 | medium | 1218MB | **24133MB(无界爬升) → 1457MB(稳定)** |
 
-修复内容(commit 512bcd2):arena/inF32/outF32 改为 graph 级共享 grow-only buffer(扩容即失效全部 plan 重绑);plan 缓存 LRU=16,evict 时真正释放 cmd buffer/descriptor set/query pool(VkDevice 补 vkFreeCommandBuffers/vkFreeDescriptorSets,desc pool 开 FREE_DESCRIPTOR_SET_BIT);VkBuffer.Free() 落地。3080Ti 侧报告的"~32 个不同 det shape 后全局错乱"在此上限下不可复现(100 图 bench 无 mass-corruption 特征)。
+修复内容(commit 512bcd2):arena/inF32/outF32 改为 graph 级共享 grow-only buffer(扩容即失效全部 plan 重绑);plan 缓存 LRU,evict 时真正释放 cmd buffer/descriptor set/query pool(VkDevice 补 vkFreeCommandBuffers/vkFreeDescriptorSets,desc pool 开 FREE_DESCRIPTOR_SET_BIT);VkBuffer.Free() 落地。
+
+**~32-shape 崩坏验证(应 3080Ti reviewer 要求):** 临时 `MaxPlans`→64 跑全 100 图(每张都是不同 det shape,plan 数必然越过旧崩坏点):零 mass-corruption,与 CPU 行数差只剩 img-014 一例(见下)。→ root cause 确证是资源耗尽/陈旧绑定,已被真释放+invalidate 杀死,不是被 LRU 上限掩盖。WS 峰值 981MB 仍有界(plan 共享 arena,不独占显存)。随后把上限定为 64:shape 剧烈变化的负载下重建更少(实测 12.0→14.0 img/s)。
 
 ## 已修的正确性问题
 
@@ -64,5 +66,6 @@ small/medium 的 rec 回落 CPU 后输出与纯 CPU 逐行一致,残余 ~0.3% �
 
 1. **SVTR rec 的 GPU emit**(small/medium 主线机会):需覆盖 MaxPool batch、rank-3 ReduceMean、5-D Transpose、Slice、Concat(axis=0) 等 ~10 种算子;工程量大,单独立项。
 2. tiny 的 GPU rec 精度:fp16 特征噪声在低置信行翻转 argmax —— 要么 fp32 段,要么接受(det 同款抖动已证实无害)。
-3. per-dispatch ~55µs 固定开销 × 78 dispatch ≈ 4.3ms/Run 下限 —— 继续融合或 push-descriptor 直录可压。
-4. `_dev.Sync` 全局锁串行 det/rec —— 双流 overlap 未做。
+3. **det fp16 边界丢框(img-014,已定位):** CPU 16 框 / GPU 15 框 —— GPU 把右侧两个竖排条带合并。根因:单个桥接像素 (918,71) 概率 cpu=0.1892 vs gpu=0.2020 跨过 0.2 bitmap 阈值;全图 400K 像素仅 15 个阈值翻转且全部落在 [0.189,0.205] 窄带,输出 map maxAbs=0.029 即 ~50 节点 fp16 存储的累计噪声(最大的是 FPN concat t399 elemMax=0.41,张量量程 ±160 时 fp16 ulp≈0.125)。**非 kernel bug**:同一输入用 GDI+ 解码跑纯 CPU 也合并(15 行),本来就是临界输入;唯一实质性修法是 fp32 arena,代价是带宽翻倍。暂不修,记为已知限制。
+4. per-dispatch ~55µs 固定开销 × 78 dispatch ≈ 4.3ms/Run 下限 —— 继续融合或 push-descriptor 直录可压。
+5. `_dev.Sync` 全局锁串行 det/rec —— 双流 overlap 未做。

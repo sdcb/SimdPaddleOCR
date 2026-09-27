@@ -326,7 +326,11 @@ internal sealed class GpuDetGraph : IDisposable
     // The arena and the fp32 input/output buffers are shared grow-only
     // buffers: growing them invalidates every plan (their descriptor sets
     // bind the retired buffer handle), and a small LRU caps live plans.
-    private const int MaxPlans = 16;
+    // Verified on B580+3080Ti: crossing the old ~32-plan corruption point is
+    // clean — root cause was resource exhaustion, not the count itself. 64
+    // halves rebuild churn on many-shape workloads; VRAM stays bounded because
+    // plans share the grow-only arena (only sets/cmd/query are per-plan).
+    private const int MaxPlans = 64;
     private long _tick;
     private VkBuffer? _arena; private long _arenaElems;
     private VkBuffer? _inF32; private long _inF32Elems;
