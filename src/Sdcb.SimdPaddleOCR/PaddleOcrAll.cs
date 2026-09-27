@@ -387,7 +387,7 @@ public sealed class PaddleOcrAll : IDisposable
                 // input — single submit, head resolved on CPU), then the cheap
                 // rotate/width-select tail fans out across workers.
                 _classifier.ClassifyBatch(cropBuffer, offsets, bytes, widths, heights,
-                    count, labels, clsScores);
+                    count, labels, clsScores, _cropWorkers);
                 if (workerCount <= 1)
                 {
                     PostClassifyRange(0, count, 1, cropBuffer, offsets, bytes, widths,
@@ -447,7 +447,7 @@ public sealed class PaddleOcrAll : IDisposable
             long recStart = s_profileEnabled ? Stopwatch.GetTimestamp() : 0;
             if (_recGpu && _recognizer.GpuRecAlive
                 && _recognizer.TryRecognizeUnitsBatched(cropBuffer, offsets, bytes, widths, heights,
-                    units, recWidths, recResults, _recIntraOpMax, returnCtcAlignment))
+                    units, recWidths, recResults, _recIntraOpMax, _cropWorkers, returnCtcAlignment))
             {
                 if (s_profileEnabled) AddProfile(4, recStart);
             }

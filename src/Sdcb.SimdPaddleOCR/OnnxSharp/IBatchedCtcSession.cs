@@ -16,15 +16,24 @@ internal interface IBatchedCtcSession
     /// back to back (unit i occupies numel(shapes[i]) floats) and returns it.</summary>
     Span<float> ReshapeMany(IReadOnlyList<int[]> shapes);
 
+    /// <summary>CTC operands for the units set by <see cref="ReshapeMany"/>:
+    /// unit i yields batch_i × rows[i] activation rows of head.Inner floats.
+    /// False when the graph has no CTC tail.</summary>
+    bool TryResolveManyHead(out int[] rows, out CtcHead head);
+
     /// <summary>
-    /// Runs every unit set by <see cref="ReshapeMany"/>. Activations of unit i
-    /// start at <paramref name="actOffsets"/>[i] and hold batch_i × rows[i] ×
-    /// head.Inner floats. Returns false (nothing half-done) when the graph has
-    /// no CTC tail or the GPU path failed; callers then use the per-unit path.
+    /// Runs every unit set by <see cref="ReshapeMany"/> and calls
+    /// <paramref name="onReady"/> in unit order as batches of units complete
+    /// (unit i's activations start at offsets[i]); later units may still be
+    /// running on the device meanwhile. Returns false when the GPU path failed
+    /// (callers then use the per-unit path) or <paramref name="onReady"/>
+    /// returned false. Exceptions from <paramref name="onReady"/> propagate.
     /// </summary>
-    bool TryRunManyUntilCtcProjection(out float[] activations, out int[] actOffsets,
-        out int[] rows, out CtcHead head);
+    bool TryRunManyUntilCtcProjection(CtcUnitsReady onReady);
 }
+
+/// <summary>Units [first, first+count) of <paramref name="activations"/> are ready.</summary>
+internal delegate bool CtcUnitsReady(float[] activations, int[] offsets, int first, int count);
 
 /// <summary>Shape-independent CTC projection operands (vocab MatMul + bias).</summary>
 internal sealed class CtcHead

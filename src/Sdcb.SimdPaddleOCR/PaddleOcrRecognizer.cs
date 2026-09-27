@@ -356,7 +356,8 @@ public sealed class PaddleOcrRecognizer : IDisposable
     /// </summary>
     internal bool TryRecognizeUnitsBatched(byte[] cropBuffer, int[] offsets, int[] cropBytes,
         int[] widths, int[] heights, IReadOnlyList<int[]> units, int[] recWidths,
-        PaddleOcrRecognitionResult[] results, int intraOpThreads, bool returnCtcAlignment)
+        PaddleOcrRecognitionResult[] results, int intraOpThreads, int preprocessWorkers,
+        bool returnCtcAlignment)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
         if (units.Count == 0) return true;
@@ -381,64 +382,100 @@ public sealed class PaddleOcrRecognizer : IDisposable
             int total = 0;
             foreach (int[] unit in units) total += unit.Length;
             int[] resized = new int[total];
+            int[] lineOf = new int[total], widthOf = new int[total];
+            long[] posOf = new long[total];
             long started = profile ? PipelineProfiler.Now() : 0;
             long pos = 0;
             int k = 0;
             for (int u = 0; u < units.Count; u++)
             {
                 int w = shapes[u][3];
-                int sampleLength = 3 * 48 * w;
                 foreach (int line in units[u])
                 {
-                    int sw = widths[line], sh = heights[line];
-                    if ((long)sw * sh > _options.MaxImagePixels)
+                    if ((long)widths[line] * heights[line] > _options.MaxImagePixels)
                         throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
-                    resized[k++] = PPOCRPreprocess.Rec(
-                        cropBuffer.AsSpan(offsets[line], cropBytes[line]), sw, sh,
-                        checked(sw * 3), w, input.Slice(checked((int)pos), sampleLength),
-                        session.ResizeWorkspace, session.InputIsNhwc);
-                    pos += sampleLength;
+                    lineOf[k] = line; widthOf[k] = w; posOf[k] = pos;
+                    pos += 3 * 48 * w;
+                    k++;
+                }
+            }
+            // Exclusive window between the GPU CLS and REC submissions: lines
+            // resize into disjoint slices of the batched input, in parallel.
+            unsafe
+            {
+                fixed (float* inputPtr = input)
+                {
+                    nint inputAddress = (nint)inputPtr;
+                    bool nhwc = session.InputIsNhwc;
+                    PPOCRPreprocess.ForLines(total, preprocessWorkers, session.ResizeWorkspace, (j, workspace) =>
+                    {
+                        int line = lineOf[j], sw = widths[line], sh = heights[line], w = widthOf[j];
+                        var dst = new Span<float>((float*)inputAddress + posOf[j], 3 * 48 * w);
+                        resized[j] = PPOCRPreprocess.Rec(
+                            cropBuffer.AsSpan(offsets[line], cropBytes[line]), sw, sh,
+                            checked(sw * 3), w, dst, workspace, nhwc);
+                    });
                 }
             }
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecPreprocess, started);
             started = profile ? PipelineProfiler.Now() : 0;
-            if (!batched.TryRunManyUntilCtcProjection(out float[] acts, out int[] actOffsets,
-                    out int[] rows, out CtcHead head))
+            if (!batched.TryResolveManyHead(out int[] rows, out CtcHead head))
                 return false;
             if (head.Columns != ClassCount)
                 throw new InvalidDataException("Recognizer output shape is incompatible with dictionary.");
-            ReadOnlySpan<float> weights = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Weights);
-            ReadOnlySpan<float> bias = head.Bias is null ? []
-                : System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Bias);
-            if (profile) PipelineProfiler.Add(PipelineProfiler.RecGraph, started);
-            k = 0;
+            int[] batches = new int[units.Count];
+            int[] rowStart = new int[units.Count + 1], lineStart = new int[units.Count + 1];
             for (int u = 0; u < units.Count; u++)
             {
-                int n = units[u].Length, T = rows[u];
-                int rowCount = n * T;
-                int[] indices = PooledArrays.Rent<int>(rowCount);
-                float[] scores = PooledArrays.Rent<float>(rowCount);
-                try
-                {
-                    started = profile ? PipelineProfiler.Now() : 0;
-                    if (!MatMul.TryArgMax(acts.AsSpan(actOffsets[u], rowCount * head.Inner), weights, bias,
-                            indices.AsSpan(0, rowCount), scores.AsSpan(0, rowCount),
-                            n, T, head.Inner, head.Columns, head.Packed, intraOpThreads))
-                        return false;   // caller's per-unit path rewrites every result
-                    if (profile) PipelineProfiler.Add(PipelineProfiler.RecGraph, started);
-                    started = profile ? PipelineProfiler.Now() : 0;
-                    for (int i = 0; i < n; i++, k++)
-                        results[units[u][i]] = Decode([], indices.AsSpan(i * T, T), scores.AsSpan(i * T, T),
-                            T, resized[k], shapes[u][3], false, returnCtcAlignment);
-                    if (profile) PipelineProfiler.Add(PipelineProfiler.RecDecode, started);
-                }
-                finally
-                {
-                    PooledArrays.Return(indices);
-                    PooledArrays.Return(scores);
-                }
+                batches[u] = units[u].Length;
+                rowStart[u + 1] = rowStart[u] + units[u].Length * rows[u];
+                lineStart[u + 1] = lineStart[u] + units[u].Length;
             }
-            return true;
+            int totalRows = rowStart[units.Count];
+            int[] indices = PooledArrays.Rent<int>(totalRows);
+            float[] scores = PooledArrays.Rent<float>(totalRows);
+            try
+            {
+                // Batches of units arrive while later ones still run on the
+                // GPU; each batch's activations are back to back, so one
+                // ArgMax call covers it (same per-row kernel as a per-unit call).
+                bool Ready(float[] acts, int[] offsets, int first, int count)
+                {
+                    int r0 = rowStart[first], r1 = rowStart[first + count];
+                    for (int u = first; u < first + count; u++)
+                        if (offsets[u] != rowStart[u] * head.Inner)
+                            throw new InvalidOperationException("REC activations are not contiguous.");
+                    ReadOnlySpan<float> weights = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Weights);
+                    ReadOnlySpan<float> bias = head.Bias is null ? []
+                        : System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Bias);
+                    if (!MatMul.TryArgMaxUnits(acts.AsSpan(r0 * head.Inner, (r1 - r0) * head.Inner), weights, bias,
+                            indices.AsSpan(r0, r1 - r0), scores.AsSpan(r0, r1 - r0),
+                            batches.AsSpan(first, count), rows.AsSpan(first, count),
+                            head.Inner, head.Columns, head.Packed, intraOpThreads))
+                        return false;
+                    for (int u = first; u < first + count; u++)
+                    {
+                        int T = rows[u];
+                        for (int i = 0; i < units[u].Length; i++)
+                        {
+                            int row = rowStart[u] + i * T, line = lineStart[u] + i;
+                            results[units[u][i]] = Decode([], indices.AsSpan(row, T), scores.AsSpan(row, T),
+                                T, resized[line], shapes[u][3], false, returnCtcAlignment);
+                        }
+                    }
+                    return true;
+                }
+                // false: GPU fell back or ArgMax declined — the caller's
+                // per-unit path rewrites every result
+                bool ok = batched.TryRunManyUntilCtcProjection(Ready);
+                if (profile) PipelineProfiler.Add(PipelineProfiler.RecGraph, started);
+                return ok;
+            }
+            finally
+            {
+                PooledArrays.Return(indices);
+                PooledArrays.Return(scores);
+            }
         }
         finally
         {

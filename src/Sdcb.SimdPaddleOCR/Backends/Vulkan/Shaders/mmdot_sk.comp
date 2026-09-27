@@ -1,0 +1,117 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Narrow-M MatMul, split-K: O[M,N] = act(A[M,K]·W[K,N] + bias + res).
+// A 4x4-per-thread dot over the whole K leaves only (M/4)*(N/4) threads —
+// a few workgroups for SVTR token GEMMs (M = n*T ~ 40..160) — so latency of
+// the serial K loop dominates. Here a workgroup owns 16 adjacent 4x4 output
+// tiles and 16 K-lanes: lane l walks every 16th vec4 of K, partial sums
+// reduce through shared memory. Bindings / PC / flag bits (bit0 bias,
+// bit1 residual, bit2 SE prescale, bits4-6 act, hi16 hsAlpha) match
+// conv1x1_dot; its dual-write / addps-absorb modes are not supported here.
+// PC: M, N, K, kv4, flags, scMod, mImg. Requires N%4==0, K%4==0.
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
+layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
+layout(set = 0, binding = 2) readonly buffer Bias { f16vec4 bias[]; };
+layout(set = 0, binding = 3) readonly buffer Res { f16vec4 res[]; };
+layout(set = 0, binding = 4) writeonly buffer O { f16vec4 o[]; };
+layout(set = 0, binding = 5) readonly buffer Scale { f16vec4 s[]; };
+layout(set = 0, binding = 6) writeonly buffer O2 { f16vec4 o2[]; };
+layout(set = 0, binding = 7) readonly buffer RA { f16vec4 ra[]; };
+
+layout(push_constant) uniform PC {
+    uint M; uint N; uint K; uint kv4; uint flags; uint scMod; uint mImg;
+} p;
+
+// [lane][tile][16] partials, row padded to 17 floats against bank conflicts
+shared float sh[256 * 17];
+
+float erf1(float v)
+{
+    float s = v < 0.0 ? -1.0 : 1.0;
+    v = abs(v);
+    float t = 1.0 / (1.0 + 0.47047 * v);
+    float q = t * (0.3480242 + t * (-0.0958798 + t * 0.7478556));
+    return s * (1.0 - q * exp(-v * v));
+}
+
+float actf(float v, uint act, uint flg)
+{
+    if (act == 1u) return max(v, 0.0);
+    if (act == 2u) return 0.5 * v * (1.0 + erf1(v * 0.70710678118654752));
+    if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return v * hs; }
+    if (act == 4u) return 1.0 / (1.0 + exp(-v));
+    if (act == 5u) return v / (1.0 + exp(-v));   // swish x*sigmoid(x)
+    return v;
+}
+
+void main()
+{
+    // adjacent invocations = adjacent tiles (adjacent n4) at the same k:
+    // weight reads coalesce, activation reads broadcast
+    uint tl = gl_LocalInvocationID.x & 15u;
+    uint lane = gl_LocalInvocationID.x >> 4;
+    uint nv = p.N >> 2;
+    uint mv = (p.M + 3u) >> 2;
+    uint tile = gl_WorkGroupID.x * 16u + tl;
+    bool live = tile < mv * nv;
+    uint n4 = live ? tile % nv : 0u;
+    uint m0 = live ? (tile / nv) * 4u : 0u;
+
+    vec4 acc0 = vec4(0.0), acc1 = vec4(0.0), acc2 = vec4(0.0), acc3 = vec4(0.0);
+    bool preScale = (p.flags & 4u) != 0u;
+    uint sb0 = 0u, sb1 = 0u, sb2 = 0u, sb3 = 0u;
+    if (p.mImg != 0u && preScale) {
+        sb0 = (m0 / p.mImg) * p.scMod;
+        sb1 = ((m0 + 1u) / p.mImg) * p.scMod;
+        sb2 = ((m0 + 2u) / p.mImg) * p.scMod;
+        sb3 = ((m0 + 3u) / p.mImg) * p.scMod;
+    }
+    if (live) {
+        for (uint k4 = lane; k4 < p.kv4; k4 += 16u) {
+            vec4 a0 = m0 < p.M ? vec4(x[m0 * p.kv4 + k4]) : vec4(0.0);
+            vec4 a1 = m0 + 1u < p.M ? vec4(x[(m0 + 1u) * p.kv4 + k4]) : vec4(0.0);
+            vec4 a2 = m0 + 2u < p.M ? vec4(x[(m0 + 2u) * p.kv4 + k4]) : vec4(0.0);
+            vec4 a3 = m0 + 3u < p.M ? vec4(x[(m0 + 3u) * p.kv4 + k4]) : vec4(0.0);
+            if (preScale) {
+                a0 *= vec4(s[sb0 + k4 % p.scMod]);
+                a1 *= vec4(s[sb1 + k4 % p.scMod]);
+                a2 *= vec4(s[sb2 + k4 % p.scMod]);
+                a3 *= vec4(s[sb3 + k4 % p.scMod]);
+            }
+            uint wRow = k4 * 4u * nv + n4;
+            for (uint i = 0u; i < 4u; i++) {
+                vec4 wv = vec4(w[wRow + i * nv]);
+                acc0 += a0[i] * wv; acc1 += a1[i] * wv;
+                acc2 += a2[i] * wv; acc3 += a3[i] * wv;
+            }
+        }
+    }
+    uint b = (lane * 16u + tl) * 17u;
+    sh[b + 0u] = acc0.x; sh[b + 1u] = acc0.y; sh[b + 2u] = acc0.z; sh[b + 3u] = acc0.w;
+    sh[b + 4u] = acc1.x; sh[b + 5u] = acc1.y; sh[b + 6u] = acc1.z; sh[b + 7u] = acc1.w;
+    sh[b + 8u] = acc2.x; sh[b + 9u] = acc2.y; sh[b + 10u] = acc2.z; sh[b + 11u] = acc2.w;
+    sh[b + 12u] = acc3.x; sh[b + 13u] = acc3.y; sh[b + 14u] = acc3.z; sh[b + 15u] = acc3.w;
+    barrier();
+    // this invocation now reduces element e = lane of tile tl over all lanes
+    float sum = 0.0;
+    for (uint l = 0u; l < 16u; l++) sum += sh[(l * 16u + tl) * 17u + lane];
+    barrier();
+    sh[tl * 17u + lane] = sum;
+    barrier();
+    if (!live || lane >= 4u) return;
+    uint m = m0 + lane;
+    if (m >= p.M) return;
+    uint r = tl * 17u + lane * 4u;
+    vec4 v = vec4(sh[r], sh[r + 1u], sh[r + 2u], sh[r + 3u]);
+    if ((p.flags & 1u) != 0u) v += vec4(bias[n4]);
+    if ((p.flags & 2u) != 0u) v += vec4(res[m * nv + n4]);
+    uint act = (p.flags >> 4) & 7u;
+    o[m * nv + n4] = f16vec4(vec4(actf(v.x, act, p.flags), actf(v.y, act, p.flags),
+                                  actf(v.z, act, p.flags), actf(v.w, act, p.flags)));
+}

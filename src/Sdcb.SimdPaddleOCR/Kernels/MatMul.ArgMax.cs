@@ -54,6 +54,55 @@ internal static partial class MatMul
         return true;
     }
 
+    /// <summary>
+    /// ArgMax over consecutive [batches[u], rows[u]] units stored back to back
+    /// in <paramref name="input"/> (outputs likewise). Runs of units whose own
+    /// <see cref="TryArgMax"/> call would pick the same row-blocked packed
+    /// kernel go out as one merged call — more row blocks per worker to reuse
+    /// each cached weight block — while every row keeps exactly the arithmetic
+    /// of its standalone per-unit call.
+    /// </summary>
+    internal static bool TryArgMaxUnits(ReadOnlySpan<float> input,
+        ReadOnlySpan<float> weights, ReadOnlySpan<float> bias,
+        Span<int> indices, Span<float> scores, ReadOnlySpan<int> batches, ReadOnlySpan<int> rows,
+        int inner, int columns, float[]? packedWeights, int threads = 1)
+    {
+        int start = 0;
+        for (int u = 0; u < batches.Length;)
+        {
+            int kind = MergeKind(rows[u], packedWeights);
+            int end = u + 1;
+            int count = batches[u] * rows[u];
+            if (kind != 0)
+                for (; end < batches.Length && MergeKind(rows[end], packedWeights) == kind; end++)
+                    count += batches[end] * rows[end];
+            bool merged = end - u > 1;
+            if (!TryArgMax(input.Slice(start * inner, count * inner), weights, bias,
+                    indices.Slice(start, count), scores.Slice(start, count),
+                    merged ? 1 : batches[u], merged ? count : rows[u],
+                    inner, columns, packedWeights, threads))
+                return false;
+            start += count;
+            u = end;
+        }
+        return true;
+    }
+
+    // 1: AVX-512 packed kernel (rows % 8 == 0; merged sums stay % 8).
+    // 2: AVX2 packed kernel on a machine without AVX-512 (merged sums stay
+    //    % 4 and cannot switch to the AVX-512 kernel). 0: never merged.
+    private static int MergeKind(int rows, float[]? packedWeights)
+    {
+        #if !NETSTANDARD2_0
+        if (packedWeights is null) return 0;
+        if (Avx512F.IsSupported) return rows >= 8 && (rows & 7) == 0 ? 1 : 0;
+        if (Avx2.IsSupported && rows >= 4 && (rows & 3) == 0) return 2;
+        #else
+        _ = rows; _ = packedWeights;
+        #endif
+        return 0;
+    }
+
     // Row-block sharding shared by every ArgMax impl: jobs are (batch, row
     // block) pairs writing disjoint output rows, so workers stride the job
     // space. Work is total MACs; 2M is well past the point where Parallel.For

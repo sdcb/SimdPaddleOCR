@@ -100,7 +100,7 @@ internal sealed class GpuSession : IOcrSession, IBatchedCtcSession
         ResolveCtcProjection();
         if (_ctcMatMulIndex < 0) return false;
 
-        float[] act;
+        ReadOnlySpan<float> act;
         try
         {
             act = _graph.Run(_shape, input, _ctcMatMulIndex, _ctcActTensor);
@@ -146,20 +146,44 @@ internal sealed class GpuSession : IOcrSession, IBatchedCtcSession
         return _input.AsSpan(0, _manyVolume);
     }
 
-    public bool TryRunManyUntilCtcProjection(out float[] activations, out int[] actOffsets,
-        out int[] rows, out CtcHead head)
+    public bool TryResolveManyHead(out int[] rows, out CtcHead head)
     {
-        activations = []; actOffsets = []; rows = []; head = null!;
+        rows = []; head = null!;
         if (!CanRunMany || _many.Length == 0) return false;
         ResolveCtcProjection();
         if (_ctcMatMulIndex < 0) return false;
         rows = new int[_many.Length];
         for (int i = 0; i < _many.Length; i++)
             rows[i] = _compiled.ResolveShapesFor(_many[i])[_ctcActTensor][^2];
+        head = new CtcHead
+        {
+            Weights = _ctcWBytes!, Bias = _ctcBiasBytes, Packed = _ctcPacked,
+            Inner = _ctcInner, Columns = _ctcColumns, MatMulIndex = _ctcMatMulIndex,
+        };
+        return true;
+    }
+
+    public bool TryRunManyUntilCtcProjection(CtcUnitsReady onReady)
+    {
+        if (!CanRunMany || _many.Length == 0) return false;
+        ResolveCtcProjection();
+        if (_ctcMatMulIndex < 0) return false;
+        // consumer failures are the caller's, not a GPU fault: keep them out
+        // of the fallback catch below and rethrow once the device is drained
+        System.Runtime.ExceptionServices.ExceptionDispatchInfo? consumerError = null;
+        bool Forward(float[] acts, int[] offsets, int first, int count)
+        {
+            try { return onReady(acts, offsets, first, count); }
+            catch (Exception ex)
+            {
+                consumerError = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex);
+                return false;
+            }
+        }
+        bool ok;
         try
         {
-            activations = _graph.RunMany(_many, _input.AsSpan(0, _manyVolume), out actOffsets,
-                _ctcMatMulIndex, _ctcActTensor);
+            ok = _graph.RunMany(_many, _input.AsSpan(0, _manyVolume), _ctcMatMulIndex, _ctcActTensor, Forward);
         }
         catch (Exception ex)
         {
@@ -167,12 +191,8 @@ internal sealed class GpuSession : IOcrSession, IBatchedCtcSession
             _gpuDead = true;
             return false;
         }
-        head = new CtcHead
-        {
-            Weights = _ctcWBytes!, Bias = _ctcBiasBytes, Packed = _ctcPacked,
-            Inner = _ctcInner, Columns = _ctcColumns, MatMulIndex = _ctcMatMulIndex,
-        };
-        return true;
+        consumerError?.Throw();
+        return ok;
     }
 
     private InferenceSession Cpu()

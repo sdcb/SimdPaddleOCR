@@ -155,6 +155,8 @@ internal unsafe sealed class VkDevice : IDisposable
             else if (en == "VK_EXT_subgroup_size_control") hasSgc = true;
             else if (en == "VK_KHR_shader_float16_int8") hasF16Int8 = true;
         }
+        // SIMD_OCR_VK_NOPUSH=1: exercise the descriptor-pool fallback on devices that have push
+        if (Environment.GetEnvironmentVariable("SIMD_OCR_VK_NOPUSH") == "1") hasPush = false;
 
         Vk.VkPhysicalDeviceCooperativeMatrixFeaturesKHR coopQ = new() { SType = VkConst.StPhysicalDeviceCooperativeMatrixFeaturesKHR };
         if (hasCoop)

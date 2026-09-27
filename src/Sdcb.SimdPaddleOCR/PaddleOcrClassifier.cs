@@ -111,7 +111,7 @@ public sealed class PaddleOcrClassifier : IDisposable
     /// CTC-projection split the recognizer uses (the GPU skips the last nodes).
     /// </summary>
     internal void ClassifyBatch(byte[] cropBuffer, int[] offsets, int[] bytes,
-        int[] widths, int[] heights, int count, uint[] labels, float[] scores)
+        int[] widths, int[] heights, int count, uint[] labels, float[] scores, int preprocessWorkers = 1)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrClassifier));
         const int sampleFloats = 3 * InputHeight * InputWidth;
@@ -127,12 +127,18 @@ public sealed class PaddleOcrClassifier : IDisposable
             int nPad = (count + 7) & ~7;
             session.Reshape([nPad, 3, InputHeight, InputWidth]);
             Span<float> input = session.InputData;
-            for (int k = 0; k < count; k++)
+            unsafe
             {
-                PPOCRPreprocess.Cls(cropBuffer.AsSpan(offsets[k], bytes[k]), widths[k], heights[k],
-                    ImagePixels.ResolveStride(widths[k], 0, ImagePixelFormat.Bgr24),
-                    input.Slice(k * sampleFloats, sampleFloats), session.ResizeWorkspace,
-                    session.InputIsNhwc, ImagePixelFormat.Bgr24);
+                fixed (float* inputPtr = input)
+                {
+                    nint inputAddress = (nint)inputPtr;
+                    bool nhwc = session.InputIsNhwc;
+                    PPOCRPreprocess.ForLines(count, preprocessWorkers, session.ResizeWorkspace, (k, workspace) =>
+                        PPOCRPreprocess.Cls(cropBuffer.AsSpan(offsets[k], bytes[k]), widths[k], heights[k],
+                            ImagePixels.ResolveStride(widths[k], 0, ImagePixelFormat.Bgr24),
+                            new Span<float>((float*)inputAddress + (long)k * sampleFloats, sampleFloats),
+                            workspace, nhwc, ImagePixelFormat.Bgr24));
+                }
             }
             input[(count * sampleFloats)..].Clear();   // pad rows → zero logits → [0.5,0.5], discarded
             if (profile) PipelineProfiler.Add(PipelineProfiler.ClsPreprocess, started);

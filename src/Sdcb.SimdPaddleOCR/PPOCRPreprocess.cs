@@ -16,6 +16,32 @@ internal static class PPOCRPreprocess
     private static readonly float[] DetNormalized = BuildChannelLut(DetMean, DetInverseStd);
     private static readonly float[] RecNormalized = BuildRecLut();
 
+    [ThreadStatic] private static ResizeWorkspace? t_workspace;
+
+    /// <summary>
+    /// Runs <paramref name="body"/> for every line index on up to
+    /// <paramref name="workers"/> threads (shared cursor, so wide lines do not
+    /// leave a tail). Each thread gets its own resize scratch; the serial path
+    /// uses <paramref name="serialWorkspace"/>. Lines must write disjoint output.
+    /// </summary>
+    internal static void ForLines(int count, int workers, ResizeWorkspace serialWorkspace,
+        Action<int, ResizeWorkspace> body)
+    {
+        workers = Math.Min(workers, count);
+        if (workers <= 1)
+        {
+            for (int k = 0; k < count; k++) body(k, serialWorkspace);
+            return;
+        }
+        int cursor = -1;
+        Parallel.For(0, workers, _ =>
+        {
+            ResizeWorkspace workspace = t_workspace ??= new ResizeWorkspace();
+            int k;
+            while ((k = Interlocked.Increment(ref cursor)) < count) body(k, workspace);
+        });
+    }
+
     private static float[] BuildChannelLut(double[] mean, double[] inverseStd)
     {
         float[] values = new float[3 * 256];

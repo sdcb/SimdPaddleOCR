@@ -30,13 +30,17 @@ internal static class DbPostprocess
         int pixels = checked(mapWidth * mapHeight);
         scratch.Ensure(pixels);
         byte[] bitmap = scratch.Bitmap;
-        byte[] visited = scratch.Visited;
+        // Flood-fill state maps fold "is foreground" and "visited" into one
+        // byte so run scans are single vectorised searches:
+        // pending[i] != 0  <=> unvisited foreground,
+        // blocked[i] != 0  <=> foreground or already-visited background.
+        byte[] pending = scratch.Visited;
         int[] queue = scratch.Queue;
-        byte[] backgroundVisited = scratch.BackgroundVisited;
+        byte[] blocked = scratch.BackgroundVisited;
         Threshold.Binarize(prediction, bitmap, pixels, options.BitmapThreshold);
         if (options.UseDilation) Dilate2x2(bitmap, scratch.Dilated, mapWidth, mapHeight, pixels);
-        Array.Clear(visited, 0, pixels);
-        Array.Clear(backgroundVisited, 0, pixels);
+        Buffer.BlockCopy(bitmap, 0, pending, 0, pixels);
+        Buffer.BlockCopy(bitmap, 0, blocked, 0, pixels);
         byte[]? interior = ComputeInterior(bitmap, scratch.Interior, mapWidth, mapHeight, pixels);
         List<PaddleOcrDetectionBox> found = [with(Math.Min(options.MaxCandidates, 256))];
         Span<Point> corners = stackalloc Point[4];
@@ -46,13 +50,14 @@ internal static class DbPostprocess
         int candidateCount = 0;
         for (int start = 0; start < pixels && candidateCount < options.MaxCandidates; start++)
         {
-            if (bitmap[start] == 0 || visited[start] != 0) continue;
-            int boundaryCount = FillForeground(start, bitmap, visited, queue,
+            start = NextNonZero(pending, start, pixels);
+            if (start >= pixels) break;
+            int boundaryCount = FillForeground(start, bitmap, pending, queue,
                 scratch, pixels, mapWidth, mapHeight, interior);
             if (boundaryCount < 3) continue;
             candidateCount++;
-            if (TryBuildDetection(scratch.Boundary, boundaryCount, prediction,
-                mapWidth, mapHeight, options, sourceWidth, sourceHeight, ref scratch.Hull,
+            if (TryBuildDetection(scratch, boundaryCount, prediction,
+                mapWidth, mapHeight, options, sourceWidth, sourceHeight,
                 corners, miniBoxScratch, expandedMiniBoxScratch, remappedCornersScratch,
                 out PaddleOcrDetectionBox detection))
                 found.Add(detection);
@@ -69,28 +74,29 @@ internal static class DbPostprocess
         // contours), preserving the official hollow-glyph behavior.
         for (int x = 0; x < mapWidth; x++)
         {
-            FillBackground(x, bitmap, backgroundVisited, queue, null, pixels,
+            FillBackground(x, bitmap, blocked, queue, null, pixels,
                 mapWidth, mapHeight, out _);
             if (mapHeight > 1) FillBackground((mapHeight - 1) * mapWidth + x,
-                bitmap, backgroundVisited, queue, null, pixels, mapWidth, mapHeight, out _);
+                bitmap, blocked, queue, null, pixels, mapWidth, mapHeight, out _);
         }
         for (int y = 1; y + 1 < mapHeight; y++)
         {
-            FillBackground(y * mapWidth, bitmap, backgroundVisited, queue, null, pixels,
+            FillBackground(y * mapWidth, bitmap, blocked, queue, null, pixels,
                 mapWidth, mapHeight, out _);
             if (mapWidth > 1) FillBackground(y * mapWidth + mapWidth - 1,
-                bitmap, backgroundVisited, queue, null, pixels, mapWidth, mapHeight, out _);
+                bitmap, blocked, queue, null, pixels, mapWidth, mapHeight, out _);
         }
 
         for (int start = 0; start < pixels && candidateCount < options.MaxCandidates; start++)
         {
-            if (bitmap[start] != 0 || backgroundVisited[start] != 0) continue;
-            FillBackground(start, bitmap, backgroundVisited, queue, scratch, pixels,
+            start = NextZero(blocked, start, pixels);
+            if (start >= pixels) break;
+            FillBackground(start, bitmap, blocked, queue, scratch, pixels,
                 mapWidth, mapHeight, out int boundaryCount);
             if (boundaryCount < 3) continue;
             candidateCount++;
-            if (TryBuildDetection(scratch.Boundary, boundaryCount, prediction,
-                mapWidth, mapHeight, options, sourceWidth, sourceHeight, ref scratch.Hull,
+            if (TryBuildDetection(scratch, boundaryCount, prediction,
+                mapWidth, mapHeight, options, sourceWidth, sourceHeight,
                 corners, miniBoxScratch, expandedMiniBoxScratch, remappedCornersScratch,
                 out PaddleOcrDetectionBox detection))
                 found.Add(detection);
@@ -115,6 +121,7 @@ internal static class DbPostprocess
         public int[] Queue = [];
         public Point[] Boundary = [];
         public Point[] Hull = [];
+        public int[] RowMin = [], RowMax = [];
 
         public void Ensure(int pixels)
         {
@@ -149,15 +156,14 @@ internal static class DbPostprocess
     // `start`.  Produces the same visited set and the same boundary-point set
     // as the previous per-pixel BFS (each boundary pixel emitted exactly once;
     // the convex hull consumer is order-insensitive).
-    private static int FillForeground(int start, byte[] bitmap, byte[] visited, int[] stack,
+    private static int FillForeground(int start, byte[] bitmap, byte[] pending, int[] stack,
         Workspace scratch, int boundaryCap, int mapWidth, int mapHeight, byte[]? interior)
     {
         int boundaryCount = 0, top = 0;
-        int seedY = start / mapWidth, seedX = start % mapWidth, seedRow = seedY * mapWidth;
-        int seedLeft = seedX, seedRight = seedX;
-        while (seedLeft > 0 && bitmap[seedRow + seedLeft - 1] != 0 && visited[seedRow + seedLeft - 1] == 0) seedLeft--;
-        while (seedRight + 1 < mapWidth && bitmap[seedRow + seedRight + 1] != 0 && visited[seedRow + seedRight + 1] == 0) seedRight++;
-        ArrayCompat.Fill(visited, (byte)1, seedRow + seedLeft, seedRight - seedLeft + 1);
+        int seedY = start / mapWidth, seedRow = seedY * mapWidth;
+        int seedLeft = RunStart(pending, seedRow, start, nonZero: true) - seedRow;
+        int seedRight = NextZero(pending, start + 1, seedRow + mapWidth) - seedRow - 1;
+        ArrayCompat.Fill(pending, (byte)0, seedRow + seedLeft, seedRight - seedLeft + 1);
         stack[top++] = seedY; stack[top++] = seedLeft; stack[top++] = seedRight;
         while (top > 0)
         {
@@ -183,18 +189,13 @@ internal static class DbPostprocess
                 int neighborY = y + direction;
                 if ((uint)neighborY >= (uint)mapHeight) continue;
                 int row = neighborY * mapWidth, x = scanFrom;
-                while (x <= scanTo)
+                while ((x = NextNonZero(pending, row + x, row + scanTo + 1) - row) <= scanTo)
                 {
-                    if (bitmap[row + x] != 0 && visited[row + x] == 0)
-                    {
-                        int runLeft = x, runRight = x;
-                        while (runLeft > 0 && bitmap[row + runLeft - 1] != 0 && visited[row + runLeft - 1] == 0) runLeft--;
-                        while (runRight + 1 < mapWidth && bitmap[row + runRight + 1] != 0 && visited[row + runRight + 1] == 0) runRight++;
-                        ArrayCompat.Fill(visited, (byte)1, row + runLeft, runRight - runLeft + 1);
-                        stack[top++] = neighborY; stack[top++] = runLeft; stack[top++] = runRight;
-                        x = runRight + 2;
-                    }
-                    else x++;
+                    int runLeft = RunStart(pending, row, row + x, nonZero: true) - row;
+                    int runRight = NextZero(pending, row + x + 1, row + mapWidth) - row - 1;
+                    ArrayCompat.Fill(pending, (byte)0, row + runLeft, runRight - runLeft + 1);
+                    stack[top++] = neighborY; stack[top++] = runLeft; stack[top++] = runRight;
+                    x = runRight + 2;
                 }
             }
         }
@@ -206,17 +207,16 @@ internal static class DbPostprocess
     // contract of the previous BFS: every (background pixel, foreground
     // neighbor) adjacency contributes one boundary entry at the background
     // pixel's coordinates, including duplicates.
-    private static void FillBackground(int seed, byte[] bitmap, byte[] visited, int[] stack,
+    private static void FillBackground(int seed, byte[] bitmap, byte[] blocked, int[] stack,
         Workspace? boundary, int boundaryCap, int mapWidth, int mapHeight, out int boundaryCount)
     {
         boundaryCount = 0;
-        if (bitmap[seed] != 0 || visited[seed] != 0) return;
+        if (blocked[seed] != 0) return;
         int top = 0;
-        int seedY = seed / mapWidth, seedX = seed % mapWidth, seedRow = seedY * mapWidth;
-        int seedLeft = seedX, seedRight = seedX;
-        while (seedLeft > 0 && bitmap[seedRow + seedLeft - 1] == 0 && visited[seedRow + seedLeft - 1] == 0) seedLeft--;
-        while (seedRight + 1 < mapWidth && bitmap[seedRow + seedRight + 1] == 0 && visited[seedRow + seedRight + 1] == 0) seedRight++;
-        ArrayCompat.Fill(visited, (byte)1, seedRow + seedLeft, seedRight - seedLeft + 1);
+        int seedY = seed / mapWidth, seedRow = seedY * mapWidth;
+        int seedLeft = RunStart(blocked, seedRow, seed, nonZero: false) - seedRow;
+        int seedRight = NextNonZero(blocked, seed + 1, seedRow + mapWidth) - seedRow - 1;
+        ArrayCompat.Fill(blocked, (byte)1, seedRow + seedLeft, seedRight - seedLeft + 1);
         stack[top++] = seedY; stack[top++] = seedLeft; stack[top++] = seedRight;
         while (top > 0)
         {
@@ -236,34 +236,119 @@ internal static class DbPostprocess
                 int row = neighborY * mapWidth, x = left;
                 while (x <= right)
                 {
-                    if (bitmap[row + x] != 0)
+                    if (boundary is null)
                     {
-                        boundary?.AddBoundary(ref boundaryCount, x, y, boundaryCap);
+                        // exterior fill: nothing to record on blocked pixels
+                        x = NextZero(blocked, row + x, row + right + 1) - row;
+                        if (x > right) break;
+                    }
+                    else if (bitmap[row + x] != 0)
+                    {
+                        boundary.AddBoundary(ref boundaryCount, x, y, boundaryCap);
                         x++;
+                        continue;
                     }
-                    else if (visited[row + x] == 0)
+                    else if (blocked[row + x] != 0)
                     {
-                        int runLeft = x, runRight = x;
-                        while (runLeft > 0 && bitmap[row + runLeft - 1] == 0 && visited[row + runLeft - 1] == 0) runLeft--;
-                        while (runRight + 1 < mapWidth && bitmap[row + runRight + 1] == 0 && visited[row + runRight + 1] == 0) runRight++;
-                        ArrayCompat.Fill(visited, (byte)1, row + runLeft, runRight - runLeft + 1);
-                        stack[top++] = neighborY; stack[top++] = runLeft; stack[top++] = runRight;
-                        x = runRight + 1;
+                        x++;
+                        continue;
                     }
-                    else x++;
+                    int runLeft = RunStart(blocked, row, row + x, nonZero: false) - row;
+                    int runRight = NextNonZero(blocked, row + x + 1, row + mapWidth) - row - 1;
+                    ArrayCompat.Fill(blocked, (byte)1, row + runLeft, runRight - runLeft + 1);
+                    stack[top++] = neighborY; stack[top++] = runLeft; stack[top++] = runRight;
+                    x = runRight + 1;
                 }
             }
         }
     }
 
-    private static bool TryBuildDetection(Point[] contour, int count, ReadOnlySpan<float> prediction,
+    // First index in [from, to) holding a non-zero byte, else `to`.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int NextNonZero(byte[] a, int from, int to)
+    {
+        if (from >= to) return to;
+#if NETSTANDARD2_0
+        while (from < to && a[from] == 0) from++;
+        return from;
+#else
+        int i = a.AsSpan(from, to - from).IndexOfAnyExcept((byte)0);
+        return i < 0 ? to : from + i;
+#endif
+    }
+
+    // First index in [from, to) holding a zero byte, else `to`.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int NextZero(byte[] a, int from, int to)
+    {
+        if (from >= to) return to;
+        int i = a.AsSpan(from, to - from).IndexOf((byte)0);
+        return i < 0 ? to : from + i;
+    }
+
+    // Smallest s in [lower, end] with a[s..end) all non-zero (nonZero) or all
+    // zero (!nonZero); a[end] itself is not inspected.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int RunStart(byte[] a, int lower, int end, bool nonZero)
+    {
+        if (end <= lower) return end;
+        Span<byte> s = a.AsSpan(lower, end - lower);
+#if NETSTANDARD2_0
+        int i = s.Length - 1;
+        while (i >= 0 && (s[i] != 0) == nonZero) i--;
+#else
+        int i = nonZero ? s.LastIndexOf((byte)0) : s.LastIndexOfAnyExcept((byte)0);
+#endif
+        return lower + i + 1;
+    }
+
+    // Convex hull input only needs each row's extreme points: every other
+    // point of a row lies on the segment between them, so it is never a
+    // strict hull vertex. Contour points are integral pixel coordinates, so
+    // the hull (hence every downstream rectangle) is unchanged.
+    private static int ReduceToRowExtremes(Point[] points, int count, int mapHeight, Workspace scratch)
+    {
+        if (scratch.RowMin.Length < mapHeight)
+        {
+            scratch.RowMin = new int[mapHeight];
+            scratch.RowMax = new int[mapHeight];
+        }
+        int[] rowMin = scratch.RowMin, rowMax = scratch.RowMax;
+        int minY = int.MaxValue, maxY = int.MinValue;
+        for (int i = 0; i < count; i++)
+        {
+            int y = (int)points[i].Y;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+        for (int y = minY; y <= maxY; y++) { rowMin[y] = int.MaxValue; rowMax[y] = int.MinValue; }
+        for (int i = 0; i < count; i++)
+        {
+            int x = (int)points[i].X, y = (int)points[i].Y;
+            if (x < rowMin[y]) rowMin[y] = x;
+            if (x > rowMax[y]) rowMax[y] = x;
+        }
+        int n = 0;
+        for (int y = minY; y <= maxY; y++)
+        {
+            if (rowMin[y] > rowMax[y]) continue;
+            points[n++] = new Point(rowMin[y], y);
+            if (rowMax[y] != rowMin[y]) points[n++] = new Point(rowMax[y], y);
+        }
+        return n;
+    }
+
+    private static bool TryBuildDetection(Workspace scratch, int count, ReadOnlySpan<float> prediction,
         int mapWidth, int mapHeight, PaddleOcrDetectorOptions options, int sourceWidth, int sourceHeight,
-        ref Point[] hullScratch, Span<Point> corners, Span<Point> miniBoxScratch,
+        Span<Point> corners, Span<Point> miniBoxScratch,
         Span<Point> expandedMiniBoxScratch, Span<Point> remappedCornersScratch,
         out PaddleOcrDetectionBox detection)
     {
         detection = default;
         if (count < 3) return false;
+        Point[] contour = scratch.Boundary;
+        ref Point[] hullScratch = ref scratch.Hull;
+        count = ReduceToRowExtremes(contour, count, mapHeight, scratch);
         if (!TryMinimumRectangle(contour, count, ref hullScratch,
             out Rectangle rectangle, miniBoxScratch)) return false;
         float shortestSide = MathF.Min(rectangle.MaxU - rectangle.MinU, rectangle.MaxV - rectangle.MinV);

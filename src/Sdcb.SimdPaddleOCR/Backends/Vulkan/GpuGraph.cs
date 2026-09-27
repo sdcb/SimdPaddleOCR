@@ -72,7 +72,7 @@ internal sealed class GpuGraphModel
         _pReduce, _pReduce4, _pReduce4b, _pPool, _pPool4,
         _pResize, _pResize4, _pResize4Add, _pConcat, _pConcat4, _pNchw, _pOut, _pIm2col,
         _pAddPs, _pSeA, _pSeB, _pSeF, _pConvD, _pConvDF32, _pCatRes,
-        _pAvg4, _pAffine, _pLn, _pAttn;
+        _pAvg4, _pAffine, _pLn, _pAttn, _pDotSk;
 
     // fp16 copies of constant tensors (weights, biases, scalars), lazy
     private readonly Dictionary<(int, int, int, int), VkBuffer> _constF16 = new();
@@ -224,6 +224,7 @@ internal sealed class GpuGraphModel
         _pSoftmax = Pipe("softmax", 2, 8);
         _pLn = Pipe("layernorm", 4, 12);
         _pAttn = Pipe("attn", 2, 16);
+        _pDotSk = Pipe("mmdot_sk", 8, 28);
     }
 
     private VkPipeline Pipe(string name, int bindings, int pcBytes, uint reqSg = 0)
@@ -341,6 +342,9 @@ internal sealed class GpuGraphModel
         Environment.GetEnvironmentVariable("SIMD_OCR_NOCATABS") != null;
     private static readonly bool s_dbgTime =
         Environment.GetEnvironmentVariable("SIMD_OCR_GPU_TIME") == "1";
+    // SIMD_OCR_NOSK=1: narrow-M MatMuls use the plain dot kernel (bisecting)
+    private static readonly bool s_noSplitK =
+        Environment.GetEnvironmentVariable("SIMD_OCR_NOSK") != null;
 
     /// <summary>Schedule for (shape, nodeLimit, outTensor); compiled on first
     /// use. nodeLimit truncates the emit loop and outTensor overrides the
@@ -1221,7 +1225,11 @@ internal sealed class GpuGraphModel
                             // se tensors are per-batch [n, C] — mImg lets the
                             // kernel pick the batch's scale vector; 0 = batch-free.
                             uint mIm = hasPs || aps ? mImg : 0u;
-                            Emit(_pDot, $"conv1x1d n{ni} {M}x{cinIn}x{cout}",
+                            uint dFlags = flags | (aps ? 512u : 0u);
+                            long dTiles = ((M + 3) / 4) * (long)(cout / 4);
+                            bool dSplit = cinIn >= 64 && dTiles <= 16384 && !s_noSplitK
+                                && (dFlags & (8u | 512u | 1024u)) == 0;
+                            Emit(dSplit ? _pDotSk : _pDot, $"conv1x1d{(dSplit ? "sk" : "")} n{ni} {M}x{cinIn}x{cout}",
                                 [(arena, aOff, 2), (wk, 0, 2),
                                  (biasBuf, 0, 2),
                                  (arena, resT != uint.MaxValue ? SlotOf(resT) : 0, 2),
@@ -1231,8 +1239,8 @@ internal sealed class GpuGraphModel
                                  (arena, dualT != uint.MaxValue ? SlotOf(dualT) : 0, 2),
                                  (arena, aps ? SlotOf(ads.a) : 0, 2)],
                                 [M, (uint)cout, (uint)cinIn, (uint)(cinIn / 4),
-                                 flags | (aps ? 512u : 0u), (uint)(cinIn / 4), mIm],
-                                Div256(((M + 3) / 4) * (long)(cout / 4)));
+                                 dFlags, (uint)(cinIn / 4), mIm],
+                                dSplit ? (uint)((dTiles + 15) / 16) : Div256(dTiles));
                         }
                         else
                         {
@@ -2026,14 +2034,18 @@ internal sealed class GpuGraphModel
                                 ni += 1;
                             }
                         }
-                        Emit(_pDot, $"mmdot n{ni} {mmM}x{mmK}x{mmN}",
+                        // fewer than ~64 workgroups of 4x4 tiles: the serial K
+                        // loop is the latency floor, so split K over 16 lanes
+                        long tiles = ((mmM + 3) / 4) * (long)(mmN / 4);
+                        bool splitK = mmK >= 64 && tiles <= 16384 && !s_noSplitK;
+                        Emit(splitK ? _pDotSk : _pDot, $"mmdot{(splitK ? "sk" : "")} n{ni} {mmM}x{mmK}x{mmN}",
                             [(arena, SlotOf(node.Inputs[0]), 2),
                              (ConstF16(checked((int)node.Inputs[1])), 0, 2),
                              (mmBias, 0, 2), (arena, resOff, 2),
                              (arena, off[outPhys], 2), (arena, 0, 2),
                              (arena, 0, 2), (arena, 0, 2)],
                             [mmM, (uint)mmN, (uint)mmK, (uint)(mmK / 4), mmFlags, 0u, 0u],
-                            Div256(((mmM + 3) / 4) * (long)(mmN / 4)));
+                            splitK ? (uint)((tiles + 15) / 16) : Div256(tiles));
                         break;
                     }
                     var (cp2, tm2, tn2) = CmTile(mmN);
