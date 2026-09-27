@@ -7,6 +7,8 @@
 //   OUT[px, c4:c4+4] = act(bias4 + sum_{dy,dx} w4[tap] * X[py*s+dy-pad, px*s+dx-pad, c4:c4+4])
 // Weights are pre-packed tap-major: W[(dy*kW+dx)*C + c] (fp16, vec4 reads).
 // PC: outW, outH, C, kH, kW, strideH, strideW, padT, padL, inW, inH, flags(bit0 bias, bits4-6 act)
+// ABSORB (conv_dw4a): flags bit8 -> the input is an unfused addps, read as
+//   fp16(x*se[c4] + ra) per tap (bindings 4 ra, 5 se), as conv_dw4t does.
 
 layout(local_size_x = 256) in;
 
@@ -14,6 +16,10 @@ layout(set = 0, binding = 0) readonly buffer X { f16vec4 x[]; };
 layout(set = 0, binding = 1) readonly buffer W { f16vec4 w[]; };
 layout(set = 0, binding = 2) readonly buffer Bias { float16_t bias[]; };
 layout(set = 0, binding = 3) writeonly buffer O { f16vec4 o[]; };
+#ifdef ABSORB
+layout(set = 0, binding = 4) readonly buffer RA { f16vec4 ra[]; };
+layout(set = 0, binding = 5) readonly buffer SE { f16vec4 se[]; };
+#endif
 
 layout(push_constant) uniform PC {
     uint outW; uint outH; uint C; uint kH; uint kW;
@@ -62,7 +68,14 @@ void main()
             if (ix < 0 || ix >= int(p.inW)) continue;
             uint tap = dy * p.kW + dx;
             vec4 wv = vec4(w[tap * cv + c4]);
+#ifdef ABSORB
+            uint gi = rowBase + uint(ix) * cv + c4;
+            vec4 xv = (p.flags & 256u) != 0u
+                ? vec4(f16vec4(vec4(x[gi]) * vec4(se[b * cv + c4]) + vec4(ra[gi])))
+                : vec4(x[gi]);
+#else
             vec4 xv = vec4(x[rowBase + uint(ix) * cv + c4]);
+#endif
             acc += wv * xv;
         }
     }

@@ -77,7 +77,7 @@ internal sealed class GpuGraphModel
     // SE-prescaled pointwise conv
     private readonly VkPipeline? _pConvK, _pConvKN64, _pConvKN32, _pConvPs, _pConvPsN64, _pConvPsN32;
     // sg32 lite family only: direct-load plain GEMM (M >= 16, K % 16 == 0)
-    private readonly VkPipeline? _pCmD, _pCmDN64, _pCmDN32;
+    private readonly VkPipeline? _pCmD, _pCmDN64, _pCmDN32, _pDw4A;
     private readonly bool _lite;
 
     // fp16 copies of constant tensors (weights, biases, scalars), lazy
@@ -214,6 +214,7 @@ internal sealed class GpuGraphModel
                 _pCmD = Pipe("conv1x1_cm_sg32d", 6, 16, 32);
                 _pCmDN64 = Pipe("conv1x1_cm_sg32d_n64", 6, 16, 32);
                 _pCmDN32 = Pipe("conv1x1_cm_sg32d_n32", 6, 16, 32);
+                _pDw4A = Pipe("conv_dw4a", 6, 48);
             }
         }
         else
@@ -842,10 +843,15 @@ internal sealed class GpuGraphModel
             return r;
         }
         uint Div256(long n) => (uint)((n + 255) / 256);
-        // depthwise convs on the shared-tile kernel (emit and addps absorb
-        // must agree); sg32 also tiles the 9x9 taps
-        bool DwTiled(int kh, int kw, int sh, int sw) =>
-            kh <= (_sg32 ? 9 : 5) && kw <= (_sg32 ? 9 : 5) && sh <= 2 && sw <= 2;
+        // depthwise kernel choice (emit and addps absorb must agree): lite
+        // parts run k <= 3 on the flat kernel with the absorb read — its
+        // channel-quad-consecutive loads beat the tile's per-quad halo
+        // there; the rest goes to the shared-tile kernel, which sg32 also
+        // uses for the 9x9 taps
+        bool DwFlatA(int kh, int kw, int sh, int sw) =>
+            _pDw4A is not null && kh <= 3 && kw <= 3 && sh <= 2 && sw <= 2;
+        bool DwTiled(int kh, int kw, int sh, int sw) => !DwFlatA(kh, kw, sh, sw)
+            && kh <= (_sg32 ? 9 : 5) && kw <= (_sg32 ? 9 : 5) && sh <= 2 && sw <= 2;
         // spatial-reduce partitions: ~512 px per workgroup (a 16-WG cap left
         // most of the GPU idle on large DET maps), bounded by partial storage
         int PartSplits(int hw, int c) =>
@@ -902,7 +908,8 @@ internal sealed class GpuGraphModel
                         sH2 = I32(cp, 16), sW2 = I32(cp, 20);
                     int grp2 = Math.Max(1, checked((int)U32(cp, 4)));
                     if (grp2 == cin2 && cout2 == cin2)
-                        return cin2 % 4 == 0 && DwTiled(kH2, kW2, sH2, sW2);  // conv_dw4t
+                        return cin2 % 4 == 0 && (DwTiled(kH2, kW2, sH2, sW2)  // conv_dw4t
+                            || DwFlatA(kH2, kW2, sH2, sW2));                   // conv_dw4a
                     if (grp2 == 1 && kH2 == 1 && kW2 == 1 && sH2 == 1 && sW2 == 1)
                     {
                         int cinI2 = (srcPhys == inIdx && cin2 % 4 != 0) ? 4 : cin2;
@@ -1317,6 +1324,23 @@ internal sealed class GpuGraphModel
                                      (uint)inW, (uint)inH,
                                      flags | (aps ? 256u : 0u)],
                                     tx * ty * (uint)(cout / 4), (uint)nb);
+                            }
+                            else if (DwFlatA(kH, kW, sH, sW))
+                            {
+                                bool aps = addpsSrc.TryGetValue(
+                                    Phys(checked((int)node.Inputs[0])), out var ads);
+                                Emit(_pDw4A!, $"conv_dw4a n{ni} {cout}ch k{kH}s{sH}",
+                                    [(arena, aps ? SlotOf(ads.x)
+                                                : SlotOf(node.Inputs[0]), 2),
+                                     (ConstDwTap(checked((int)node.Inputs[1]), cout, kH * kW), 0, 2),
+                                     (biasBuf, 0, 2), (arena, off[outPhys], 2),
+                                     (arena, aps ? SlotOf(ads.a) : 0, 2),
+                                     (arena, aps ? SlotOf(ads.se) : 0, 2)],
+                                    [(uint)outW, (uint)outH, (uint)cout, (uint)kH, (uint)kW,
+                                     (uint)sH, (uint)sW, (uint)pt, (uint)pl,
+                                     (uint)inW, (uint)inH,
+                                     flags | (aps ? 256u : 0u)],
+                                    Div256((long)outW * outH * (cout / 4)), (uint)nb);
                             }
                             else
                             Emit(_pDw4, $"conv_dw4 n{ni} {cout}ch k{kH}s{sH}",
