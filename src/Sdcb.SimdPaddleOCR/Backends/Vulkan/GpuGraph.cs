@@ -73,6 +73,8 @@ internal sealed class GpuGraphModel
         _pResize, _pResize4, _pResize4Add, _pConcat, _pConcat4, _pNchw, _pOut, _pIm2col,
         _pAddPs, _pSeA, _pSeB, _pSeF, _pConvD, _pConvDF32, _pCatRes,
         _pAvg4, _pAffine, _pLn, _pAttn, _pDotSk;
+    // sg32 only: implicit-GEMM kxk conv on coopmat (128x128 / 128x64 / 128x32)
+    private readonly VkPipeline? _pConvK, _pConvKN64, _pConvKN32;
 
     // fp16 copies of constant tensors (weights, biases, scalars), lazy
     private readonly Dictionary<(int, int, int, int), VkBuffer> _constF16 = new();
@@ -182,7 +184,11 @@ internal sealed class GpuGraphModel
         if (_sg32)
         {
             _pConv1x1 = Pipe("conv1x1_cm_sg32", 6, 16, 32);
-            _pConv1x1N64 = _pConv1x1N32 = _pConv1x1;
+            _pConv1x1N64 = Pipe("conv1x1_cm_sg32_n64", 6, 16, 32);
+            _pConv1x1N32 = Pipe("conv1x1_cm_sg32_n32", 6, 16, 32);
+            _pConvK = Pipe("convk_cm_sg32", 6, 68, 32);
+            _pConvKN64 = Pipe("convk_cm_sg32_n64", 6, 68, 32);
+            _pConvKN32 = Pipe("convk_cm_sg32_n32", 6, 68, 32);
         }
         else
         {
@@ -345,7 +351,6 @@ internal sealed class GpuGraphModel
     // SIMD_OCR_NOSK=1: narrow-M MatMuls use the plain dot kernel (bisecting)
     private static readonly bool s_noSplitK =
         Environment.GetEnvironmentVariable("SIMD_OCR_NOSK") != null;
-
     /// <summary>Schedule for (shape, nodeLimit, outTensor); compiled on first
     /// use. nodeLimit truncates the emit loop and outTensor overrides the
     /// readback tensor (REC stops before the vocab projection).</summary>
@@ -602,40 +607,24 @@ internal sealed class GpuGraphModel
 
         var off = new long[nT];
         long cursor = 0;
-        long maxIm2col = 0;   // shared scratch: max M*K_pad over dense convs
+        long maxIm2col = 0;   // shared scratch: max M*K_pad over emitted im2col convs
         for (int i = 0; i < nT; i++)
         {
             off[i] = -1;
             if (!used[i] || isConst[i] || alias[i] != i) continue;
             off[i] = cursor;
             // pad every slab to a 128-row tile multiple: coopmat reads pad rows;
-            // slabs are 4-element aligned so packed-uint (fp16 pair) reads stay aligned
+            // slabs are 8-element (16 B) aligned: the sg32 coopmat stages
+            // 16 B uvec4 loads straight from slab starts
             long sz = numel[i];
             if (i == inIdx && inCinPad != 0)
                 sz = numel[i] / shapes[i][1] * inCinPad;
-            cursor += (sz + 3) / 4 * 4 + 128 * 64;
+            cursor += (sz + 7) / 8 * 8 + 128 * 64;
         }
-        for (int ni = 0; ni < nodes.Length; ni++)
-        {
-            NodeRecord nd = nodes[ni];
-            if (nd.Operator != OperatorId.Conv) continue;
-            ReadOnlySpan<byte> pp = _model.GetParameters(nd);
-            int grp = Math.Max(1, checked((int)U32(pp, 4)));
-            int kh = I32(pp, 8), kw = I32(pp, 12);
-            int[] os = shapes[nd.Outputs[0]], iss = shapes[nd.Inputs[0]];
-            if (grp == 1 && !(kh == 1 && kw == 1 && I32(pp, 16) == 1 && I32(pp, 20) == 1))
-            {
-                long m = (long)os[2] * os[3];
-                int cn = iss[1];
-                if (Phys(checked((int)nd.Inputs[0])) == inIdx && inCinPad != 0) cn = inCinPad;
-                long kp = ((long)cn * kh * kw + 15) / 16 * 16;
-                maxIm2col = Math.Max(maxIm2col, m * kp);
-            }
-        }
+        // the im2col scratch sits past every slab; its size (and the arena
+        // total) is settled after emit, so convs that take a direct or
+        // implicit-GEMM path reserve nothing
         long im2colOff = (cursor + 63) / 64 * 64;
-        // +128*512: coopmat A-tile reads pad rows past M
-        cursor = im2colOff + maxIm2col + 128 * 512;
-        long arenaElems = cursor + (1L << 20);
         // Role sentinels: the session binds its own grow-only buffers at
         // record time, sized from the schedule's requirements.
         VkBuffer arena = RoleArena, outF32 = RoleOut, inF32 = RoleIn;
@@ -830,9 +819,11 @@ internal sealed class GpuGraphModel
         int PartSplits(int hw, int c) =>
             Math.Max(1, Math.Min(Math.Min((hw + 511) / 512, 256), PartCtrElem / (c * nb)));
         // coopmat tile: cout<=32 -> 512x32, cout<=64 -> 256x64, else 128x128
-        // sg32 variant only ships the 128x128 tile — always use it there.
+        // sg32: cout<=32 -> 128x32, cout<=64 -> 128x64, else 128x128
         (VkPipeline pipe, uint tm, uint tn) CmTile(int c) =>
-            _sg32 ? (_pConv1x1, 128u, 128u)
+            _sg32 ? (c <= 32 ? (_pConv1x1N32, 128u, 32u)
+                     : c <= 64 ? (_pConv1x1N64, 128u, 64u)
+                     : (_pConv1x1, 128u, 128u))
             : c <= 32 ? (_pConv1x1N32, 512u, 32u)
             : c <= 64 ? (_pConv1x1N64, 256u, 64u)
             : (_pConv1x1, 128u, 128u);
@@ -1211,6 +1202,12 @@ internal sealed class GpuGraphModel
                         bool dotOk = cout % 4 == 0 && scalarBias == 0
                             && (cinIn <= 128 || (hasPs && cinIn <= 256))
                             && Environment.GetEnvironmentVariable("SIMD_OCR_NODOT") == null;
+                        // sg32 coopmat outruns the dot kernel once the output
+                        // leaves split-K range; prescaled / addps-absorbed
+                        // inputs need the dot kernel's fused read
+                        if (dotOk && _sg32 && !hasPs && (long)M * cout > 1L << 18
+                            && !addpsSrc.ContainsKey(Phys(checked((int)node.Inputs[0]))))
+                            dotOk = false;
                         if (dotOk)
                         {
                             // small-K pointwise conv: direct dot kernel beats coopmat.
@@ -1316,17 +1313,18 @@ internal sealed class GpuGraphModel
                         // im2col-free direct conv: tap addressing inline in the
                         // dot kernel; skips materializing the K-expanded matrix.
                         // batched graphs always take it: the im2col fallback is batch-free
-                        if (cout % 4 == 0 && scalarBias == 0 && cinIn % 4 == 0
+                        // sg32: implicit-GEMM coopmat conv instead (same tap
+                        // addressing, tensor cores; any K, batched or not)
+                        bool convkCm = _sg32 && cinIn % 8 == 0 && scalarBias == 0;
+                        if (convkCm || (cout % 4 == 0 && scalarBias == 0 && cinIn % 4 == 0
                             && (nb > 1 || Kp <= (Environment.GetEnvironmentVariable(
                                 "SIMD_OCR_CONVD_KMAX") is string km
                                 ? int.Parse(km) : 1024))
-                            && Environment.GetEnvironmentVariable("SIMD_OCR_NODCONV") == null)
+                            && Environment.GetEnvironmentVariable("SIMD_OCR_NODCONV") == null))
                         {
-                            VkBuffer wk2 = ConstKMajor(checked((int)node.Inputs[1]),
-                                cout, cin, kH * kW, Kp, cinIn);
                             // stem conv on the fp32 NCHW input: skip nchw2nhwc
                             // when this is the sole consumer of the graph input
-                            bool f32In = inT == inIdx && cinIn == 4 && cin <= 4
+                            bool f32In = !convkCm && inT == inIdx && cinIn == 4 && cin <= 4
                                 && Environment.GetEnvironmentVariable(
                                     "SIMD_OCR_NOF32IN") == null;
                             if (f32In && (consumers[inIdx]?.Count ?? 0) == 1)
@@ -1357,12 +1355,34 @@ internal sealed class GpuGraphModel
                                     }
                                 }
                             }
+                            if (convkCm)
+                            {
+                                var (kp, tm, tn) = CmTile(cout);
+                                kp = kp == _pConv1x1N32 ? _pConvKN32!
+                                   : kp == _pConv1x1N64 ? _pConvKN64! : _pConvK!;
+                                uint Mt = M * (uint)nb;
+                                Emit(kp, $"convkcm n{ni} {Mt}x{K}x{cout}",
+                                    [(arena, SlotOf(node.Inputs[0]), 2),
+                                     (ConstTapMajor(checked((int)node.Inputs[1]),
+                                         cout, cin, kH, kW, Kp, cinPad: cinIn), 0, 2),
+                                     (biasBuf, 0, 2),
+                                     (arena, resT != uint.MaxValue ? SlotOf(resT) : 0, 2),
+                                     (arena, wO, 2),
+                                     (arena, dualT != uint.MaxValue ? SlotOf(dualT) : 0, 2)],
+                                    [Mt, (uint)cout, (uint)Kp, flags, (uint)outW, M,
+                                     (uint)inW, (uint)inH, (uint)cinIn, (uint)kW,
+                                     (uint)sH, (uint)sW, (uint)pt, (uint)pl, (uint)K,
+                                     dcv * 4, dco * 4],
+                                    (Mt + tm - 1) / tm, (uint)((cout + tn - 1) / tn));
+                            }
+                            else
                             Emit(f32In ? _pConvDF32 : _pConvD,
                                 $"convd n{ni} {M}x{K}x{cout}",
                                 [(f32In ? inF32 : arena,
                                   f32In ? 0 : SlotOf(node.Inputs[0]),
                                   f32In ? 4 : 2),
-                                 (wk2, 0, 2),
+                                 (ConstKMajor(checked((int)node.Inputs[1]),
+                                     cout, cin, kH * kW, Kp, cinIn), 0, 2),
                                  (biasBuf, 0, 2),
                                  (arena, resT != uint.MaxValue ? SlotOf(resT) : 0, 2),
                                  (arena, wO, 2)],
@@ -1383,6 +1403,7 @@ internal sealed class GpuGraphModel
                         if (nb > 1)
                             throw new NotSupportedException(
                                 $"im2col conv path lacks batch support (n{ni})");
+                        maxIm2col = Math.Max(maxIm2col, (long)M * Kp);
                         Emit(_pIm2col, $"im2col n{ni} M{M} K{K}",
                             [(arena, SlotOf(node.Inputs[0]), 2),
                              (arena, im2colOff, 2)],
@@ -2119,6 +2140,8 @@ internal sealed class GpuGraphModel
             for (int ri = 0; ri < recs.Count; ri++)
                 Console.Error.WriteLine($"rec[{ri}] {recs[ri].Tag} gx={recs[ri].Gx} gy={recs[ri].Gy}");
 
+        // +128*512: coopmat A-tile reads pad rows past M
+        long arenaElems = im2colOff + maxIm2col + 128 * 512 + (1L << 20);
         return new GpuSchedule
         {
             Recs = recs.ToArray(),

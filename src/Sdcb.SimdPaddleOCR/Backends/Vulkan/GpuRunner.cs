@@ -261,7 +261,9 @@ internal sealed unsafe class GpuDetGraph : IDisposable
                 for (int i = s0; i < s1; i++)
                     new ReadOnlySpan<float>(_outMap + outBase[i], sched[i].OutElems)
                         .CopyTo(result.AsSpan(outOffsets[i]));
+                long tsk = s_dbgTime ? Stopwatch.GetTimestamp() : 0;
                 if (sink is not null && more) more = sink(result, outOffsets, s0, s1 - s0);
+                if (s_dbgTime) _dbgSink += Stopwatch.GetTimestamp() - tsk;
             }
         }
         finally
@@ -277,7 +279,8 @@ internal sealed unsafe class GpuDetGraph : IDisposable
         {
             double f = Stopwatch.Frequency / 1e3;
             Console.WriteLine($"[t] units={n}{(interleave ? " il" : "")} waves={waves} write={(t1 - t0) / f:F2} record+submit={(t2 - t1) / f:F2} " +
-                $"wait+read+sink={(t3 - t2) / f:F2} ms recs={sched.Sum(x => x.Recs.Length)}");
+                $"wait+read+sink={(t3 - t2) / f:F2} sink={_dbgSink / f:F2} ms recs={sched.Sum(x => x.Recs.Length)}");
+            _dbgSink = 0;
         }
         return result;
     }
@@ -308,6 +311,7 @@ internal sealed unsafe class GpuDetGraph : IDisposable
     private const long InterleaveArenaBudget = 256L << 20;
 
     private float[] _result = [];
+    private long _dbgSink;   // SIMD_OCR_GPU_TIME: CPU time spent in the streamed sink
 
     private static long RoundUpPow2(long v)
     {
