@@ -25,7 +25,3 @@ bench-out/
 
 # Local GPU PoC harness (kept on disk, intentionally not committed)
 test/Sdcb.SimdPaddleOCR.GpuPoc/
-
-# Bench / debug dump outputs
-bench-*.json
-detmap-*.bin
