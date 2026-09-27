@@ -160,44 +160,48 @@ x64 / ARM64 本库 peak 大约少 **300 MB**。c 仍然略省，但更慢。Open
 
 1.4.2 JSON：`bench-out/local-5800x-{tiny,small,medium}-4w.json`、`bench-out/local-5800x-ns2-{tiny,small,medium}-4w.json`。1.3：`bench-out/local-5800x-v13-{net10,ns2}-{tiny,small,medium}-4w.json`。
 
-### Vulkan GPU（RTX 3080 Ti，`26ad4c3`）
+### Vulkan GPU（RTX 3080 Ti，`8d62a35`）
 
-同机同轮：HOME-MAIN 5800X + RTX 3080 Ti，`.NET 10.0.11`，`--engine sharp|vulkan --workers 4 --benchmark-kind simd --warmup 1`，同一 `dataset/` 100 张变尺寸图（对 GPU 最不利的逐图新 shape）。墙钟 n=99。**CPU 列是同轮重测**，不要拿上表 1.4.2 的 `97c1448` mean 硬接（那次 tiny 63.1 / small 200 / medium 585）。B580 另一台机、另一份尺子，见 [vulkan-b580.md](vulkan-b580.md)。
+同机同轮：HOME-MAIN 5800X + RTX 3080 Ti（驱动 581.80），`.NET 10.0.11`，`--engine sharp|vulkan --workers 4 --benchmark-kind simd --warmup 1`，同一 `dataset/` 100 张变尺寸图（对 GPU 最不利的逐图新 shape）。墙钟 n=99。**CPU 列是同轮重测**，不要拿上表 1.4.2 的 `97c1448` mean 硬接（那次 tiny 63.1 / small 200 / medium 585）。B580 另一台机、另一份尺子，见 [vulkan-b580.md](vulkan-b580.md)。
 
 端到端（median ms/图，越低越好；加速 = CPU median / Vulkan median）：
 
-| 模型   | CPU median | Vulkan median |     加速 | CPU mean | Vulkan mean | CPU img/s | GPU img/s | CPU peak | Vulkan peak |
-| ------ | ---------: | ------------: | -------: | -------: | ----------: | --------: | --------: | -------: | ----------: |
-| tiny   |       50.8 |        **19.6** | **2.6×** |     56.7 |        24.3 |     17.62 |     41.11 |  520 MB |     661 MB |
-| small  |      164.0 |        **34.6** | **4.7×** |    166.6 |        38.0 |      6.00 |     26.28 |  680 MB |     703 MB |
-| medium |      563.4 |       **126.5** | **4.5×** |    553.1 |       126.0 |      1.81 |      7.94 | 1208 MB |     984 MB |
+| 模型   | CPU median | Vulkan median |      加速 | CPU mean | Vulkan mean | CPU img/s | GPU img/s | CPU peak | Vulkan peak |
+| ------ | ---------: | ------------: | --------: | -------: | ----------: | --------: | --------: | -------: | ----------: |
+| tiny   |       50.3 |      **19.8** |  **2.5×** |     54.9 |        23.3 |     18.22 |     42.91 |  520 MB |     643 MB |
+| small  |      173.1 |      **28.4** |  **6.1×** |    173.1 |        31.5 |      5.78 |     31.72 |  675 MB |     703 MB |
+| medium |      562.6 |      **38.1** | **14.8×** |    555.5 |        42.3 |      1.80 |     23.62 | 1210 MB |     985 MB |
+
+相对上一版 `26ad4c3`（`d6c260c`），同一时段交替 A/B 各 3 轮（Vulkan median ms/图）：tiny 21.9 / 18.9 / 23.5 → 19.8 / 20.1 / 18.5（持平），small 36.0 / 35.8 / 34.3 → 28.4 / 27.8 / 29.1，medium 129.8 / 126.3 / 128.3 → **38.1 / 39.5 / 39.0（3.3×）**。纯 GPU（`SIMD_OCR_GPU_PROF` 最小值）：medium DET 960×960 55.5 → 9.1 ms，medium REC 8×480 36.6 → 7.7 ms。
 
 分阶段 mean ms/图（4w 下算子重叠，之和可以大于墙钟）：
 
 | 模型   | 阶段      |    CPU | Vulkan | 加速 |
 | ------ | --------- | -----: | -----: | ---: |
-| tiny   | det_graph |   22.3 |    6.4 | 3.5× |
-| tiny   | cls_graph |   16.0 |    1.1 |  14× |
-| tiny   | rec_graph |   71.1 |    6.4 |  11× |
-| small  | det_graph |   68.0 |    7.5 | 9.1× |
-| small  | cls_graph |   16.1 |   0.88 |  18× |
-| small  | rec_graph |  307.3 |   19.8 |  16× |
-| medium | det_graph |  199.3 |   40.4 | 4.9× |
-| medium | cls_graph |   15.6 |   0.85 |  18× |
-| medium | rec_graph | 1250.3 |   77.1 |  16× |
+| tiny   | det_graph |   20.1 |    4.5 | 4.5× |
+| tiny   | cls_graph |   16.2 |    1.1 |  15× |
+| tiny   | rec_graph |   70.3 |    5.7 |  12× |
+| small  | det_graph |   71.3 |    6.5 |  11× |
+| small  | cls_graph |   18.3 |    1.2 |  16× |
+| small  | rec_graph |  314.4 |   14.2 |  22× |
+| medium | det_graph |  199.2 |    9.2 |  22× |
+| medium | cls_graph |   15.9 |    0.9 |  18× |
+| medium | rec_graph | 1259.6 |   22.0 |  57× |
 
 正确率（100 张满勤，1036 行）：
 
 | 模型   | CPU exact_lines | Vulkan exact_lines | CPU CER | Vulkan CER | CPU exact_img | Vulkan exact_img |
 | ------ | --------------: | -----------------: | ------: | ---------: | ------------: | ---------------: |
-| tiny   |        742/1036 |           740/1036 |   2.37% |      2.36% |         5/100 |            5/100 |
+| tiny   |        742/1036 |           741/1036 |   2.37% |      2.38% |         5/100 |            5/100 |
 | small  |        950/1036 |           950/1036 |   0.41% |      0.40% |        44/100 |           44/100 |
-| medium |       1004/1036 |          1005/1036 |   0.14% |      0.14% |        71/100 |           72/100 |
+| medium |       1004/1036 |          1006/1036 |   0.14% |      0.14% |        71/100 |           73/100 |
 
-- 三档墙钟全部大幅反超 CPU（**2.6× / 4.7× / 4.5×**）。相对 `b9ff975` 的 0.86–0.93×：那时 small/medium 的 SVTR rec 尾部未 emit、整段回落 CPU；这次 `rec_graph` 是 **11–16×**，tiny/small/medium 都真走 GPU。
-- 准确率与纯 CPU 持平：tiny 差 2 行、CER 还略低；small 行精确完全一致；medium GPU 多对 1 行。cls 全对。`b9ff975` 那次 tiny 曾掉到 679/1036（CER 2.89%），这次已收回。
-- 工作集有界，peak 后不再爬升。tiny / small GPU 略高于 CPU（661 / 703 vs 520 / 680）；medium GPU 更省（984 vs 1208）。
-- JSON：`artifacts/local-{tiny,small,medium}-4w-{cpu,vulkan}.json`。复现：`--engine sharp|vulkan --workers 4 --model {tiny,small,medium} --input dataset --warmup 1`。
+- 3080 Ti 上 `26ad4c3` 的瓶颈几乎全在 sg32 coopmat GEMM：它直接从全局内存 `coopMatLoad`，大 GEMM 只有 ~3.5 TFLOPS，medium DET 55 ms 里占 46 ms。重写后（共享内存双缓冲暂存、16 B 读、向量化收尾、窄 tile、隐式 GEMM kxk 卷积、SE 预缩放）大 GEMM 到 25–28 TFLOPS。
+- medium `rec_graph` 22 ms 里约 12 ms 是 CPU 上的 CTC 投影 + ArgMax（词表 18710 列，契约要求留在 CPU）；small 同一个词表，也基本是这部分。tiny 端到端主要是 CPU 前后处理，GPU 部分 DET ~2 ms、REC ~1 ms。
+- mean 明显高于 median 主要来自前 ~40 张的 .NET 分层 JIT 预热（`DOTNET_TieredCompilation=0` 下消失），不是 GPU。
+- 准确率与纯 CPU 持平，差异是 fp16 噪声：tiny 差 1 行，small 行精确一致，medium GPU 多对 2 行。cls 全对。
+- 显存：sg32 上 arena 按生命周期复用，medium DET 960×960 每个 session 1233 MB → 108 MB。GpuPoc `--conc` medium 8 线程不再 OOM 回退 CPU（`26ad4c3`：76.9 s；现在 1.6 s，显存峰值 4.8 GB）。进程工作集有界，peak 后不再爬升。
+- JSON：`bench-out/fin-cpu-{tiny,small,medium}.json`、`bench-out/fin-{base,new}-{tiny,small,medium}-vulkan-r{1,2,3}.json`。复现：`--engine sharp|vulkan --workers 4 --model {tiny,small,medium} --input dataset --warmup 1`。
 
 ### lw.PPOCR.C 4w（`20d0de6`）
 
@@ -221,7 +225,7 @@ JSON：`bench-out/local-5800x-c-{tiny,small,medium}-4w.json`。
 | 1.4 前一次 | [35217602432](https://github.com/sdcb/SimdPaddleOCR/actions/runs/35217602432) | `67cf1fa` | 内核已是后来的 1.4.2 墙钟；用来给 win-x64 7763 补样本 |
 | **1.4.2**  | [35513018083](https://github.com/sdcb/SimdPaddleOCR/actions/runs/35513018083) | `68a009a` | 当前口径。准度：sharp **767/1032、CER 2.36%**；c **764/1032、3.03%**。墙钟中位表不重写 |
 | 本机 5800X | —                                                                             | `97c1448` / `68a009a` | 墙钟/内存 `97c1448`；CER 左 1:4 后同机复测（1.4.2） |
-| 本机 Vulkan | —                                                                            | `26ad4c3` | 5800X + 3080 Ti 同轮 sharp/vulkan 4w；tiny/small/medium |
+| 本机 Vulkan | —                                                                            | `8d62a35` | 5800X + 3080 Ti 同轮 sharp/vulkan 4w；tiny/small/medium；A/B 基线 `d6c260c` |
 
 推送或手动触发 [`.github/workflows/test.yml`](../.github/workflows/test.yml)，下载 `perf-report` artifact。本地同一套数据：
 
