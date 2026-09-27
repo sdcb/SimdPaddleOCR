@@ -1244,9 +1244,10 @@ internal sealed class GpuGraphModel
                             && (cinIn <= 128 || (hasPs && cinIn <= 256))
                             && Environment.GetEnvironmentVariable("SIMD_OCR_NODOT") == null;
                         // sg32 coopmat (SE prescale included) outruns the dot
-                        // kernel once the output leaves split-K range;
+                        // kernel once the output leaves split-K range (lite:
+                        // a quarter of that already);
                         // addps-absorbed inputs need the dot kernel's fused read
-                        if (dotOk && _sg32 && (long)M * cout > 1L << 18
+                        if (dotOk && _sg32 && (long)M * cout > 1L << (_lite ? 16 : 18)
                             && (hasPs || !addpsSrc.ContainsKey(Phys(checked((int)node.Inputs[0])))))
                             dotOk = false;
                         if (dotOk)
