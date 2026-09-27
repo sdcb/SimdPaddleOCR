@@ -1691,7 +1691,9 @@ internal sealed class GpuGraphModel
                         seCtr += nb;   // one ticket counter per batch
                         break;
                     }
-                    if (c % 4 == 0 && 256 % cv4 == 0 && hw >= 4096)
+                    // lite parts take it at any size: reduce_hw's one-channel
+                    // workgroups read 2 bytes at a C*2 stride
+                    if (c % 4 == 0 && 256 % cv4 == 0 && (hw >= 4096 || _lite))
                     {
                         // two-phase: S pixel partitions → fp32 partials → mean
                         int s = PartSplits(hw, c);
