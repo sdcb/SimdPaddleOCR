@@ -26,12 +26,35 @@ internal unsafe sealed class VkDevice : IDisposable
     public uint DeviceLocalHostVisibleType = uint.MaxValue;
     public uint HostVisibleCoherentType = uint.MaxValue;
     public bool PushDescriptors;
+    public uint QueuePriority;          // VkQueueGlobalPriority granted (0 = driver default)
     private unsafe delegate* unmanaged[Cdecl]<IntPtr, uint, IntPtr, uint, uint, Vk.VkWriteDescriptorSet*, void> _pushDesc;
     public double TimestampPeriodNs = 1;
     private IntPtr _commandPool;
     private IntPtr _descPool;
-    /// <summary>Serializes all queue submission / command-pool use across sessions.</summary>
+    /// <summary>Guards the device-level command pool / descriptor pool (uploads, debug).</summary>
     public readonly object Sync = new();
+    /// <summary>vkQueueSubmit on the single compute queue is externally synchronized;
+    /// sessions record into their own pools and only serialize the submit itself.</summary>
+    public readonly object QueueLock = new();
+    private readonly Dictionary<string, VkPipeline> _pipes = new();
+
+    /// <summary>Process-wide pipeline cache: every graph/session shares one
+    /// VkPipeline per (shader, subgroup size). Set layouts carry
+    /// PUSH_DESCRIPTOR_BIT when the extension is available — such layouts are
+    /// only ever fed via vkCmdPushDescriptorSetKHR, never allocated sets.</summary>
+    public VkPipeline GetPipeline(string name, Func<byte[]> spirv, int bindings, int pcBytes, uint reqSg = 0)
+    {
+        lock (_pipes)
+        {
+            string key = name + "/" + reqSg;
+            if (_pipes.TryGetValue(key, out VkPipeline? p)) return p;
+            p = NewPipeline(NewShaderModule(spirv()), bindings, pcBytes, reqSg, PushDescriptors);
+            p.Name = name;
+            p.Bindings = bindings;
+            _pipes[key] = p;
+            return p;
+        }
+    }
 
     public static VkDevice Create(uint deviceIndex = 0)
     {
@@ -79,9 +102,22 @@ internal unsafe sealed class VkDevice : IDisposable
         Vk.vkGetPhysicalDeviceQueueFamilyProperties(d.PhysDevice, &nqf, null);
         Vk.VkQueueFamilyProperties* qf = stackalloc Vk.VkQueueFamilyProperties[(int)nqf];
         Vk.vkGetPhysicalDeviceQueueFamilyProperties(d.PhysDevice, &nqf, qf);
+        // Prefer a compute-only family (no GRAPHICS bit): on Intel Arc it maps
+        // to the dedicated CCS engine, on NVIDIA/AMD to async-compute queues —
+        // our dispatches then no longer time-slice with desktop/compositor
+        // 3D work on the render engine. SIMD_OCR_VK_QUEUE=gfx forces family 0-style.
         d.QueueFamily = uint.MaxValue;
-        for (uint i = 0; i < nqf; i++)
+        bool allowDedicated = !string.Equals(
+            Environment.GetEnvironmentVariable("SIMD_OCR_VK_QUEUE"), "gfx", StringComparison.OrdinalIgnoreCase);
+        for (uint i = 0; i < nqf && allowDedicated; i++)
+            if ((qf[i].QueueFlags & VkConst.QueueCompute) != 0 && (qf[i].QueueFlags & 1u) == 0
+                && qf[i].TimestampValidBits != 0)
+            { d.QueueFamily = i; break; }
+        for (uint i = 0; i < nqf && d.QueueFamily == uint.MaxValue; i++)
             if ((qf[i].QueueFlags & VkConst.QueueCompute) != 0) { d.QueueFamily = i; break; }
+        if (Environment.GetEnvironmentVariable("HYMT_VK_VERBOSE") == "1")
+            for (uint i = 0; i < nqf; i++)
+                Console.Error.WriteLine($"[vk] qfamily {i}: flags=0x{qf[i].QueueFlags:x} count={qf[i].QueueCount} tsBits={qf[i].TimestampValidBits}{(i == d.QueueFamily ? " <- selected" : "")}");
         if (d.QueueFamily == uint.MaxValue)
             throw new PlatformNotSupportedException("Vulkan: no compute queue family");
 
@@ -108,10 +144,13 @@ internal unsafe sealed class VkDevice : IDisposable
             (byte)'_', (byte)'p', (byte)'u', (byte)'s', (byte)'h', (byte)'_', (byte)'d', (byte)'e', (byte)'s', (byte)'c',
             (byte)'r', (byte)'i', (byte)'p', (byte)'t', (byte)'o', (byte)'r', 0 };
         bool hasPush = false, hasCoop = false, hasSgc = false, hasF16Int8 = false;
+        string? prioExt = null;
         for (int i = 0; i < (int)next; i++)
         {
             string en = new((sbyte*)exts[i].ExtensionName);
             if (en == "VK_KHR_push_descriptor") hasPush = true;
+            else if (en == "VK_KHR_global_priority") prioExt = en;
+            else if (en == "VK_EXT_global_priority") prioExt ??= en;
             else if (en == "VK_KHR_cooperative_matrix") hasCoop = true;
             else if (en == "VK_EXT_subgroup_size_control") hasSgc = true;
             else if (en == "VK_KHR_shader_float16_int8") hasF16Int8 = true;
@@ -183,7 +222,7 @@ internal unsafe sealed class VkDevice : IDisposable
             (byte)'_', (byte)'s', (byte)'h', (byte)'a', (byte)'d', (byte)'e', (byte)'r', (byte)'_', (byte)'f',
             (byte)'l', (byte)'o', (byte)'a', (byte)'t', (byte)'1', (byte)'6', (byte)'_', (byte)'i', (byte)'n',
             (byte)'t', (byte)'8', 0 };
-        byte** extsToEnable = stackalloc byte*[4];
+        byte** extsToEnable = stackalloc byte*[5];
         uint nExt = 0;
         if (hasPush) extsToEnable[nExt++] = wantPush;
         if (d.CoopMatrix) extsToEnable[nExt++] = wantCoop;
@@ -199,8 +238,40 @@ internal unsafe sealed class VkDevice : IDisposable
             PpEnabledExtensionNames = nExt > 0 ? extsToEnable : null,
         };
         if (Environment.GetEnvironmentVariable("HYMT_VK_VERBOSE") == "1")
-            Console.Error.WriteLine($"[vk] devext push={hasPush} coop={d.CoopMatrix} sgc={hasSgc} sgRange={d.SubgroupMin}-{d.SubgroupMax}");
-        Vk.Check(Vk.vkCreateDevice(d.PhysDevice, &dci, null, out d.Device), "vkCreateDevice");
+            Console.Error.WriteLine($"[vk] devext push={hasPush} coop={d.CoopMatrix} sgc={hasSgc} sgRange={d.SubgroupMin}-{d.SubgroupMax} prio={prioExt}");
+        // Global queue priority (latency-sensitive inference sharing the GPU
+        // with a desktop/compositor): try HIGH, then fall back to default when
+        // the OS refuses (VK_ERROR_NOT_PERMITTED / INITIALIZATION_FAILED).
+        // SIMD_OCR_VK_PRIORITY=off|medium|high|realtime overrides.
+        uint wantPrio = (Environment.GetEnvironmentVariable("SIMD_OCR_VK_PRIORITY") ?? "high").ToLowerInvariant() switch
+        {
+            "off" or "medium" => 0u, "realtime" => 1024u, _ => 512u,
+        };
+        VkResult created = VkResult.ErrorInitializationFailed;
+        if (prioExt != null && wantPrio != 0)
+        {
+            byte[] prioName = System.Text.Encoding.ASCII.GetBytes(prioExt + "\0");
+            fixed (byte* pn = prioName)
+            {
+                extsToEnable[nExt] = pn;
+                dci.EnabledExtensionCount = nExt + 1;
+                dci.PpEnabledExtensionNames = extsToEnable;
+                Vk.VkDeviceQueueGlobalPriorityCreateInfo gp = new()
+                {
+                    SType = 1000174000u, GlobalPriority = wantPrio,
+                };
+                qci.PNext = &gp;
+                created = Vk.vkCreateDevice(d.PhysDevice, &dci, null, out d.Device);
+                qci.PNext = null;
+                if (created == VkResult.Success) d.QueuePriority = wantPrio;
+            }
+            dci.EnabledExtensionCount = nExt;
+            dci.PpEnabledExtensionNames = nExt > 0 ? extsToEnable : null;
+        }
+        if (created != VkResult.Success)
+            Vk.Check(Vk.vkCreateDevice(d.PhysDevice, &dci, null, out d.Device), "vkCreateDevice");
+        if (Environment.GetEnvironmentVariable("HYMT_VK_VERBOSE") == "1")
+            Console.Error.WriteLine($"[vk] queue family={d.QueueFamily} globalPriority={d.QueuePriority}");
         Vk.vkGetDeviceQueue(d.Device, d.QueueFamily, 0, out d.Queue);
         if (d.CoopMatrix)
         {
@@ -363,7 +434,8 @@ internal unsafe sealed class VkDevice : IDisposable
     }
 
     /// <summary>One set layout with `bindings` storage buffers (0..bindings-1) + push constants.</summary>
-    public VkPipeline NewPipeline(IntPtr shaderModule, int bindings, int pushConstBytes, uint requiredSubgroupSize = 0)
+    public VkPipeline NewPipeline(IntPtr shaderModule, int bindings, int pushConstBytes, uint requiredSubgroupSize = 0,
+        bool pushLayout = false)
     {
         var dslb = stackalloc Vk.VkDescriptorSetLayoutBinding[bindings];
         for (int i = 0; i < bindings; i++)
@@ -377,7 +449,7 @@ internal unsafe sealed class VkDevice : IDisposable
         {
             SType = VkConst.StDescriptorSetLayoutCreateInfo,
             BindingCount = (uint)bindings, PBindings = dslb,
-            Flags = 0u,
+            Flags = pushLayout ? 1u : 0u,   // VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR
         };
         Vk.Check(Vk.vkCreateDescriptorSetLayout(Device, &dslci, null, out setLayout), "vkCreateDescriptorSetLayout");
 
@@ -413,7 +485,61 @@ internal unsafe sealed class VkDevice : IDisposable
         };
         IntPtr pipeline;
         Vk.Check(Vk.vkCreateComputePipelines(Device, IntPtr.Zero, 1, &cpci, null, &pipeline), "vkCreateComputePipelines");
-        return new VkPipeline { Pipeline = pipeline, Layout = layout, SetLayout = setLayout };
+        return new VkPipeline { Pipeline = pipeline, Layout = layout, SetLayout = setLayout, PushLayout = pushLayout };
+    }
+
+    public IntPtr NewCommandPool()
+    {
+        Vk.VkCommandPoolCreateInfo ci = new()
+        {
+            SType = VkConst.StCommandPoolCreateInfo,
+            Flags = VkConst.CmdPoolResetCommandBuffer,
+            QueueFamilyIndex = QueueFamily,
+        };
+        Vk.Check(Vk.vkCreateCommandPool(Device, &ci, null, out IntPtr pool), "vkCreateCommandPool");
+        return pool;
+    }
+
+    public IntPtr AllocateCommandBuffer(IntPtr pool)
+    {
+        Vk.VkCommandBufferAllocateInfo ai = new()
+        {
+            SType = VkConst.StCommandBufferAllocateInfo,
+            CommandPool = pool, Level = VkConst.CmdBufferLevelPrimary, CommandBufferCount = 1,
+        };
+        IntPtr cmd;
+        Vk.Check(Vk.vkAllocateCommandBuffers(Device, &ai, &cmd), "vkAllocateCommandBuffers");
+        return cmd;
+    }
+
+    public void DestroyCommandPool(IntPtr pool)
+    {
+        if (pool != IntPtr.Zero) Vk.vkDestroyCommandPool(Device, pool, null);
+    }
+
+    /// <summary>Resettable descriptor pool for the no-push-descriptor fallback.</summary>
+    public IntPtr NewDescriptorPool(uint maxSets)
+    {
+        Vk.VkDescriptorPoolSize psz = new() { Type = VkConst.DescStorageBuffer, DescriptorCount = maxSets * 16 };
+        Vk.VkDescriptorPoolCreateInfo dpci = new()
+        {
+            SType = VkConst.StDescriptorPoolCreateInfo,
+            Flags = 0, MaxSets = maxSets, PoolSizeCount = 1, PPoolSizes = &psz,
+        };
+        Vk.Check(Vk.vkCreateDescriptorPool(Device, &dpci, null, out IntPtr pool), "vkCreateDescriptorPool");
+        return pool;
+    }
+
+    public IntPtr AllocateDescriptorSet(IntPtr pool, IntPtr setLayout)
+    {
+        IntPtr set;
+        Vk.VkDescriptorSetAllocateInfo ai = new()
+        {
+            SType = VkConst.StDescriptorSetAllocateInfo,
+            DescriptorPool = pool, DescriptorSetCount = 1, PSetLayouts = &setLayout,
+        };
+        Vk.Check(Vk.vkAllocateDescriptorSets(Device, &ai, &set), "vkAllocateDescriptorSets");
+        return set;
     }
 
     public IntPtr NewDescriptorSet(IntPtr setLayout)
@@ -504,15 +630,39 @@ internal unsafe sealed class VkDevice : IDisposable
         Buffer.MemoryCopy(src, sp, bytes, bytes);
         staging.Flush(0, bytes);
         staging.Unmap();
-        IntPtr cmd = NewCommandBuffer();
-        IntPtr fence = NewFence();
-        var begin = new Vk.VkCommandBufferBeginInfo { SType = VkConst.StCommandBufferBeginInfo };
-        Vk.Check(Vk.vkBeginCommandBuffer(cmd, &begin), "vkBeginCommandBuffer");
-        Vk.VkBufferCopy r = new() { Size = bytes };
-        Vk.vkCmdCopyBuffer(cmd, staging.Buffer, buf.Buffer, 1, &r);
-        Vk.Check(Vk.vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
-        Submit(cmd, fence);
-        WaitFence(fence);
+        lock (Sync)
+        {
+            IntPtr cmd = NewCommandBuffer();
+            IntPtr fence = NewFence();
+            var begin = new Vk.VkCommandBufferBeginInfo { SType = VkConst.StCommandBufferBeginInfo };
+            Vk.Check(Vk.vkBeginCommandBuffer(cmd, &begin), "vkBeginCommandBuffer");
+            Vk.VkBufferCopy r = new() { Size = bytes };
+            Vk.vkCmdCopyBuffer(cmd, staging.Buffer, buf.Buffer, 1, &r);
+            Vk.Check(Vk.vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
+            Submit(cmd, fence);
+            WaitFence(fence);
+            Vk.vkDestroyFence(Device, fence, null);
+            FreeCommandBuffer(cmd);
+        }
+        staging.Free();
+    }
+
+    /// <summary>Zero-fill a (device-local) buffer with one transfer command.</summary>
+    public void Zero(VkBuffer buf)
+    {
+        lock (Sync)
+        {
+            IntPtr cmd = NewCommandBuffer();
+            IntPtr fence = NewFence();
+            var begin = new Vk.VkCommandBufferBeginInfo { SType = VkConst.StCommandBufferBeginInfo };
+            Vk.Check(Vk.vkBeginCommandBuffer(cmd, &begin), "vkBeginCommandBuffer");
+            Vk.vkCmdFillBuffer(cmd, buf.Buffer, 0, Vk.WholeSize, 0);
+            Vk.Check(Vk.vkEndCommandBuffer(cmd), "vkEndCommandBuffer");
+            Submit(cmd, fence);
+            WaitFence(fence);
+            Vk.vkDestroyFence(Device, fence, null);
+            FreeCommandBuffer(cmd);
+        }
     }
 
     public void BindBuffer(IntPtr set, uint binding, VkBuffer buf, ulong offset = 0)
@@ -552,7 +702,14 @@ internal unsafe sealed class VkDevice : IDisposable
             SType = VkConst.StSubmitInfo,
             CommandBufferCount = 1, PCommandBuffers = &cmd,
         };
-        Vk.Check(Vk.vkQueueSubmit(Queue, 1, &si, fence), "vkQueueSubmit");
+        VkResult r;
+        lock (QueueLock) r = Vk.vkQueueSubmit(Queue, 1, &si, fence);
+        Vk.Check(r, "vkQueueSubmit");
+    }
+
+    public void DestroyFence(IntPtr fence)
+    {
+        if (fence != IntPtr.Zero) Vk.vkDestroyFence(Device, fence, null);
     }
 
     public void WaitFence(IntPtr fence)
@@ -573,6 +730,8 @@ internal sealed class VkPipeline
 {
     public IntPtr Pipeline, Layout, SetLayout;
     public string Name = "";
+    public int Bindings;
+    public bool PushLayout;
 }
 
 internal unsafe sealed class VkBuffer

@@ -306,6 +306,12 @@ internal static unsafe partial class Vk
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    public struct VkDeviceQueueGlobalPriorityCreateInfo
+    {
+        public uint SType; public void* PNext; public uint GlobalPriority;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct VkCommandPoolCreateInfo
     {
         public uint SType; public void* PNext; public uint Flags; public uint QueueFamilyIndex;
@@ -380,6 +386,8 @@ internal static unsafe partial class Vk
     [LibraryImport(LibName)] public static partial VkResult vkCreateDescriptorSetLayout(IntPtr device, VkDescriptorSetLayoutCreateInfo* ci, void* alloc, out IntPtr setLayout);
     [LibraryImport(LibName)] public static partial VkResult vkCreateDescriptorPool(IntPtr device, VkDescriptorPoolCreateInfo* ci, void* alloc, out IntPtr pool);
     [LibraryImport(LibName)] public static partial VkResult vkAllocateDescriptorSets(IntPtr device, VkDescriptorSetAllocateInfo* ai, IntPtr* sets);
+    [LibraryImport(LibName)] public static partial VkResult vkResetDescriptorPool(IntPtr device, IntPtr pool, uint flags);
+    [LibraryImport(LibName)] public static partial void vkDestroyDescriptorPool(IntPtr device, IntPtr pool, void* alloc);
     [LibraryImport(LibName)] public static partial void vkUpdateDescriptorSets(IntPtr device, uint writeCount, VkWriteDescriptorSet* writes, uint copyCount, void* copies);
     [LibraryImport(LibName)] public static partial VkResult vkEnumerateDeviceExtensionProperties(IntPtr physicalDevice, byte* layerName, uint* count, VkExtensionProperties* props);
     [LibraryImport(LibName)] public static partial IntPtr vkGetDeviceProcAddr(IntPtr device, byte* name);
@@ -396,6 +404,7 @@ internal static unsafe partial class Vk
     [LibraryImport(LibName)] public static partial void vkCmdDispatch(IntPtr cmd, uint x, uint y, uint z);
     [LibraryImport(LibName)] public static partial void vkCmdPipelineBarrier(IntPtr cmd, uint srcStage, uint dstStage, uint depFlags,
         uint memBarrierCount, VkMemoryBarrier* memBarriers, uint bufBarrierCount, void* bufBarriers, uint imgBarrierCount, void* imgBarriers);
+    [LibraryImport(LibName)] public static partial void vkCmdFillBuffer(IntPtr cmd, IntPtr buffer, ulong offset, ulong size, uint data);
     [LibraryImport(LibName)] public static partial void vkCmdCopyBuffer(IntPtr cmd, IntPtr src, IntPtr dst, uint count, VkBufferCopy* regions);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -422,6 +431,8 @@ internal static unsafe partial class Vk
     [LibraryImport(LibName)] public static partial VkResult vkCreateFence(IntPtr device, VkFenceCreateInfo* ci, void* alloc, out IntPtr fence);
     [LibraryImport(LibName)] public static partial VkResult vkWaitForFences(IntPtr device, uint count, IntPtr* fences, uint waitAll, ulong timeout);
     [LibraryImport(LibName)] public static partial VkResult vkResetFences(IntPtr device, uint count, IntPtr* fences);
+    [LibraryImport(LibName)] public static partial void vkDestroyFence(IntPtr device, IntPtr fence, void* alloc);
+    [LibraryImport(LibName)] public static partial VkResult vkGetFenceStatus(IntPtr device, IntPtr fence);
     [LibraryImport(LibName)] public static partial VkResult vkQueueWaitIdle(IntPtr queue);
     [LibraryImport(LibName)] public static partial VkResult vkDeviceWaitIdle(IntPtr device);
 }

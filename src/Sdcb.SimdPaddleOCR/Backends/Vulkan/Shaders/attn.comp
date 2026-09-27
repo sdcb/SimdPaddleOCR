@@ -1,0 +1,78 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Fused multi-head self-attention core on a packed qkv tensor
+// [n, T, 3, H, D] (row-major fp16, the qkv MatMul+bias output):
+//   o[n, i, h, :] = sum_j softmax_j(scale * q_i . k_j) * v_j
+// written as [n, T, H, D] (== the Transpose[0,2,1,3]+Reshape output).
+// Replaces Transpose5D/Slice/Squeeze/Mul/Transpose/MatMul/Softmax/MatMul/
+// Transpose. Online softmax, fp32 math; D <= 32 (zero-padded lanes).
+// Workgroup = 64 queries of one (n, h); K/V staged through shared tiles.
+// PC: T, H, D, scale (fp32 bits)
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) readonly buffer QKV { float16_t qkv[]; };
+layout(set = 0, binding = 1) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC { uint T; uint H; uint D; uint scale; } p;
+
+shared float ks[64 * 32];
+shared float vs[64 * 32];
+
+void main()
+{
+    uint lid = gl_LocalInvocationID.x;
+    uint nh = gl_WorkGroupID.y;
+    uint n = nh / p.H, h = nh % p.H;
+    uint i = gl_WorkGroupID.x * 64u + lid;
+    uint hd = p.H * p.D;
+    uint rowStride = 3u * hd;
+    bool valid = i < p.T;
+    float sc = uintBitsToFloat(p.scale);
+
+    float q[32];
+    float acc[32];
+    uint qb = (n * p.T + (valid ? i : 0u)) * rowStride + h * p.D;
+    for (uint d = 0u; d < 32u; d++) {
+        q[d] = (valid && d < p.D) ? float(qkv[qb + d]) * sc : 0.0;
+        acc[d] = 0.0;
+    }
+    float m = -3.0e38, l = 0.0;
+
+    for (uint j0 = 0u; j0 < p.T; j0 += 64u) {
+        for (uint e = lid; e < 64u * 32u; e += 64u) {
+            uint jr = e >> 5, d = e & 31u;
+            uint j = j0 + jr;
+            float kv = 0.0, vv = 0.0;
+            if (j < p.T && d < p.D) {
+                uint kb = (n * p.T + j) * rowStride + hd + h * p.D + d;
+                kv = float(qkv[kb]);
+                vv = float(qkv[kb + hd]);
+            }
+            ks[e] = kv;
+            vs[e] = vv;
+        }
+        barrier();
+        uint jn = min(64u, p.T - j0);
+        for (uint jr = 0u; jr < jn; jr++) {
+            float s = 0.0;
+            for (uint d = 0u; d < 32u; d++) s += q[d] * ks[jr * 32u + d];
+            float mn = max(m, s);
+            float corr = exp(m - mn);
+            float pe = exp(s - mn);
+            l = l * corr + pe;
+            for (uint d = 0u; d < 32u; d++) acc[d] = acc[d] * corr + pe * vs[jr * 32u + d];
+            m = mn;
+        }
+        barrier();
+    }
+    if (valid) {
+        uint ob = (n * p.T + i) * hd + h * p.D;
+        float inv = 1.0 / l;
+        for (uint d = 0u; d < 32u; d++)
+            if (d < p.D) o[ob + d] = float16_t(acc[d] * inv);
+    }
+}

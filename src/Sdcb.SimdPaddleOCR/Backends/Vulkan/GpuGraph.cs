@@ -1,21 +1,69 @@
 using System.Buffers.Binary;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Sdcb.SimdPaddleOCR.OnnxSharp;
 
 namespace Sdcb.SimdPaddleOCR.Backends.Vulkan;
 
 /// <summary>
-/// Whole-graph GPU execution plan for the DET model: translates a
-/// <see cref="CompiledModel"/> node list into a recorded command buffer —
-/// one dispatch per (fused) node, all activations in a single device-local
-/// fp16 NHWC arena, weights uploaded fp16 at build time.
-/// A plan is bound to one input shape; plans are cached per shape.
+/// Shared (per device × compiled model) half of the GPU graph backend:
+/// pipelines, fp16 weight uploads and the graph compiler that turns a
+/// <see cref="CompiledModel"/> node list into a <see cref="GpuSchedule"/> —
+/// one dispatch per (fused) node, all activations in a single fp16 NHWC arena.
+/// A schedule is pure managed metadata (pipeline, arena-relative binding
+/// offsets, push constants, grid); it owns no Vulkan object, so there is
+/// nothing per-shape to evict, invalidate or leak. Sessions
+/// (<see cref="GpuDetGraph"/>) own the arena/IO buffers and re-record their
+/// command buffer each run with push descriptors, binding whatever arena
+/// handle they currently hold.
 /// </summary>
-internal sealed class GpuDetGraph : IDisposable
+internal sealed class GpuGraphModel
 {
+    // Binding sentinels: schedules reference session-owned buffers by role;
+    // the session substitutes its live handle when recording.
+    internal static readonly VkBuffer RoleArena = new(), RoleIn = new(),
+        RoleOut = new(), RolePart = new();
+
+    private static readonly ConditionalWeakTable<CompiledModel, GpuGraphModel> s_models = new();
+    private int _refs;
+
+    /// <summary>Ref-counted shared model for (device, compiled); released by
+    /// <see cref="Release"/> when the last session goes away.</summary>
+    internal static GpuGraphModel Acquire(VkDevice dev, CompiledModel compiled)
+    {
+        lock (s_models)
+        {
+            if (!s_models.TryGetValue(compiled, out GpuGraphModel? m) || m._refs == 0 || m._dev != dev)
+            {
+                m = new GpuGraphModel(dev, compiled);
+                s_models.AddOrUpdate(compiled, m);
+            }
+            m._refs++;
+            return m;
+        }
+    }
+
+    internal void Release()
+    {
+        lock (s_models)
+        {
+            if (--_refs > 0) return;
+            if (s_models.TryGetValue(_compiled, out GpuGraphModel? cur) && cur == this)
+                s_models.Remove(_compiled);
+            lock (this)
+            {
+                foreach (VkBuffer b in _allBufs) b.Free();
+                _allBufs.Clear();
+                _schedules.Clear();
+            }
+        }
+    }
+
     private readonly VkDevice _dev;
     private readonly Model _model;
     private readonly CompiledModel _compiled;
+    internal VkDevice Device => _dev;
+    internal VkPipeline OutPipe => _pOut;
 
     private readonly VkPipeline _pSoftmax;
     private bool _sg32; // device cannot run sg16 coopmat pipes (NVIDIA/AMD)
@@ -24,8 +72,7 @@ internal sealed class GpuDetGraph : IDisposable
         _pReduce, _pReduce4, _pReduce4b, _pPool, _pPool4,
         _pResize, _pResize4, _pResize4Add, _pConcat, _pConcat4, _pNchw, _pOut, _pIm2col,
         _pAddPs, _pSeA, _pSeB, _pSeF, _pConvD, _pConvDF32, _pCatRes,
-        _pAvg4, _pAffine;
-    private VkBuffer? _partBuf;   // reduce_hw4 phase-1 partials (fp32)
+        _pAvg4, _pAffine, _pLn, _pAttn;
 
     // fp16 copies of constant tensors (weights, biases, scalars), lazy
     private readonly Dictionary<(int, int, int, int), VkBuffer> _constF16 = new();
@@ -116,25 +163,15 @@ internal sealed class GpuDetGraph : IDisposable
         return buf;
     }
 
-    private VkBuffer PartBuf(int floats)
-    {
-        if (_partBuf == null)
-        {
-            // fixed 64KB covers S≤16 partitions × C≤1024 channels + ctr slots;
-            // zeroed once: se_fused counters self-reset to 0 after each run
-            _partBuf = _dev.NewStorageBuffer(64 * 1024, hostVisible: false);
-            unsafe
-            {
-                fixed (byte* z = new byte[64 * 1024])
-                    _dev.Upload(_partBuf, z, 64 * 1024);
-            }
-            _allBufs.Add(_partBuf);
-        }
-        return _partBuf;
-    }
+    // reduce_hw4 phase-1 partials (fp32) + se_fused tickets: a fixed
+    // session-owned scratch (S partitions × C channels × batch + ctr slots)
+    // partials: fp32 [0, PartCtrElem); ticket counters from PartCtrElem on
+    internal const int PartCtrElem = 1 << 18;
+    internal const int PartBytes = PartCtrElem * 4 + 64 * 1024;
+    private static VkBuffer PartBuf(int floats) => RolePart;
     private readonly List<VkBuffer> _allBufs = new();
 
-    public GpuDetGraph(VkDevice dev, CompiledModel compiled)
+    private GpuGraphModel(VkDevice dev, CompiledModel compiled)
     {
         _dev = dev;
         _compiled = compiled;
@@ -185,19 +222,16 @@ internal sealed class GpuDetGraph : IDisposable
         _pAvg4 = Pipe("avgpool4", 2, 44);
         _pAffine = Pipe("affine4", 4, 8);
         _pSoftmax = Pipe("softmax", 2, 8);
+        _pLn = Pipe("layernorm", 4, 12);
+        _pAttn = Pipe("attn", 2, 16);
     }
 
     private VkPipeline Pipe(string name, int bindings, int pcBytes, uint reqSg = 0)
-    {
-        VkPipeline p = _dev.NewPipeline(
-            _dev.NewShaderModule(LoadSpv(name)), bindings, pcBytes, reqSg);
-        p.Name = name;
-        return p;
-    }
+        => _dev.GetPipeline(name, () => LoadSpv(name), bindings, pcBytes, reqSg);
 
     private static byte[] LoadSpv(string name)
     {
-        var asm = typeof(GpuDetGraph).Assembly;
+        var asm = typeof(GpuGraphModel).Assembly;
         using Stream s = asm.GetManifestResourceStream(
             $"Sdcb.SimdPaddleOCR.Backends.Vulkan.Shaders.{name}.spv")
             ?? throw new FileNotFoundException(name + ".spv");
@@ -257,14 +291,16 @@ internal sealed class GpuDetGraph : IDisposable
         MemoryMarshal.Cast<byte, float>(_compiled.GetTensor(tensorIndex).Constant);
 
     // fp16 device copy of a computed vector (e.g. folded BN affine params)
-    private readonly List<VkBuffer> _vecF16 = new();
-    private VkBuffer VecF16(float[] v)
+    // keyed by (node, slot) so re-compiling another shape reuses the upload
+    private readonly Dictionary<(int, int), VkBuffer> _vecF16 = new();
+    private VkBuffer VecF16((int, int) key, float[] v)
     {
+        if (_vecF16.TryGetValue(key, out VkBuffer? cached)) return cached;
         Half[] h = new Half[v.Length];
         for (int i = 0; i < v.Length; i++) h[i] = (Half)v[i];
         VkBuffer buf = _dev.NewStorageBuffer((ulong)h.Length * 2, hostVisible: false);
         unsafe { fixed (Half* p = h) _dev.Upload(buf, p, (ulong)h.Length * 2); }
-        _vecF16.Add(buf);
+        _vecF16[key] = buf;
         _allBufs.Add(buf);
         return buf;
     }
@@ -289,154 +325,58 @@ internal sealed class GpuDetGraph : IDisposable
         return buf;
     }
 
-    private sealed class Rec
-    {
-        public required VkPipeline Pipe;
-        public required IntPtr Set;
-        public required byte[] Pc;
-        public uint Gx, Gy;
-        public string Tag = "";
-    }
-
-    private sealed class Plan
-    {
-        // Arena/InF32/OutF32 reference the graph-shared grow-only buffers;
-        // a plan never owns them — eviction frees only Cmd/QueryPool/sets.
-        public required VkBuffer Arena, InF32, OutF32;
-        public required IntPtr Cmd;
-        public required List<Rec> Recs;
-        public int OutElems;
-        public long ArenaBytes;
-        public IntPtr QueryPool;
-        public int QueryCount;
-        public long[] Off = [];
-        public int[] Alias = [];
-        public long[] Numel = [];
-        public int[][] Shapes = [];
-        public int[] RecOut = [];   // rec index -> output tensor index
-        public long Im2colOff;
-        public long LastTick;
-    }
-
-    private readonly Dictionary<PlanKey, Plan> _plans = new();
-    public readonly record struct PlanKey(int N, int H, int W, int NodeLimit, int OutTensor);
-
-    // Variable-shape inputs (DET resizes per image) would otherwise cache one
-    // plan per (H,W) forever — unbounded VRAM + descriptor-pool exhaustion.
-    // The arena and the fp32 input/output buffers are shared grow-only
-    // buffers: growing them invalidates every plan (their descriptor sets
-    // bind the retired buffer handle), and a small LRU caps live plans.
-    // Verified on B580+3080Ti: crossing the old ~32-plan corruption point is
-    // clean — root cause was resource exhaustion, not the count itself. 64
-    // halves rebuild churn on many-shape workloads; VRAM stays bounded because
-    // plans share the grow-only arena (only sets/cmd/query are per-plan).
-    private const int MaxPlans = 64;
+    // Managed schedule cache: pure metadata (no Vulkan objects), shared by
+    // every session of this model. The LRU bound only caps managed memory —
+    // eviction never touches a GPU resource and nothing is ever invalidated.
+    private readonly Dictionary<GpuSchedule.Key, GpuSchedule> _schedules = new();
+    private const int MaxSchedules = 512;
     private long _tick;
-    private VkBuffer? _arena; private long _arenaElems;
-    private VkBuffer? _inF32; private long _inF32Elems;
-    private VkBuffer? _outF32; private long _outF32Elems;
 
-    private VkBuffer EnsureArena(long elems)
-    {
-        if (_arena is not null && elems <= _arenaElems) return _arena;
-        long alloc = Math.Max(elems, _arenaElems * 3 / 2);
-        InvalidateAllPlans();
-        _arena?.Free();
-        _arena = _dev.NewStorageBuffer((ulong)alloc * 2, hostVisible: false);
-        _arenaElems = alloc;
-        return _arena;
-    }
-
-    private VkBuffer EnsureHostBuf(ref VkBuffer? buf, ref long elems, long need, bool preferHost)
-    {
-        if (buf is not null && need <= elems) return buf;
-        long alloc = Math.Max(need, elems * 3 / 2);
-        InvalidateAllPlans();
-        buf?.Free();
-        buf = _dev.NewStorageBuffer((ulong)alloc * 4, hostVisible: true, preferHost: preferHost);
-        elems = alloc;
-        return buf;
-    }
-
-    private void InvalidateAllPlans()
-    {
-        foreach (Plan p in _plans.Values) FreePlan(p);
-        _plans.Clear();
-    }
-
-    private unsafe void FreePlan(Plan p)
-    {
-        foreach (Rec r in p.Recs) _dev.FreeDescriptorSet(r.Set);
-        _dev.FreeCommandBuffer(p.Cmd);
-        if (p.QueryPool != IntPtr.Zero)
-            Vk.vkDestroyQueryPool(_dev.Device, p.QueryPool, null);
-    }
-
-    private void EvictPlan()
-    {
-        PlanKey oldest = default;
-        long min = long.MaxValue;
-        foreach ((PlanKey k, Plan p) in _plans)
-            if (p.LastTick < min) { min = p.LastTick; oldest = k; }
-        if (_plans.Remove(oldest, out Plan? victim)) FreePlan(victim);
-    }
-
-    private static PlanKey KeyOf(int[] inputShape, int nodeLimit, int outTensor)
+    internal static GpuSchedule.Key KeyOf(int[] inputShape, int nodeLimit, int outTensor)
         => new(inputShape[0], inputShape[2], inputShape[3], nodeLimit, outTensor);
-    private IntPtr _fence;
-    private readonly bool _dbgTime =
-        Environment.GetEnvironmentVariable("SIMD_OCR_GPU_TIME") == "1";
+
     // SIMD_OCR_NOCATABS=1 disables sole-consumer concat-slice writes —
     // producers then write their own slot so DebugStats stays accurate.
     private static readonly bool _noCatAbs =
         Environment.GetEnvironmentVariable("SIMD_OCR_NOCATABS") != null;
+    private static readonly bool s_dbgTime =
+        Environment.GetEnvironmentVariable("SIMD_OCR_GPU_TIME") == "1";
 
-    /// <summary>Run the graph: input fp32 NCHW [n,C,H,W] → fp32 [graph output].
-    /// nodeLimit truncates the emit loop (nodes beyond it are not dispatched) and
-    /// outTensor overrides the readback tensor — used to stop the REC graph before
-    /// the vocab projection (activations readback) instead of the graph output.
-    /// </summary>
-    public unsafe float[] Run(int[] inputShape, ReadOnlySpan<float> input,
-        int nodeLimit = int.MaxValue, int outTensor = -1)
+    /// <summary>Schedule for (shape, nodeLimit, outTensor); compiled on first
+    /// use. nodeLimit truncates the emit loop and outTensor overrides the
+    /// readback tensor (REC stops before the vocab projection).</summary>
+    internal GpuSchedule GetSchedule(int[] inputShape, int nodeLimit = int.MaxValue, int outTensor = -1)
     {
-        PlanKey key = KeyOf(inputShape, nodeLimit, outTensor);
-        if (!_plans.TryGetValue(key, out Plan? plan))
+        GpuSchedule.Key key = KeyOf(inputShape, nodeLimit, outTensor);
+        lock (this)
         {
-            if (_plans.Count >= MaxPlans) EvictPlan();
-            plan = BuildPlan(inputShape, nodeLimit, outTensor);
-            _plans[key] = plan;
+            if (!_schedules.TryGetValue(key, out GpuSchedule? s))
+            {
+                if (_schedules.Count >= MaxSchedules)
+                {
+                    GpuSchedule.Key oldest = default;
+                    long min = long.MaxValue;
+                    foreach ((GpuSchedule.Key k, GpuSchedule v) in _schedules)
+                        if (v.LastTick < min) { min = v.LastTick; oldest = k; }
+                    _schedules.Remove(oldest);
+                }
+                long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+                s = BuildPlan(inputShape, nodeLimit, outTensor);
+                _schedules[key] = s;
+                if (s_dbgTime)
+                    Console.WriteLine($"[t] compile {key} {System.Diagnostics.Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F2} ms");
+            }
+            s.LastTick = ++_tick;
+            return s;
         }
-        plan.LastTick = ++_tick;
-        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-        void* dst = plan.InF32.Map();
-        fixed (float* src = input)
-            Buffer.MemoryCopy(src, dst, input.Length * 4, input.Length * 4);
-        plan.InF32.Flush(0, (ulong)input.Length * 4);
-        plan.InF32.Unmap();
-        long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
-
-        if (_fence == IntPtr.Zero) _fence = _dev.NewFence();
-        _dev.Submit(plan.Cmd, _fence);
-        _dev.WaitFence(_fence);
-        long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
-
-        float[] o = new float[plan.OutElems];
-        float* op = (float*)plan.OutF32.Map();
-        new ReadOnlySpan<float>(op, plan.OutElems).CopyTo(o);
-        plan.OutF32.Unmap();
-        long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (_dbgTime)
-        {
-            double f = System.Diagnostics.Stopwatch.Frequency;
-            Console.WriteLine($"[t] write={(t1 - t0) / f * 1e3:F2} submit+wait={(t2 - t1) / f * 1e3:F2} read={(t3 - t2) / f * 1e3:F2} ms");
-        }
-        return o;
     }
 
-    public int DispatchCount(PlanKey key) => _plans.TryGetValue(key, out Plan? p) ? p.Recs.Count : 0;
-    public long ArenaBytes(PlanKey key) => _plans.TryGetValue(key, out Plan? p) ? p.ArenaBytes : 0;
+    internal GpuSchedule? TryGetSchedule(GpuSchedule.Key key)
+    {
+        lock (this) return _schedules.TryGetValue(key, out GpuSchedule? s) ? s : null;
+    }
 
-    private unsafe Plan BuildPlan(int[] inputShape, int nodeLimit, int outTensor)
+    private unsafe GpuSchedule BuildPlan(int[] inputShape, int nodeLimit, int outTensor)
     {
         int[][] shapes = _compiled.ResolveShapesFor(inputShape);
         NodeRecord[] nodes = _model.Nodes;
@@ -484,11 +424,122 @@ internal sealed class GpuDetGraph : IDisposable
             prodNode[checked((int)nodes[ni].Outputs[0])] = ni;
         }
 
+        // ---- fused MHSA (SVTR mixer): the Transpose5D -> Slice/Squeeze ->
+        // q*scale, k^T -> MatMul -> Softmax -> MatMul -> Transpose chain
+        // collapses into one `attn` dispatch reading the packed qkv tensor.
+        // Members get no arena slots; the chain's out-Transpose slot is the
+        // kernel's destination (the trailing Reshape aliases onto it).
+        var attnAt = new Dictionary<int, (int qkv, int outT, int T, int H, int D, float scale)>();
+        var attnSkip = new HashSet<int>();
+        if (Environment.GetEnvironmentVariable("SIMD_OCR_NOATTN") == null)
+        {
+            var mem = new List<int>();
+            for (int ni = 0; ni < nodes.Length; ni++)
+                if (nodes[ni].Operator == OperatorId.Transpose
+                    && MatchAttention(ni, mem) is { } spec)
+                {
+                    attnAt[ni] = spec;
+                    foreach (int m in mem) attnSkip.Add(m);
+                }
+        }
+
+        (int qkv, int outT, int T, int H, int D, float scale)? MatchAttention(int tr, List<int> mem)
+        {
+            mem.Clear();
+            int Sole(int t) => refCount[t] == 1 && consumers[t] is { Count: 1 } c ? c[0] : -1;
+            bool Perm(int ni, params int[] perm)
+            {
+                ReadOnlySpan<byte> tp = _model.GetParameters(nodes[ni]);
+                if (U16(tp, 2) != perm.Length) return false;
+                for (int i = 0; i < perm.Length; i++)
+                    if (I32(tp, 4 + 4 * i) != perm[i]) return false;
+                return true;
+            }
+            NodeRecord t5 = nodes[tr];
+            int in5 = checked((int)t5.Inputs[0]);
+            int[] s5 = shapes[in5];
+            if (s5.Length != 5 || s5[0] != nb || s5[2] != 3 || s5[4] > 32
+                || !Perm(tr, 2, 0, 3, 1, 4)) return null;
+            int r5 = prodNode[in5];
+            if (r5 < 0 || nodes[r5].Operator != OperatorId.Reshape) return null;
+            int qkvT = checked((int)nodes[r5].Inputs[0]);
+            int T = s5[1], H = s5[3], D = s5[4];
+            if (shapes[qkvT].Length != 3 || numel[qkvT] != numel[in5]) return null;
+            int tOut = checked((int)t5.Outputs[0]);
+            List<int>? cs = consumers[tOut];
+            if (cs is not { Count: 3 }) return null;
+            int[] role = [-1, -1, -1];
+            mem.Add(tr);
+            foreach (int sl in cs)
+            {
+                if (nodes[sl].Operator != OperatorId.Slice) return null;
+                (int[] st, int[] stp) = _compiled.ResolveSliceBounds(shapes[tOut], nodes[sl], out _);
+                int[] so = shapes[checked((int)nodes[sl].Outputs[0])];
+                if (st.Length != 5 || so.Length != 5 || so[0] != 1 || (uint)st[0] > 2
+                    || role[st[0]] != -1) return null;
+                for (int a = 0; a < 5; a++)
+                    if (stp[a] != 1 || (a > 0 && (st[a] != 0 || so[a] != shapes[tOut][a])))
+                        return null;
+                int sq = Sole(checked((int)nodes[sl].Outputs[0]));
+                if (sq < 0 || nodes[sq].Operator != OperatorId.Squeeze) return null;
+                role[st[0]] = checked((int)nodes[sq].Outputs[0]);
+                mem.Add(sl); mem.Add(sq);
+            }
+            // q: Mul(scalar const) [-> Reshape] -> MatMul1.A
+            int mul = Sole(role[0]);
+            if (mul < 0 || nodes[mul].Operator != OperatorId.Mul) return null;
+            int sc = nodes[mul].Inputs[0] == (uint)role[0]
+                ? checked((int)nodes[mul].Inputs[1]) : checked((int)nodes[mul].Inputs[0]);
+            if (!isConst[sc] || numel[sc] != 1) return null;
+            float scale = CstF32(sc)[0];
+            mem.Add(mul);
+            int qt = checked((int)nodes[mul].Outputs[0]);
+            int mm1 = Sole(qt);
+            if (mm1 >= 0 && nodes[mm1].Operator == OperatorId.Reshape
+                && numel[checked((int)nodes[mm1].Outputs[0])] == numel[qt])
+            {
+                mem.Add(mm1);
+                qt = checked((int)nodes[mm1].Outputs[0]);
+                mm1 = Sole(qt);
+            }
+            if (mm1 < 0 || nodes[mm1].Operator != OperatorId.MatMul
+                || nodes[mm1].Inputs[0] != (uint)qt) return null;
+            // k: Transpose[0,1,3,2] -> MatMul1.B
+            int kt = Sole(role[1]);
+            if (kt < 0 || nodes[kt].Operator != OperatorId.Transpose || !Perm(kt, 0, 1, 3, 2)
+                || nodes[mm1].Inputs[1] != nodes[kt].Outputs[0]) return null;
+            int smx = Sole(checked((int)nodes[mm1].Outputs[0]));
+            if (smx < 0 || nodes[smx].Operator != OperatorId.Softmax) return null;
+            int ax = I32(_model.GetParameters(nodes[smx]), 4);
+            if (ax != -1 && ax != 3) return null;
+            int mm2 = Sole(checked((int)nodes[smx].Outputs[0]));
+            if (mm2 < 0 || nodes[mm2].Operator != OperatorId.MatMul
+                || nodes[mm2].Inputs[0] != nodes[smx].Outputs[0]
+                || nodes[mm2].Inputs[1] != (uint)role[2] || Sole(role[2]) != mm2) return null;
+            int ot = Sole(checked((int)nodes[mm2].Outputs[0]));
+            if (ot < 0 || nodes[ot].Operator != OperatorId.Transpose || !Perm(ot, 0, 2, 1, 3))
+                return null;
+            mem.Add(kt); mem.Add(mm1); mem.Add(smx); mem.Add(mm2); mem.Add(ot);
+            return (qkvT, checked((int)nodes[ot].Outputs[0]), T, H, D, scale);
+        }
+
         // ---- pass 1: aliases + which tensors need arena slots ----
         for (int ni = 0; ni < nodes.Length; ni++)
         {
             NodeRecord node = nodes[ni];
             int skip = _compiled.FusedSkip(ni);
+            if (attnSkip.Contains(ni)) continue;
+            // [n,1,a,b] -> [n,b,1,a] (perm 0,3,1,2): with a unit dim-1 the
+            // row-major input flat order already equals the NHWC output's.
+            if (node.Operator == OperatorId.Transpose
+                && shapes[checked((int)node.Inputs[0])] is { Length: 4 } ts4 && ts4[1] == 1
+                && _model.GetParameters(node) is ReadOnlySpan<byte> p4
+                && U16(p4, 2) == 4 && I32(p4, 4) == 0 && I32(p4, 8) == 3
+                && I32(p4, 12) == 1 && I32(p4, 16) == 2)
+            {
+                alias[checked((int)node.Outputs[0])] = checked((int)node.Inputs[0]);
+                continue;
+            }
             if (node.Operator is OperatorId.LayoutConvert or OperatorId.Squeeze
                 or OperatorId.Unsqueeze or OperatorId.Reshape)
             {
@@ -539,6 +590,7 @@ internal sealed class GpuDetGraph : IDisposable
             ni += skip;
         }
         foreach (uint g in _model.GraphOutputs) used[checked((int)g)] = true;
+        foreach (var at in attnAt.Values) { used[at.outT] = true; used[Phys(at.qkv)] = true; }
 
         // graph input gets physically padded to 4 channels when Cin%4!=0 so the
         // input conv's im2col can use the vector path; weights pack zeros there.
@@ -580,11 +632,9 @@ internal sealed class GpuDetGraph : IDisposable
         // +128*512: coopmat A-tile reads pad rows past M
         cursor = im2colOff + maxIm2col + 128 * 512;
         long arenaElems = cursor + (1L << 20);
-        // Shared grow-only buffers: growing frees every plan (stale descriptor
-        // bindings) and reallocates; steady state is one buffer per kind.
-        VkBuffer arena = EnsureArena(arenaElems);
-        VkBuffer outF32 = EnsureHostBuf(ref _outF32, ref _outF32Elems, numel[outIdx], preferHost: true);
-        VkBuffer inF32 = EnsureHostBuf(ref _inF32, ref _inF32Elems, numel[inIdx], preferHost: false);
+        // Role sentinels: the session binds its own grow-only buffers at
+        // record time, sized from the schedule's requirements.
+        VkBuffer arena = RoleArena, outF32 = RoleOut, inF32 = RoleIn;
         bool inF32Consumed = false;  // stem conv reads fp32 NCHW directly
         bool convTOut = false;   // last convT wrote fp32 out directly
 
@@ -759,19 +809,22 @@ internal sealed class GpuDetGraph : IDisposable
 
         // ---- pass 2: emit ----
         int LastEmitNi = -1;
-        List<Rec> recs = new();
-        Rec Emit(VkPipeline pipe, string tag, (VkBuffer buf, long elemOff, int elemSize)[] binds,
+        List<GpuRec> recs = new();
+        GpuRec Emit(VkPipeline pipe, string tag, (VkBuffer buf, long elemOff, int elemSize)[] binds,
                  uint[] pc, uint gx, uint gy = 1)
         {
-            IntPtr set = _dev.NewDescriptorSet(pipe.SetLayout);
+            var bb = new GpuBind[binds.Length];
             for (int b = 0; b < binds.Length; b++)
-                _dev.BindBuffer(set, (uint)b, binds[b].buf,
-                    (ulong)(binds[b].elemOff * binds[b].elemSize));
-            Rec r = new() { Pipe = pipe, Set = set, Pc = Pcu(pc), Gx = gx, Gy = gy, Tag = tag };
+                bb[b] = new GpuBind(binds[b].buf, (ulong)(binds[b].elemOff * binds[b].elemSize));
+            GpuRec r = new() { Pipe = pipe, Binds = bb, Pc = Pcu(pc), Gx = gx, Gy = gy, Tag = tag };
             recs.Add(r);
             return r;
         }
         uint Div256(long n) => (uint)((n + 255) / 256);
+        // spatial-reduce partitions: ~512 px per workgroup (a 16-WG cap left
+        // most of the GPU idle on large DET maps), bounded by partial storage
+        int PartSplits(int hw, int c) =>
+            Math.Max(1, Math.Min(Math.Min((hw + 511) / 512, 256), PartCtrElem / (c * nb)));
         // coopmat tile: cout<=32 -> 512x32, cout<=64 -> 256x64, else 128x128
         // sg32 variant only ships the 128x128 tile — always use it there.
         (VkPipeline pipe, uint tm, uint tn) CmTile(int c) =>
@@ -888,7 +941,8 @@ internal sealed class GpuDetGraph : IDisposable
         var catRes = new Dictionary<int,
             (long x, long ra, long se, uint fl, uint inW, uint fh, uint fw,
              uint off4, uint cq4)[]>();
-        for (int ci2 = 0; ci2 < nodes.Length; ci2++)
+        // catresize kernel is batch-free: batched graphs keep the plain path
+        for (int ci2 = 0; nb == 1 && ci2 < nodes.Length; ci2++)
         {
             NodeRecord c = nodes[ci2];
             if (c.Operator != OperatorId.Concat || c.Inputs.Length > 4)
@@ -951,6 +1005,17 @@ internal sealed class GpuDetGraph : IDisposable
         {
             NodeRecord node = nodes[ni];
             if (skipEmit.Contains(ni)) continue;
+            if (attnAt.TryGetValue(ni, out var att))
+            {
+                LastEmitNi = ni;
+                Emit(_pAttn, $"attn n{ni} T{att.T} H{att.H} D{att.D}",
+                    [(arena, off[Phys(att.qkv)], 2), (arena, off[att.outT], 2)],
+                    [(uint)att.T, (uint)att.H, (uint)att.D,
+                     BitConverter.SingleToUInt32Bits(att.scale)],
+                    (uint)((att.T + 63) / 64), (uint)(nb * att.H));
+                continue;
+            }
+            if (attnSkip.Contains(ni)) continue;
             try
             {
             int skip = _compiled.FusedSkip(ni);
@@ -1242,10 +1307,11 @@ internal sealed class GpuDetGraph : IDisposable
                         uint M = (uint)(outH * outW);
                         // im2col-free direct conv: tap addressing inline in the
                         // dot kernel; skips materializing the K-expanded matrix.
+                        // batched graphs always take it: the im2col fallback is batch-free
                         if (cout % 4 == 0 && scalarBias == 0 && cinIn % 4 == 0
-                            && Kp <= (Environment.GetEnvironmentVariable(
+                            && (nb > 1 || Kp <= (Environment.GetEnvironmentVariable(
                                 "SIMD_OCR_CONVD_KMAX") is string km
-                                ? int.Parse(km) : 1024)
+                                ? int.Parse(km) : 1024))
                             && Environment.GetEnvironmentVariable("SIMD_OCR_NODCONV") == null)
                         {
                             VkBuffer wk2 = ConstKMajor(checked((int)node.Inputs[1]),
@@ -1452,6 +1518,53 @@ internal sealed class GpuDetGraph : IDisposable
                     break;
                 }
 
+                case OperatorId.ReduceMean when skip == 8:
+                {
+                    // compiler-fused LayerNorm over the last axis
+                    int xT = checked((int)node.Inputs[0]);
+                    int[] xs = shapes[xT];
+                    int cN = xs[^1];
+                    int xP = Phys(xT);
+                    // last axis must be physically contiguous: rank-3 row-major,
+                    // or an NHWC slab whose channel dim is that axis
+                    bool contiguous = xs.Length == 3
+                        && (shapes[xP].Length != 4 || shapes[xP][1] == cN);
+                    int ConstIn(NodeRecord nd, int other)
+                    {
+                        int a0 = checked((int)nd.Inputs[0]), a1 = checked((int)nd.Inputs[1]);
+                        int c = Phys(a0) == Phys(other) ? a1 : Phys(a1) == Phys(other) ? a0 : -1;
+                        return c >= 0 && isConst[c] ? c : -1;
+                    }
+                    NodeRecord nSub = nodes[ni + 1], nPow = nodes[ni + 2], nRm = nodes[ni + 3],
+                        nEps = nodes[ni + 4], nSq = nodes[ni + 5], nDiv = nodes[ni + 6],
+                        nG = nodes[ni + 7], nB = nodes[ni + 8];
+                    int powC = nPow.Operator == OperatorId.Pow
+                        ? ConstIn(nPow, checked((int)nSub.Outputs[0])) : -1;
+                    int epsC = nEps.Operator == OperatorId.Add
+                        ? ConstIn(nEps, checked((int)nRm.Outputs[0])) : -1;
+                    int gC = nG.Operator == OperatorId.Mul
+                        ? ConstIn(nG, checked((int)nDiv.Outputs[0])) : -1;
+                    int bC = nB.Operator == OperatorId.Add
+                        ? ConstIn(nB, checked((int)nG.Outputs[0])) : -1;
+                    bool lastAxis = U16(p, 2) == 1
+                        && (I32(p, 12) == -1 || I32(p, 12) == xs.Length - 1);
+                    if (!contiguous || !lastAxis || cN > 1024 || numel[xT] / cN > 65535
+                        || nSub.Operator != OperatorId.Sub
+                        || nRm.Operator != OperatorId.ReduceMean || nSq.Operator != OperatorId.Sqrt
+                        || nDiv.Operator != OperatorId.Div || powC < 0 || epsC < 0 || gC < 0
+                        || bC < 0 || CstF32(powC)[0] != 2f || numel[epsC] != 1
+                        || numel[gC] != cN || numel[bC] != cN)
+                        throw new NotSupportedException($"layernorm pattern at node {ni}");
+                    long rowsLn = numel[xT] / cN;
+                    Emit(_pLn, $"layernorm n{ni} {rowsLn}x{cN}",
+                        [(arena, SlotOf(node.Inputs[0]), 2), (ConstF32(gC), 0, 4),
+                         (ConstF32(bC), 0, 4), (arena, off[outPhys], 2)],
+                        [(uint)rowsLn, (uint)cN, BitConverter.SingleToUInt32Bits(CstF32(epsC)[0])],
+                        (uint)rowsLn);
+                    ni += 8;
+                    break;
+                }
+
                 case OperatorId.ReduceMean:
                 {
                     int[] ishp = shapes[node.Inputs[0]];
@@ -1464,12 +1577,12 @@ internal sealed class GpuDetGraph : IDisposable
                         int rDim = shapes[Phys(checked((int)f1.Outputs[0]))][1];
                         uint cvP = 1; while (cvP < (uint)(c / 4)) cvP <<= 1;
                         int hsOut = Phys(checked((int)nodes[sev.hs].Outputs[0]));
-                        int s = Math.Min((hw + 4095) / 4096, 16);
+                        int s = PartSplits(hw, c);
                         int pp = (hw + s - 1) / s;
                         VkBuffer pb2 = PartBuf(s * c * nb + 4 * nb);
                         Emit(_pSeF, $"se_f n{ni} c{c} s{s} r{rDim}",
                             [(arena, SlotOf(node.Inputs[0]), 2), (pb2, 0, 2),
-                             (pb2, 8192 + (long)seCtr, 4),
+                             (pb2, PartCtrElem + (long)seCtr, 4),
                              (ConstF32(checked((int)f1.Inputs[1])), 0, 4),
                              (ConstF32(checked((int)f1.Inputs[2])), 0, 4),
                              (ConstF32(checked((int)f2.Inputs[1])), 0, 4),
@@ -1486,7 +1599,7 @@ internal sealed class GpuDetGraph : IDisposable
                     if (c % 4 == 0 && 256 % cv4 == 0 && hw >= 4096)
                     {
                         // two-phase: S pixel partitions → fp32 partials → mean
-                        int s = Math.Min((hw + 4095) / 4096, 16);
+                        int s = PartSplits(hw, c);
                         int pp = (hw + s - 1) / s;
                         VkBuffer pb = PartBuf(s * c * nb);
                         Emit(_pReduce4, $"reduce4a n{ni} c{c}",
@@ -1506,10 +1619,13 @@ internal sealed class GpuDetGraph : IDisposable
 
                 case OperatorId.MaxPool:
                 {
-                    if (nb > 1)
-                        throw new NotSupportedException(
-                            $"maxpool lacks batch support (n{ni})");
                     int[] ishp = shapes[node.Inputs[0]];
+                    // both kernels hard-code 2x2 / stride 1 / pad-end
+                    if (!(I32(p, 8) == 2 && I32(p, 12) == 2 && I32(p, 16) == 1
+                          && I32(p, 20) == 1 && I32(p, 24) == 0 && I32(p, 28) == 0
+                          && shapes[node.Outputs[0]][2] == ishp[2]
+                          && shapes[node.Outputs[0]][3] == ishp[3]))
+                        throw new NotSupportedException($"maxpool shape at node {ni}");
                     if (ishp[1] % 4 == 0)
                     {
                         long wO = off[outPhys]; uint dcv = 0, dco = 0;
@@ -1539,8 +1655,10 @@ internal sealed class GpuDetGraph : IDisposable
                         Emit(_pPool4, $"maxpool4 n{ni}",
                             [(arena, SlotOf(node.Inputs[0]), 2), (arena, wO, 2)],
                             [(uint)ishp[3], (uint)ishp[2], (uint)ishp[1], dcv, dco],
-                            Div256(numel[outPhys] / 4));
+                            Div256(numel[outPhys] / 4 / nb), (uint)nb);
                     }
+                    else if (nb > 1)
+                        throw new NotSupportedException($"scalar maxpool lacks batch support (n{ni})");
                     else
                         Emit(_pPool, $"maxpool n{ni}",
                             [(arena, SlotOf(node.Inputs[0]), 2), (arena, off[outPhys], 2)],
@@ -1644,10 +1762,11 @@ internal sealed class GpuDetGraph : IDisposable
 
                 case OperatorId.Concat:
                 {
-                    if (nb > 1)
-                        throw new NotSupportedException(
-                            $"concat lacks batch support (n{ni})");
                     int[] osp = shapes[node.Outputs[0]];
+                    if (osp.Length != 4 || (I32(p, 4) is int cax && cax != 1 && cax != -3))
+                        throw new NotSupportedException($"concat axis/rank at node {ni}");
+                    // NHWC channel concat: pixels are flat over the batch too
+                    long catPx = (long)osp[2] * osp[3] * nb;
                     if (catRes.TryGetValue(ni, out var spec))
                     {
                         var bb = new (VkBuffer, long, int)[13];
@@ -1687,20 +1806,22 @@ internal sealed class GpuDetGraph : IDisposable
                         if (ci % 4 == 0 && cOff % 4 == 0 && osp[1] % 4 == 0)
                         {
                             bool aps = addpsSrc.TryGetValue(Phys(it), out var ads);
+                            if (aps && nb > 1)   // concat4's se index is batch-free
+                                throw new NotSupportedException($"batched addps concat at node {ni}");
                             Emit(_pConcat4, $"concat4 n{ni} c{ci}@{cOff}",
                                 [(arena, aps ? SlotOf(ads.x) : SlotOf(inp), 2),
                                  (arena, off[outPhys], 2),
                                  (arena, aps ? SlotOf(ads.a) : 0, 2),
                                  (arena, aps ? SlotOf(ads.se) : 0, 2)],
-                                [(uint)(osp[2] * osp[3]), (uint)ci, (uint)osp[1],
+                                [(uint)catPx, (uint)ci, (uint)osp[1],
                                  (uint)cOff, aps ? 256u : 0u],
-                                Div256((long)osp[2] * osp[3] * (ci / 4)));
+                                Div256(catPx * (ci / 4)));
                         }
                         else
                             Emit(_pConcat, $"concat n{ni} c{ci}@{cOff}",
                                 [(arena, SlotOf(inp), 2), (arena, off[outPhys], 2)],
-                                [(uint)(osp[2] * osp[3]), (uint)ci, (uint)osp[1], (uint)cOff],
-                                Div256((long)osp[2] * osp[3] * ci));
+                                [(uint)catPx, (uint)ci, (uint)osp[1], (uint)cOff],
+                                Div256(catPx * ci));
                         cOff += ci;
                     }
                     break;
@@ -1805,7 +1926,7 @@ internal sealed class GpuDetGraph : IDisposable
                         throw new NotSupportedException($"bn vec4 at node {ni}");
                     Emit(_pAffine, $"bn4 n{ni} c{cc}",
                         [(arena, SlotOf(node.Inputs[0]), 2),
-                         (VecF16(s), 0, 2), (VecF16(t), 0, 2),
+                         (VecF16((ni, 0), s), 0, 2), (VecF16((ni, 1), t), 0, 2),
                          (arena, off[outPhys], 2)],
                         [(uint)(n / 4), (uint)(cc / 4)], Div256(n / 4));
                     break;
@@ -1856,6 +1977,64 @@ internal sealed class GpuDetGraph : IDisposable
                             outPhys = Phys(checked((int)ad.Outputs[0]));
                             ni += 1;
                         }
+                    }
+                    // narrow-M token GEMMs (SVTR mixer, n*T rows): the direct
+                    // dot kernel keeps occupancy where a 128x128 coopmat tile
+                    // would leave most of the M dimension idle. Its epilogue
+                    // also folds swish (Sigmoid+Mul) or a residual Add.
+                    bool mmDot = mmM <= 16384
+                        && Environment.GetEnvironmentVariable("SIMD_OCR_MMCM") == null;
+                    if (mmDot)
+                    {
+                        int cur = outPhys;
+                        long resOff = 0;
+                        int j = ni + 1;
+                        bool Free(int t) => t != Phys(outIdx) && refCount[t] >= 1;
+                        if (j + 1 < emitLimit && (mmFlags & 1u) != 0
+                            && nodes[j].Operator == OperatorId.Sigmoid
+                            && nodes[j + 1].Operator == OperatorId.Mul
+                            && _compiled.FusedSkip(j) == 0 && _compiled.FusedSkip(j + 1) == 0
+                            && Phys(checked((int)nodes[j].Inputs[0])) == cur
+                            && refCount[cur] == 2 && Free(cur)
+                            && refCount[Phys(checked((int)nodes[j].Outputs[0]))] == 1
+                            && ((Phys(checked((int)nodes[j + 1].Inputs[0])) == cur
+                                 && Phys(checked((int)nodes[j + 1].Inputs[1]))
+                                    == Phys(checked((int)nodes[j].Outputs[0])))
+                             || (Phys(checked((int)nodes[j + 1].Inputs[1])) == cur
+                                 && Phys(checked((int)nodes[j + 1].Inputs[0]))
+                                    == Phys(checked((int)nodes[j].Outputs[0])))))
+                        {
+                            mmFlags |= 5u << 4;
+                            outPhys = Phys(checked((int)nodes[j + 1].Outputs[0]));
+                            ni += 2;
+                        }
+                        else if (j < emitLimit && nodes[j].Operator == OperatorId.Add
+                            && _compiled.FusedSkip(j) == 0 && refCount[cur] == 1 && Free(cur)
+                            && !addScale.ContainsKey(j))
+                        {
+                            NodeRecord ad = nodes[j];
+                            int ia = Phys(checked((int)ad.Inputs[0]));
+                            int ib = Phys(checked((int)ad.Inputs[1]));
+                            int oth = ia == cur ? checked((int)ad.Inputs[1])
+                                    : ib == cur ? checked((int)ad.Inputs[0]) : -1;
+                            if (oth >= 0 && !isConst[oth] && numel[oth] == numel[cur]
+                                && Phys(oth) != cur)
+                            {
+                                resOff = SlotOf((uint)oth);
+                                mmFlags |= 2u;
+                                outPhys = Phys(checked((int)ad.Outputs[0]));
+                                ni += 1;
+                            }
+                        }
+                        Emit(_pDot, $"mmdot n{ni} {mmM}x{mmK}x{mmN}",
+                            [(arena, SlotOf(node.Inputs[0]), 2),
+                             (ConstF16(checked((int)node.Inputs[1])), 0, 2),
+                             (mmBias, 0, 2), (arena, resOff, 2),
+                             (arena, off[outPhys], 2), (arena, 0, 2),
+                             (arena, 0, 2), (arena, 0, 2)],
+                            [mmM, (uint)mmN, (uint)mmK, (uint)(mmK / 4), mmFlags, 0u, 0u],
+                            Div256(((mmM + 3) / 4) * (long)(mmN / 4)));
+                        break;
                     }
                     var (cp2, tm2, tn2) = CmTile(mmN);
                     Emit(cp2, $"matmul n{ni} {mmM}x{mmK}x{mmN}",
@@ -1915,208 +2094,26 @@ internal sealed class GpuDetGraph : IDisposable
             int[] isp = shapes[inIdx];
             int hw = isp[2] * isp[3], c = isp[1];
             uint cout = inCinPad != 0 ? (uint)inCinPad : (uint)c;
-            IntPtr set = _dev.NewDescriptorSet(_pNchw.SetLayout);
-            _dev.BindBuffer(set, 0, inF32, 0);
-            _dev.BindBuffer(set, 1, arena, (ulong)off[inIdx] * 2);
-            recs.Insert(0, new Rec
+            recs.Insert(0, new GpuRec
             {
-                Pipe = _pNchw, Set = set, Gx = Div256((long)hw * cout),
-                Gy = (uint)nb,
+                Pipe = _pNchw,
+                Binds = [new GpuBind(inF32, 0), new GpuBind(arena, (ulong)off[inIdx] * 2)],
+                Gx = Div256((long)hw * cout), Gy = (uint)nb,
                 Pc = Pcu((uint)hw, (uint)c, cout), Tag = "nchw2nhwc",
             });
         }
-
-        // debug: SIMD_OCR_GPU_ONLYHEAD records only the input-convert dispatch;
-        // SIMD_OCR_GPU_TRUNCATE=N records the first N dispatches.
-        List<Rec> recordRecs = recs;
-        if (Environment.GetEnvironmentVariable("SIMD_OCR_GPU_ONLYHEAD") == "1")
-            recordRecs = [recs[0]];
-        else if (int.TryParse(Environment.GetEnvironmentVariable("SIMD_OCR_GPU_ONLY"),
-                     out int only) && only < recs.Count)
-            recordRecs = Enumerable.Repeat(recs[only], 20).ToList();
-        else if (int.TryParse(Environment.GetEnvironmentVariable("SIMD_OCR_GPU_TRUNCATE"),
-                     out int trunc) && trunc < recs.Count)
-            recordRecs = recs.Take(trunc).ToList();
 
         if (Environment.GetEnvironmentVariable("SIMD_OCR_GPU_DUMP") == "1")
             for (int ri = 0; ri < recs.Count; ri++)
                 Console.Error.WriteLine($"rec[{ri}] {recs[ri].Tag} gx={recs[ri].Gx} gy={recs[ri].Gy}");
 
-        bool prof = Environment.GetEnvironmentVariable("SIMD_OCR_GPU_PROF") == "1";
-        bool noBar = Environment.GetEnvironmentVariable("SIMD_OCR_GPU_NOBAR") == "1";
-        IntPtr pool = IntPtr.Zero;
-        if (prof)
+        return new GpuSchedule
         {
-            var qci = new Vk.VkQueryPoolCreateInfo
-            { SType = 11, QueryType = 0, QueryCount = (uint)(recordRecs.Count * 2) };
-            Vk.Check(Vk.vkCreateQueryPool(_dev.Device, &qci, null, out pool), "vkCreateQueryPool");
-        }
-
-        IntPtr cmd = _dev.NewCommandBuffer();
-        unsafe
-        {
-            var begin = new Vk.VkCommandBufferBeginInfo { SType = VkConst.StCommandBufferBeginInfo };
-            Vk.Check(Vk.vkBeginCommandBuffer(cmd, &begin), "begin");
-            if (prof) Vk.vkCmdResetQueryPool(cmd, pool, 0, (uint)(recordRecs.Count * 2));
-            uint q = 0;
-            foreach (Rec r in recordRecs)
-            {
-                if (prof) Vk.vkCmdWriteTimestamp(cmd, VkConst.PipelineStageBottomOfPipe, pool, q++);
-                Vk.vkCmdBindPipeline(cmd, VkConst.BindPointCompute, r.Pipe.Pipeline);
-                IntPtr s = r.Set;
-                Vk.vkCmdBindDescriptorSets(cmd, VkConst.BindPointCompute, r.Pipe.Layout, 0, 1, &s, 0, null);
-                fixed (byte* pp = r.Pc)
-                    Vk.vkCmdPushConstants(cmd, r.Pipe.Layout, VkConst.StageComputeShader,
-                        0, (uint)r.Pc.Length, pp);
-                Vk.vkCmdDispatch(cmd, r.Gx, r.Gy, 1);
-                if (!noBar) _dev.CmdComputeBarrier(cmd);
-                if (prof) Vk.vkCmdWriteTimestamp(cmd, VkConst.PipelineStageBottomOfPipe, pool, q++);
-            }
-            Vk.Check(Vk.vkEndCommandBuffer(cmd), "end");
-        }
-
-        return new Plan
-        {
-            Arena = arena, InF32 = inF32, OutF32 = outF32, Cmd = cmd, Recs = recs,
-            OutElems = (int)numel[outIdx], ArenaBytes = arenaElems * 2,
+            Recs = recs.ToArray(),
+            OutElems = (int)numel[outIdx], InElems = numel[inIdx], ArenaElems = arenaElems,
             Off = off, Alias = alias, Numel = numel, Shapes = shapes,
-            QueryPool = pool, QueryCount = recordRecs.Count * 2,
             Im2colOff = im2colOff,
         };
-    }
-
-    /// <summary>Debug: raw values of a tensor's arena slot.</summary>
-    public unsafe float[] DebugValues(int tensorIndex, int[] inputShape, int count = 16,
-        int nodeLimit = int.MaxValue, int outTensor = -1)
-    {
-        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
-        int t = tensorIndex;
-        while (plan.Alias[t] != t) t = plan.Alias[t];
-        int n = Math.Min(count, (int)plan.Numel[tensorIndex]);
-        VkBuffer tmp = _dev.NewStorageBuffer((ulong)n * 4, hostVisible: true, preferHost: true);
-        IntPtr set = _dev.NewDescriptorSet(_pOut.SetLayout);
-        _dev.BindBuffer(set, 0, plan.Arena, (ulong)plan.Off[t] * 2);
-        _dev.BindBuffer(set, 1, tmp, 0);
-        IntPtr cmd = _dev.NewCommandBuffer();
-        var begin = new Vk.VkCommandBufferBeginInfo { SType = VkConst.StCommandBufferBeginInfo };
-        Vk.Check(Vk.vkBeginCommandBuffer(cmd, &begin), "begin");
-        Vk.vkCmdBindPipeline(cmd, VkConst.BindPointCompute, _pOut.Pipeline);
-        Vk.vkCmdBindDescriptorSets(cmd, VkConst.BindPointCompute, _pOut.Layout, 0, 1, &set, 0, null);
-        byte* pc = stackalloc byte[8];
-        *(uint*)pc = (uint)n; *(uint*)(pc + 4) = 0;
-        Vk.vkCmdPushConstants(cmd, _pOut.Layout, VkConst.StageComputeShader, 0, 8, pc);
-        Vk.vkCmdDispatch(cmd, (uint)((n + 255) / 256), 1, 1);
-        Vk.Check(Vk.vkEndCommandBuffer(cmd), "end");
-        IntPtr f = _dev.NewFence();
-        _dev.Submit(cmd, f);
-        _dev.WaitFence(f);
-        float[] v = new float[n];
-        float* fp = (float*)tmp.Map();
-        for (int i = 0; i < n; i++) v[i] = fp[i];
-        tmp.Unmap();
-        Console.Error.WriteLine($"  [dbg] t={tensorIndex} phys={t} off={plan.Off[t]} n={plan.Numel[tensorIndex]}");
-        return v;
-    }
-
-    public long Im2colOffset(int[] inputShape)
-        => _plans[KeyOf(inputShape, int.MaxValue, -1)].Im2colOff;
-
-    /// <summary>Debug: read raw arena elements at element offset after a Run.</summary>
-    public long DebugElemOff(int tensorIndex, int[] inputShape,
-        int nodeLimit = int.MaxValue, int outTensor = -1)
-    {
-        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
-        int t = tensorIndex;
-        while (plan.Alias[t] != t) t = plan.Alias[t];
-        return plan.Off[t];
-    }
-
-    public unsafe float[] DebugValuesRaw(int[] inputShape, long elemOff, int count,
-        int nodeLimit = int.MaxValue, int outTensor = -1)
-    {
-        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
-        VkBuffer tmp = _dev.NewStorageBuffer((ulong)count * 4, hostVisible: true, preferHost: true);
-        IntPtr set = _dev.NewDescriptorSet(_pOut.SetLayout);
-        _dev.BindBuffer(set, 0, plan.Arena, (ulong)elemOff * 2);
-        _dev.BindBuffer(set, 1, tmp, 0);
-        IntPtr cmd = _dev.NewCommandBuffer();
-        var begin = new Vk.VkCommandBufferBeginInfo { SType = VkConst.StCommandBufferBeginInfo };
-        Vk.Check(Vk.vkBeginCommandBuffer(cmd, &begin), "begin");
-        Vk.vkCmdBindPipeline(cmd, VkConst.BindPointCompute, _pOut.Pipeline);
-        Vk.vkCmdBindDescriptorSets(cmd, VkConst.BindPointCompute, _pOut.Layout, 0, 1, &set, 0, null);
-        byte* pc = stackalloc byte[8];
-        *(uint*)pc = (uint)count; *(uint*)(pc + 4) = 0;
-        Vk.vkCmdPushConstants(cmd, _pOut.Layout, VkConst.StageComputeShader, 0, 8, pc);
-        Vk.vkCmdDispatch(cmd, (uint)((count + 255) / 256), 1, 1);
-        Vk.Check(Vk.vkEndCommandBuffer(cmd), "end");
-        IntPtr f = _dev.NewFence();
-        _dev.Submit(cmd, f);
-        _dev.WaitFence(f);
-        float[] v = new float[count];
-        float* fp = (float*)tmp.Map();
-        for (int i = 0; i < count; i++) v[i] = fp[i];
-        tmp.Unmap();
-        return v;
-    }
-
-    /// <summary>Debug: min/max/mean of a tensor's arena slot (NHWC flat) after a Run.</summary>
-    public unsafe (float Min, float Max, double Mean) DebugStats(int tensorIndex, int[] inputShape,
-        int nodeLimit = int.MaxValue, int outTensor = -1)
-    {
-        Plan plan = _plans[KeyOf(inputShape, nodeLimit, outTensor)];
-        int t = tensorIndex;
-        while (plan.Alias[t] != t) t = plan.Alias[t];
-        int n = (int)plan.Numel[tensorIndex];
-        VkBuffer tmp = _dev.NewStorageBuffer((ulong)n * 4, hostVisible: true, preferHost: true);
-        IntPtr set = _dev.NewDescriptorSet(_pOut.SetLayout);
-        _dev.BindBuffer(set, 0, plan.Arena, (ulong)plan.Off[t] * 2);
-        _dev.BindBuffer(set, 1, tmp, 0);
-        IntPtr cmd = _dev.NewCommandBuffer();
-        var begin = new Vk.VkCommandBufferBeginInfo { SType = VkConst.StCommandBufferBeginInfo };
-        Vk.Check(Vk.vkBeginCommandBuffer(cmd, &begin), "begin");
-        Vk.vkCmdBindPipeline(cmd, VkConst.BindPointCompute, _pOut.Pipeline);
-        Vk.vkCmdBindDescriptorSets(cmd, VkConst.BindPointCompute, _pOut.Layout, 0, 1, &set, 0, null);
-        byte* pc = stackalloc byte[8];
-        *(uint*)pc = (uint)n; *(uint*)(pc + 4) = 0;
-        Vk.vkCmdPushConstants(cmd, _pOut.Layout, VkConst.StageComputeShader, 0, 8, pc);
-        Vk.vkCmdDispatch(cmd, (uint)((n + 255) / 256), 1, 1);
-        Vk.Check(Vk.vkEndCommandBuffer(cmd), "end");
-        IntPtr f = _dev.NewFence();
-        _dev.Submit(cmd, f);
-        _dev.WaitFence(f);
-        float* fp = (float*)tmp.Map();
-        float mn = float.MaxValue, mx = float.MinValue; double s = 0;
-        for (int i = 0; i < n; i++) { float v = fp[i]; mn = MathF.Min(mn, v); mx = MathF.Max(mx, v); s += v; }
-        tmp.Unmap();
-        return (mn, mx, s / n);
-    }
-
-    /// <summary>Per-dispatch GPU timestamps (requires SIMD_OCR_GPU_PROF=1 at plan build).</summary>
-    public unsafe void DumpProfile(int[] inputShape,
-        int nodeLimit = int.MaxValue, int outTensor = -1)
-    {
-        PlanKey key = KeyOf(inputShape, nodeLimit, outTensor);
-        if (!_plans.TryGetValue(key, out Plan? plan) || plan.QueryPool == IntPtr.Zero)
-        { Console.WriteLine("(no profile — set SIMD_OCR_GPU_PROF=1)"); return; }
-        ulong[] ts = new ulong[plan.QueryCount];
-        VkResult qr;
-        fixed (ulong* tp = ts)
-            qr = Vk.vkGetQueryPoolResults(_dev.Device, plan.QueryPool, 0, (uint)plan.QueryCount,
-                (nuint)(ts.Length * 8), tp, 8, 1 | 2);
-        Console.WriteLine($"(query result={qr}, ts0={ts[0]}, ts1={ts[1]}, periodNs={_dev.TimestampPeriodNs})");
-        if (ts.All(t => t == 0))
-        { Console.WriteLine("(timestamps all zero — queue may lack TimestampValidBits)"); return; }
-        var agg = new Dictionary<string, double>();
-        for (int i = 0; i + 1 < plan.QueryCount; i += 2)
-        {
-            double ms = (ts[i + 1] - ts[i]) * _dev.TimestampPeriodNs / 1e6;
-            string tag = plan.Recs[i / 2].Pipe.Name ?? "?";
-            agg[tag] = agg.TryGetValue(tag, out double v) ? v + ms : ms;
-        }
-        double total = agg.Values.Sum();
-        Console.WriteLine($"--- GPU profile ({plan.Recs.Count} dispatches, {total:F2} ms) ---");
-        foreach (var kv in agg.OrderByDescending(k => k.Value))
-            Console.WriteLine($"  {kv.Key,-14} {kv.Value,8:F3} ms");
     }
 
     private static byte[] Pcu(params uint[] v)
@@ -2136,12 +2133,4 @@ internal sealed class GpuDetGraph : IDisposable
     private static uint HsAux(ReadOnlySpan<byte> p) =>
         (uint)Half2Bits(F32(p, 4)) | ((uint)Half2Bits(F32(p, 8)) << 16);
 
-    public void Dispose()
-    {
-        InvalidateAllPlans();
-        _arena?.Free(); _inF32?.Free(); _outF32?.Free();
-        _arena = _inF32 = _outF32 = null;
-        foreach (VkBuffer b in _allBufs) b.Free();
-        _allBufs.Clear();
-    }
 }

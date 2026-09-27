@@ -346,6 +346,120 @@ public sealed class PaddleOcrRecognizer : IDisposable
     }
 
     /// <summary>
+    /// GPU path: every unit (same-target-width line group) of one image runs
+    /// in a single device submission via <see cref="IBatchedCtcSession"/>.
+    /// Units keep their exact widths — no cross-unit padding, so each line's
+    /// activations equal a standalone <see cref="RecognizeBatch"/> of its
+    /// unit. Returns false when the rented session cannot batch (CPU backend /
+    /// fallen back); callers then run the per-unit path, which rewrites every
+    /// entry of <paramref name="results"/>.
+    /// </summary>
+    internal bool TryRecognizeUnitsBatched(byte[] cropBuffer, int[] offsets, int[] cropBytes,
+        int[] widths, int[] heights, IReadOnlyList<int[]> units, int[] recWidths,
+        PaddleOcrRecognitionResult[] results, int intraOpThreads, bool returnCtcAlignment)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
+        if (units.Count == 0) return true;
+        bool profile = PipelineProfiler.Enabled;
+        long t = profile ? PipelineProfiler.Now() : 0;
+        var shapes = new int[units.Count][];
+        long volume = 0;
+        for (int u = 0; u < units.Count; u++)
+        {
+            shapes[u] = [units[u].Length, 3, 48, recWidths[units[u][0]]];
+            volume += (long)units[u].Length * 3 * 48 * recWidths[units[u][0]];
+        }
+        IOcrSession session = RentSessionForVolume(checked((int)volume));
+        session.IntraOpThreads = intraOpThreads;
+        if (profile) PipelineProfiler.Add(PipelineProfiler.RecRent, t);
+        try
+        {
+            if (session is not IBatchedCtcSession batched || !batched.CanRunMany) return false;
+            t = profile ? PipelineProfiler.Now() : 0;
+            Span<float> input = batched.ReshapeMany(shapes);
+            if (profile) PipelineProfiler.Add(PipelineProfiler.RecReshape, t);
+            int total = 0;
+            foreach (int[] unit in units) total += unit.Length;
+            int[] resized = new int[total];
+            long started = profile ? PipelineProfiler.Now() : 0;
+            long pos = 0;
+            int k = 0;
+            for (int u = 0; u < units.Count; u++)
+            {
+                int w = shapes[u][3];
+                int sampleLength = 3 * 48 * w;
+                foreach (int line in units[u])
+                {
+                    int sw = widths[line], sh = heights[line];
+                    if ((long)sw * sh > _options.MaxImagePixels)
+                        throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
+                    resized[k++] = PPOCRPreprocess.Rec(
+                        cropBuffer.AsSpan(offsets[line], cropBytes[line]), sw, sh,
+                        checked(sw * 3), w, input.Slice(checked((int)pos), sampleLength),
+                        session.ResizeWorkspace, session.InputIsNhwc);
+                    pos += sampleLength;
+                }
+            }
+            if (profile) PipelineProfiler.Add(PipelineProfiler.RecPreprocess, started);
+            started = profile ? PipelineProfiler.Now() : 0;
+            if (!batched.TryRunManyUntilCtcProjection(out float[] acts, out int[] actOffsets,
+                    out int[] rows, out CtcHead head))
+                return false;
+            if (head.Columns != ClassCount)
+                throw new InvalidDataException("Recognizer output shape is incompatible with dictionary.");
+            ReadOnlySpan<float> weights = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Weights);
+            ReadOnlySpan<float> bias = head.Bias is null ? []
+                : System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Bias);
+            if (profile) PipelineProfiler.Add(PipelineProfiler.RecGraph, started);
+            k = 0;
+            for (int u = 0; u < units.Count; u++)
+            {
+                int n = units[u].Length, T = rows[u];
+                int rowCount = n * T;
+                int[] indices = PooledArrays.Rent<int>(rowCount);
+                float[] scores = PooledArrays.Rent<float>(rowCount);
+                try
+                {
+                    started = profile ? PipelineProfiler.Now() : 0;
+                    if (!MatMul.TryArgMax(acts.AsSpan(actOffsets[u], rowCount * head.Inner), weights, bias,
+                            indices.AsSpan(0, rowCount), scores.AsSpan(0, rowCount),
+                            n, T, head.Inner, head.Columns, head.Packed, intraOpThreads))
+                        return false;   // caller's per-unit path rewrites every result
+                    if (profile) PipelineProfiler.Add(PipelineProfiler.RecGraph, started);
+                    started = profile ? PipelineProfiler.Now() : 0;
+                    for (int i = 0; i < n; i++, k++)
+                        results[units[u][i]] = Decode([], indices.AsSpan(i * T, T), scores.AsSpan(i * T, T),
+                            T, resized[k], shapes[u][3], false, returnCtcAlignment);
+                    if (profile) PipelineProfiler.Add(PipelineProfiler.RecDecode, started);
+                }
+                finally
+                {
+                    PooledArrays.Return(indices);
+                    PooledArrays.Return(scores);
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            if (!session.GpuAlive) _gpuRecAlive = false;
+            ReturnSession(session);
+        }
+    }
+
+    private IOcrSession RentSessionForVolume(int volume)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrRecognizer));
+        IOcrSession? session = TryTakeBestFit(volume);
+        if (session is null)
+        {
+            session = OnnxSharp.OcrSessionFactory.Create(_compiled, _options.Backend);
+            session.PlanForCtcProjection = true;
+        }
+        return session;
+    }
+
+    /// <summary>
     /// CTC graph + projection. Session stops before the vocab MatMul; this
     /// method owns compact ArgMax scratch via ArrayPool (Recognizer is
     /// concurrent across rented sessions, so instance fields are unsafe).

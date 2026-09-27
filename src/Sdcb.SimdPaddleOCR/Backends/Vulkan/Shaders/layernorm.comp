@@ -1,0 +1,62 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+// Row LayerNorm over the contiguous last axis (the compiler-fused
+// ReduceMean/Sub/Pow/ReduceMean/Add/Sqrt/Div/Mul/Add chain):
+//   y[r, c] = (x[r, c] - mean_r) / sqrt(var_r + eps) * g[c] + b[c]
+// One 64-lane workgroup per row, fp32 statistics; C <= 64*16.
+// PC: rows, C, eps (fp32 bits)
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0) readonly buffer X { float16_t x[]; };
+layout(set = 0, binding = 1) readonly buffer G { float g[]; };
+layout(set = 0, binding = 2) readonly buffer B { float bt[]; };
+layout(set = 0, binding = 3) writeonly buffer O { float16_t o[]; };
+
+layout(push_constant) uniform PC { uint rows; uint C; uint eps; } p;
+
+shared float red[64];
+
+float wgSum(float v, uint t)
+{
+    red[t] = v;
+    barrier();
+    for (uint k = 32u; k > 0u; k >>= 1) {
+        if (t < k) red[t] += red[t + k];
+        barrier();
+    }
+    float s = red[0];
+    barrier();
+    return s;
+}
+
+void main()
+{
+    uint r = gl_WorkGroupID.x;
+    if (r >= p.rows) return;   // uniform across the workgroup
+    uint t = gl_LocalInvocationID.x;
+    uint base = r * p.C;
+    float v[16];
+    float s = 0.0;
+    for (uint i = 0u; i < 16u; i++) {
+        uint c = t + i * 64u;
+        v[i] = c < p.C ? float(x[base + c]) : 0.0;
+        s += v[i];
+    }
+    float mean = wgSum(s, t) / float(p.C);
+    float q = 0.0;
+    for (uint i = 0u; i < 16u; i++) {
+        uint c = t + i * 64u;
+        float d = c < p.C ? v[i] - mean : 0.0;
+        q += d * d;
+    }
+    float var = wgSum(q, t) / float(p.C);
+    float inv = 1.0 / sqrt(var + uintBitsToFloat(p.eps));
+    for (uint i = 0u; i < 16u; i++) {
+        uint c = t + i * 64u;
+        if (c < p.C) o[base + c] = float16_t((v[i] - mean) * inv * g[c] + bt[c]);
+    }
+}

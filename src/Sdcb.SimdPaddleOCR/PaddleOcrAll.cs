@@ -412,31 +412,12 @@ public sealed class PaddleOcrAll : IDisposable
                         widths, heights, labels, clsScores, rotations, recWidths));
             }
 
+            // Exact-width groups: each unit runs at its members' own target
+            // width, so no line sees extra padding. That matters for SVTR
+            // recognizers (global attention mixes every column, so padding a
+            // line past its bucket changes its logits) and costs nothing on
+            // GPU, where all units of the image go out in one submission.
             List<int[]> units;
-            // GpuRecAlive flips false once a session reports its rec plan fell
-            // back to CPU — giant single-unit batches only help real GPU runs;
-            // on the CPU fallback they'd serialize lines and pad to max width.
-            if (_recGpu && _recognizer.GpuRecAlive)
-            {
-                // GPU: a whole-graph dispatch has fixed submit/plan overhead, so
-                // tiny exact-width groups lose. Sort by width and chunk by
-                // maxBatch; each unit runs at its max member width — right-side
-                // zero padding only adds blank columns to the CTC output.
-                int[] order = Enumerable.Range(0, count).ToArray();
-                Array.Sort(order, (a, b) => recWidths[a].CompareTo(recWidths[b]));
-                units = [];
-                for (int s = 0; s < count; s += maxBatch)
-                {
-                    int len = Math.Min(s + maxBatch, count) - s;
-                    int[] unit = new int[len];
-                    Array.Copy(order, s, unit, 0, len);
-                    int wMax = 0;
-                    foreach (int li in unit) wMax = Math.Max(wMax, recWidths[li]);
-                    foreach (int li in unit) recWidths[li] = wMax;
-                    units.Add(unit);
-                }
-            }
-            else
             {
                 Dictionary<int, List<int>> groups = [];
                 units = [];
@@ -461,7 +442,16 @@ public sealed class PaddleOcrAll : IDisposable
             // same-width group may shard across the whole machine.
             int unitIntraOp = MathCompat.Clamp(_recIntraOpBase * _lineWorkers / unitWorkers,
                 _recIntraOpBase, _recIntraOpMax);
-            if (workerCount <= 1 || units.Count <= 1)
+            // GpuRecAlive flips false once a session reports its rec graph fell
+            // back to CPU; then the per-unit CPU-shaped path below takes over.
+            long recStart = s_profileEnabled ? Stopwatch.GetTimestamp() : 0;
+            if (_recGpu && _recognizer.GpuRecAlive
+                && _recognizer.TryRecognizeUnitsBatched(cropBuffer, offsets, bytes, widths, heights,
+                    units, recWidths, recResults, _recIntraOpMax, returnCtcAlignment))
+            {
+                if (s_profileEnabled) AddProfile(4, recStart);
+            }
+            else if (workerCount <= 1 || units.Count <= 1)
             {
                 foreach (int[] unit in units)
                     RecognizeUnit(unit, unitIntraOp, cropBuffer, offsets, bytes, widths, heights, recWidths,

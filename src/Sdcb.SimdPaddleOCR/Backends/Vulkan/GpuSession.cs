@@ -9,10 +9,11 @@ namespace Sdcb.SimdPaddleOCR.Backends.Vulkan;
 /// via <see cref="GpuDetGraph"/>. InputData is a managed staging span uploaded
 /// on each run; the CTC tail matches <see cref="InferenceSession"/>'s contract
 /// (stop before the vocab MatMul, hand operands to the shared CPU ArgMax).
-/// One VkDevice is shared process-wide; per-session GPU work is serialized by
-/// a device-wide lock (the queue serializes anyway).
+/// One VkDevice is shared process-wide; weights/pipelines/schedules are shared
+/// per model, while each session owns its buffers and command buffer, so
+/// sessions only serialize on the queue submit itself.
 /// </summary>
-internal sealed class GpuSession : IOcrSession
+internal sealed class GpuSession : IOcrSession, IBatchedCtcSession
 {
     private readonly VkDevice _dev;
     private readonly GpuDetGraph _graph;
@@ -81,8 +82,7 @@ internal sealed class GpuSession : IOcrSession
         if (_gpuDead) return Cpu().RunInternal(CpuInput(input));
         try
         {
-            lock (_dev.Sync)
-                return _graph.Run(_shape, input);
+            return _graph.Run(_shape, input);
         }
         catch (Exception ex)
         {
@@ -103,8 +103,7 @@ internal sealed class GpuSession : IOcrSession
         float[] act;
         try
         {
-            lock (_dev.Sync)
-                act = _graph.Run(_shape, input, _ctcMatMulIndex, _ctcActTensor);
+            act = _graph.Run(_shape, input, _ctcMatMulIndex, _ctcActTensor);
         }
         catch (Exception ex)
         {
@@ -116,6 +115,63 @@ internal sealed class GpuSession : IOcrSession
             MemoryMarshal.Cast<byte, float>(_ctcWBytes),
             _ctcBiasBytes is null ? [] : MemoryMarshal.Cast<byte, float>(_ctcBiasBytes),
             _ctcPacked, _ctcBatch, _ctcRows, _ctcInner, _ctcColumns, _ctcMatMulIndex);
+        return true;
+    }
+
+    // ---- IBatchedCtcSession: several REC shapes, one GPU submission ----
+    private int[][] _many = [];
+    private int _manyVolume;
+
+    public bool CanRunMany => !_gpuDead && !_disposed;
+
+    public Span<float> ReshapeMany(IReadOnlyList<int[]> shapes)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(GpuSession));
+        _many = [.. shapes];
+        long vol = 0;
+        foreach (int[] s in _many)
+        {
+            long v = 1;
+            foreach (int d in s) v *= Math.Max(d, 1);
+            vol += v;
+        }
+        _manyVolume = checked((int)vol);
+        if (vol > _input.Length)
+        {
+            _input = new float[vol];
+            _hwVolume = _manyVolume;
+        }
+        // single-shape members (CTC resolution, fallback) key off the first unit
+        Reshape(_many[0]);
+        return _input.AsSpan(0, _manyVolume);
+    }
+
+    public bool TryRunManyUntilCtcProjection(out float[] activations, out int[] actOffsets,
+        out int[] rows, out CtcHead head)
+    {
+        activations = []; actOffsets = []; rows = []; head = null!;
+        if (!CanRunMany || _many.Length == 0) return false;
+        ResolveCtcProjection();
+        if (_ctcMatMulIndex < 0) return false;
+        rows = new int[_many.Length];
+        for (int i = 0; i < _many.Length; i++)
+            rows[i] = _compiled.ResolveShapesFor(_many[i])[_ctcActTensor][^2];
+        try
+        {
+            activations = _graph.RunMany(_many, _input.AsSpan(0, _manyVolume), out actOffsets,
+                _ctcMatMulIndex, _ctcActTensor);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[gpu] RunMany fallback: {ex.GetType().Name} {ex.Message}");
+            _gpuDead = true;
+            return false;
+        }
+        head = new CtcHead
+        {
+            Weights = _ctcWBytes!, Bias = _ctcBiasBytes, Packed = _ctcPacked,
+            Inner = _ctcInner, Columns = _ctcColumns, MatMulIndex = _ctcMatMulIndex,
+        };
         return true;
     }
 

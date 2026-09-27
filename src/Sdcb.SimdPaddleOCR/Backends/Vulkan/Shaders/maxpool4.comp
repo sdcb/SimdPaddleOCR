@@ -6,6 +6,7 @@
 // MaxPool 2x2 stride 1, pad-end (right/bottom 1), NHWC fp16, 4 ch (C%4==0).
 // PC: W, H, C, dstCv, dstCoff
 //   dstCv != 0: write into a wider-C tensor (concat slice).
+// gy = batch index (per-image slabs are contiguous in NHWC).
 
 layout(local_size_x = 256) in;
 
@@ -22,6 +23,8 @@ void main()
     uint c4 = gid % cv;
     uint px = gid / cv;
     uint y = px / p.W, xx = px % p.W;
+    uint b = gl_GlobalInvocationID.y;
+    uint xb = b * p.W * p.H * cv;
 
     f16vec4 m = f16vec4(float16_t(-1.0e4));
     for (uint dy = 0u; dy < 2u; dy++) {
@@ -30,10 +33,10 @@ void main()
         for (uint dx = 0u; dx < 2u; dx++) {
             uint ix = xx + dx;
             if (ix >= p.W) continue;
-            f16vec4 v = x[(iy * p.W + ix) * cv + c4];
+            f16vec4 v = x[xb + (iy * p.W + ix) * cv + c4];
             m = max(m, v);
         }
     }
     uint dcv = p.dstCv != 0u ? p.dstCv : cv;
-    o[px * dcv + p.dstCoff + c4] = m;
+    o[(b * p.W * p.H + px) * dcv + p.dstCoff + c4] = m;
 }

@@ -45,6 +45,7 @@ float16_t actf(float v, uint act, uint flg)
     if (act == 2u) return float16_t(0.5 * v * (1.0 + erf1(v * 0.70710678118654752)));
     if (act == 3u) { float a = unpackHalf2x16(flg >> 16).x; float hs = clamp(v * a + 0.5, 0.0, 1.0); return float16_t(v * hs); }
     if (act == 4u) return float16_t(1.0 / (1.0 + exp(-v)));
+    if (act == 5u) return float16_t(v / (1.0 + exp(-v)));   // swish x*sigmoid(x)
     return float16_t(v);
 }
 
