@@ -160,20 +160,44 @@ x64 / ARM64 本库 peak 大约少 **300 MB**。c 仍然略省，但更慢。Open
 
 1.4.2 JSON：`bench-out/local-5800x-{tiny,small,medium}-4w.json`、`bench-out/local-5800x-ns2-{tiny,small,medium}-4w.json`。1.3：`bench-out/local-5800x-v13-{net10,ns2}-{tiny,small,medium}-4w.json`。
 
-### Vulkan GPU（RTX 3080 Ti，`b9ff975`）
+### Vulkan GPU（RTX 3080 Ti，`26ad4c3`）
 
-同机同尺：HOME-MAIN 5800X + RTX 3080 Ti（Vulkan 1.1，sg32 coopmat 路径，`conv1x1_cm_sg32`），PR #18 的 `--engine vulkan --workers 4`，同一 `dataset/` 100 张变尺寸图（对 GPU 最不利的逐图新 shape 场景）。CPU 列即上表 1.4.2 net10 AVX2。墙钟 n=99，warmup=1。
+同机同轮：HOME-MAIN 5800X + RTX 3080 Ti，`.NET 10.0.11`，`--engine sharp|vulkan --workers 4 --benchmark-kind simd --warmup 1`，同一 `dataset/` 100 张变尺寸图（对 GPU 最不利的逐图新 shape）。墙钟 n=99。**CPU 列是同轮重测**，不要拿上表 1.4.2 的 `97c1448` mean 硬接（那次 tiny 63.1 / small 200 / medium 585）。B580 另一台机、另一份尺子，见 [vulkan-b580.md](vulkan-b580.md)。
 
-| 模型   | Vulkan mean | CPU mean | 比值（越低越好） | Vulkan peak WS | Vulkan exact_lines | CPU exact_lines | Vulkan CER | CPU CER |
-| ------ | ----------: | -------: | ---------------: | -------------: | -----------------: | --------------: | ---------: | ------: |
-| tiny   |    **58.6** |    63.1  |           0.93×  |       1035 MB  |        679/1036    |      742/1036   |     2.89%  |  2.37%  |
-| small  |   **172.3** |   200.0  |           0.86×  |        998 MB  |        949/1036    |      950/1036   |     0.40%  |  0.41%  |
-| medium |   **542.7** |   585.0  |           0.93×  |       1460 MB  |       1003/1036    |     1004/1036   |     0.15%  |  0.14%  |
+端到端（median ms/图，越低越好；加速 = CPU median / Vulkan median）：
 
-- 三档墙钟全部反超 CPU（0.86–0.93×）；det 与 cls 全程走 GPU。small/medium 的 rec 尾部 SVTR 算子（Transpose/Slice/ReduceMean[-1]/MaxPool n>1）尚未 emit、整段回落 CPU，与 B580 同构——`rec_graph` 因此仍是最大头（medium 1173ms mean）。
-- small/medium 准确率与纯 CPU 持平（差 1 行以内、CER 持平）；tiny 差 63 行，逐行 diff 显示大头是 fp16 近平局翻转的空格/单字符噪声（`fox`→`foX`、`320像素的 REC`→`REC`），另有 img-001 / img-014 各丢一个 det 框。
-- 工作集已有界：plan LRU=16 + 共享 grow-only arena/inF32/outF32 + `vkFreeDescriptorSets`/`vkFreeCommandBuffers` 真释放；peak 后不再爬升。
-- JSON：`bench-out/vk2/{tiny,small,medium}-4w.json`（本分支 worktree）。复现：`--engine vulkan --workers 4 --model {tiny,small,medium} --input dataset`。
+| 模型   | CPU median | Vulkan median |     加速 | CPU mean | Vulkan mean | CPU img/s | GPU img/s | CPU peak | Vulkan peak |
+| ------ | ---------: | ------------: | -------: | -------: | ----------: | --------: | --------: | -------: | ----------: |
+| tiny   |       50.8 |        **19.6** | **2.6×** |     56.7 |        24.3 |     17.62 |     41.11 |  520 MB |     661 MB |
+| small  |      164.0 |        **34.6** | **4.7×** |    166.6 |        38.0 |      6.00 |     26.28 |  680 MB |     703 MB |
+| medium |      563.4 |       **126.5** | **4.5×** |    553.1 |       126.0 |      1.81 |      7.94 | 1208 MB |     984 MB |
+
+分阶段 mean ms/图（4w 下算子重叠，之和可以大于墙钟）：
+
+| 模型   | 阶段      |    CPU | Vulkan | 加速 |
+| ------ | --------- | -----: | -----: | ---: |
+| tiny   | det_graph |   22.3 |    6.4 | 3.5× |
+| tiny   | cls_graph |   16.0 |    1.1 |  14× |
+| tiny   | rec_graph |   71.1 |    6.4 |  11× |
+| small  | det_graph |   68.0 |    7.5 | 9.1× |
+| small  | cls_graph |   16.1 |   0.88 |  18× |
+| small  | rec_graph |  307.3 |   19.8 |  16× |
+| medium | det_graph |  199.3 |   40.4 | 4.9× |
+| medium | cls_graph |   15.6 |   0.85 |  18× |
+| medium | rec_graph | 1250.3 |   77.1 |  16× |
+
+正确率（100 张满勤，1036 行）：
+
+| 模型   | CPU exact_lines | Vulkan exact_lines | CPU CER | Vulkan CER | CPU exact_img | Vulkan exact_img |
+| ------ | --------------: | -----------------: | ------: | ---------: | ------------: | ---------------: |
+| tiny   |        742/1036 |           740/1036 |   2.37% |      2.36% |         5/100 |            5/100 |
+| small  |        950/1036 |           950/1036 |   0.41% |      0.40% |        44/100 |           44/100 |
+| medium |       1004/1036 |          1005/1036 |   0.14% |      0.14% |        71/100 |           72/100 |
+
+- 三档墙钟全部大幅反超 CPU（**2.6× / 4.7× / 4.5×**）。相对 `b9ff975` 的 0.86–0.93×：那时 small/medium 的 SVTR rec 尾部未 emit、整段回落 CPU；这次 `rec_graph` 是 **11–16×**，tiny/small/medium 都真走 GPU。
+- 准确率与纯 CPU 持平：tiny 差 2 行、CER 还略低；small 行精确完全一致；medium GPU 多对 1 行。cls 全对。`b9ff975` 那次 tiny 曾掉到 679/1036（CER 2.89%），这次已收回。
+- 工作集有界，peak 后不再爬升。tiny / small GPU 略高于 CPU（661 / 703 vs 520 / 680）；medium GPU 更省（984 vs 1208）。
+- JSON：`artifacts/local-{tiny,small,medium}-4w-{cpu,vulkan}.json`。复现：`--engine sharp|vulkan --workers 4 --model {tiny,small,medium} --input dataset --warmup 1`。
 
 ### lw.PPOCR.C 4w（`20d0de6`）
 
@@ -197,6 +221,7 @@ JSON：`bench-out/local-5800x-c-{tiny,small,medium}-4w.json`。
 | 1.4 前一次 | [35217602432](https://github.com/sdcb/SimdPaddleOCR/actions/runs/35217602432) | `67cf1fa` | 内核已是后来的 1.4.2 墙钟；用来给 win-x64 7763 补样本 |
 | **1.4.2**  | [35513018083](https://github.com/sdcb/SimdPaddleOCR/actions/runs/35513018083) | `68a009a` | 当前口径。准度：sharp **767/1032、CER 2.36%**；c **764/1032、3.03%**。墙钟中位表不重写 |
 | 本机 5800X | —                                                                             | `97c1448` / `68a009a` | 墙钟/内存 `97c1448`；CER 左 1:4 后同机复测（1.4.2） |
+| 本机 Vulkan | —                                                                            | `26ad4c3` | 5800X + 3080 Ti 同轮 sharp/vulkan 4w；tiny/small/medium |
 
 推送或手动触发 [`.github/workflows/test.yml`](../.github/workflows/test.yml)，下载 `perf-report` artifact。本地同一套数据：
 
@@ -206,4 +231,4 @@ dotnet build test/Sdcb.SimdPaddleOCR.Tests -c Release -o artifacts/net10
 artifacts/net10/Sdcb.SimdPaddleOCR.Tests --benchmark --engine sharp --workers 4 --model tiny --input dataset --out bench-out/tiny-4w.json
 ```
 
-C 另加 `--engine c --c-assets bench-out/c-runtime`。`--summarize` 可并排多份 JSON。
+C 另加 `--engine c --c-assets bench-out/c-runtime`。Vulkan 另加 `--engine vulkan`。`--summarize` 可并排多份 JSON。
