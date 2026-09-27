@@ -69,3 +69,17 @@ small/medium 的 rec 回落 CPU 后输出与纯 CPU 逐行一致,残余 ~0.3% �
 3. **det fp16 边界丢框(img-014,已定位):** CPU 16 框 / GPU 15 框 —— GPU 把右侧两个竖排条带合并。根因:单个桥接像素 (918,71) 概率 cpu=0.1892 vs gpu=0.2020 跨过 0.2 bitmap 阈值;全图 400K 像素仅 15 个阈值翻转且全部落在 [0.189,0.205] 窄带,输出 map maxAbs=0.029 即 ~50 节点 fp16 存储的累计噪声(最大的是 FPN concat t399 elemMax=0.41,张量量程 ±160 时 fp16 ulp≈0.125)。**非 kernel bug**:同一输入用 GDI+ 解码跑纯 CPU 也合并(15 行),本来就是临界输入;唯一实质性修法是 fp32 arena,代价是带宽翻倍。暂不修,记为已知限制。
 4. per-dispatch ~55µs 固定开销 × 78 dispatch ≈ 4.3ms/Run 下限 —— 继续融合或 push-descriptor 直录可压。
 5. `_dev.Sync` 全局锁串行 det/rec —— 双流 overlap 未做。
+
+## 目标框架:GPU 仅 net10.0,netstandard2.0 不走 Vulkan
+
+`Backends/Vulkan/**` 在 ns2.0 下整目录 `Compile Remove`,`OcrSessionFactory` 在该 TFM 上恒返回 CPU session。**这不是能力限制而是刻意的维护决策**——实测过一遍 API 差距,全部可移植但没有一处是免费的:
+
+| ns2.0 缺的 API | 用量 | 移植代价 |
+|---|---|---|
+| `LibraryImport`(net7+ source-gen P/Invoke) | 59 个入口 | 退回 `DllImport` 或自写委托加载——失去 source-gen marshal 的可维护性收益,这是有意保留的现代写法 |
+| `NativeLibrary.SetDllImportResolver`(net5+) | 1 处 | 用于定位 vulkan-1.dll/libvulkan.so.1;ns2.0 只能 kernel32 `LoadLibrary`/libdl `dlopen` 手写 loader,又要一套平台分叉 |
+| `System.Half`(net5+) | ~40 处 | fp16 权重转换;可换成 ushort+位运算 helper,但多一条自编码路径要维护 |
+| `BitConverter.SingleToUInt32Bits`(ns2.1+) | 1 处 | 一行 unsafe 转换,小事 |
+| `MathF`/`Span`/`MemoryMarshal`/`ArrayPool`/`stackalloc`/`delegate*` | 多处 | 已有 BCL 包(`System.Memory`/`Unsafe`/`Microsoft.Bcl.Numerics`)或语言特性,均可直接用 |
+
+结论:移植是纯体力活(~半天),但会在 P/Invoke 层和 loader 层各长出第二套实现。ns2.0 的定位本来就是 best-effort 兼容旧消费方,而 GPU 场景的用户天然在 modern .NET 上;为不让两份 Vulkan 互操作代码同步腐烂,决定 **ns2.0 只留 CPU**。若未来真有需求(如 .NET Framework 应用要吃 GPU),再按上表做一次性移植即可。
