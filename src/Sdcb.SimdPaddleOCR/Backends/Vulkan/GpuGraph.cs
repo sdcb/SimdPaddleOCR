@@ -73,8 +73,9 @@ internal sealed class GpuGraphModel
         _pResize, _pResize4, _pResize4Add, _pConcat, _pConcat4, _pNchw, _pOut, _pIm2col,
         _pAddPs, _pSeA, _pSeB, _pSeF, _pConvD, _pConvDF32, _pCatRes,
         _pAvg4, _pAffine, _pLn, _pAttn, _pDotSk;
-    // sg32 only: implicit-GEMM kxk conv on coopmat (128x128 / 128x64 / 128x32)
-    private readonly VkPipeline? _pConvK, _pConvKN64, _pConvKN32;
+    // sg32 only (128x128 / 128x64 / 128x32 tiles): implicit-GEMM kxk conv,
+    // SE-prescaled pointwise conv
+    private readonly VkPipeline? _pConvK, _pConvKN64, _pConvKN32, _pConvPs, _pConvPsN64, _pConvPsN32;
 
     // fp16 copies of constant tensors (weights, biases, scalars), lazy
     private readonly Dictionary<(int, int, int, int), VkBuffer> _constF16 = new();
@@ -186,6 +187,9 @@ internal sealed class GpuGraphModel
             _pConv1x1 = Pipe("conv1x1_cm_sg32", 6, 16, 32);
             _pConv1x1N64 = Pipe("conv1x1_cm_sg32_n64", 6, 16, 32);
             _pConv1x1N32 = Pipe("conv1x1_cm_sg32_n32", 6, 16, 32);
+            _pConvPs = Pipe("conv1x1_cm_sg32_ps", 7, 20, 32);
+            _pConvPsN64 = Pipe("conv1x1_cm_sg32_ps_n64", 7, 20, 32);
+            _pConvPsN32 = Pipe("conv1x1_cm_sg32_ps_n32", 7, 20, 32);
             _pConvK = Pipe("convk_cm_sg32", 6, 68, 32);
             _pConvKN64 = Pipe("convk_cm_sg32_n64", 6, 68, 32);
             _pConvKN32 = Pipe("convk_cm_sg32_n32", 6, 68, 32);
@@ -1204,11 +1208,11 @@ internal sealed class GpuGraphModel
                         bool dotOk = cout % 4 == 0 && scalarBias == 0
                             && (cinIn <= 128 || (hasPs && cinIn <= 256))
                             && Environment.GetEnvironmentVariable("SIMD_OCR_NODOT") == null;
-                        // sg32 coopmat outruns the dot kernel once the output
-                        // leaves split-K range; prescaled / addps-absorbed
-                        // inputs need the dot kernel's fused read
-                        if (dotOk && _sg32 && !hasPs && (long)M * cout > 1L << 18
-                            && !addpsSrc.ContainsKey(Phys(checked((int)node.Inputs[0]))))
+                        // sg32 coopmat (SE prescale included) outruns the dot
+                        // kernel once the output leaves split-K range;
+                        // addps-absorbed inputs need the dot kernel's fused read
+                        if (dotOk && _sg32 && (long)M * cout > 1L << 18
+                            && (hasPs || !addpsSrc.ContainsKey(Phys(checked((int)node.Inputs[0])))))
                             dotOk = false;
                         if (dotOk)
                         {
@@ -1244,13 +1248,21 @@ internal sealed class GpuGraphModel
                         else
                         {
                             var (cp, tm, tn) = CmTile(cout);
-                            Emit(cp, $"conv1x1 n{ni} {M}x{cin}x{cout}",
-                                [(arena, SlotOf(node.Inputs[0]), 2), (wbuf, 0, 2),
+                            (VkBuffer, long, int)[] cb =
+                                [(arena, hasPs ? SlotOf(psv.x) : SlotOf(node.Inputs[0]), 2), (wbuf, 0, 2),
                                  (biasBuf, 0, 2),
                                  (arena, resT != uint.MaxValue ? SlotOf(resT) : 0, 2),
                                  (arena, off[outPhys], 2),
-                                 (arena, dualT != uint.MaxValue ? SlotOf(dualT) : 0, 2)],
-                                [M, (uint)cout, (uint)cinIn, flags],
+                                 (arena, dualT != uint.MaxValue ? SlotOf(dualT) : 0, 2)];
+                            uint[] cpc = [M, (uint)cout, (uint)cinIn, flags];
+                            if (hasPs && _pConvPs is not null)
+                            {
+                                cp = cp == _pConv1x1N32 ? _pConvPsN32!
+                                   : cp == _pConv1x1N64 ? _pConvPsN64! : _pConvPs;
+                                cb = [.. cb, (arena, SlotOf(psv.se), 2)];
+                                cpc = [.. cpc, mImg];
+                            }
+                            Emit(cp, $"conv1x1 n{ni} {M}x{cin}x{cout}", cb, cpc,
                                 (M + tm - 1) / tm, (uint)((cout + tn - 1) / tn));
                         }
                     }

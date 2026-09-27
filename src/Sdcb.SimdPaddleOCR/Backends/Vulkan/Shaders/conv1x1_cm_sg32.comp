@@ -27,6 +27,10 @@
 // tap-major [N, kDim] repack with zeroed k in [kReal, kDim).
 // dstC != 0: write into a wider-C tensor (concat slice) at column dstOff.
 //
+// PRESCALE: GEMM whose A rows are scaled per input channel on the way into
+// shared memory (the SE gate of a skipped Mul; binding 6, pc mImg). A
+// separate variant: its registers cost the plain GEMM ~10%.
+//
 // flags: bit0 hasBias, bit1 hasResidual, bit3 dual output, bits[4:7] activation
 //   act: 0=none 1=relu 2=gelu 3=hardswish(x*hs(x)) 4=sigmoid
 
@@ -79,6 +83,12 @@ layout(push_constant) uniform PC {
     uint outW; uint mImg; uint inW; uint inH; uint cin; uint kW;
     uint sH; uint sW; uint pT; uint pL; uint kReal; uint dstC; uint dstOff;
 } p;
+#elif defined(PRESCALE)
+// PRESCALE: A[m, k] *= sc[(m / mImg) * kDim + k] — the SE gate of a skipped
+// Mul, per batch image (mImg = rows per image, 0 = one image)
+layout(set = 0, binding = 6) readonly buffer Scale { f16vec4 sc[]; };
+layout(set = 0, binding = 6) readonly buffer Scale8 { uvec4 sc8[]; };
+layout(push_constant) uniform PC { uint mDim; uint nDim; uint kDim; uint flags; uint mImg; } p;
 #else
 layout(push_constant) uniform PC { uint mDim; uint nDim; uint kDim; uint flags; } p;
 #endif
@@ -116,6 +126,9 @@ uvec4 pack8(f16vec4 a, f16vec4 b)
 // base pixel; rows past mDim get an origin that never lands in the image
 int rowY[LA], rowX[LA];
 uint rowB[LA];
+#elif defined(PRESCALE)
+uint rowS[LA];       // per staged A row: its image's scale vector (vec4 units)
+uvec4 rsc[LA];       // prescale quads of the slice in flight
 #endif
 
 // Quad kq of slice kt for every staged row. Loads are unconditional from
@@ -153,6 +166,12 @@ void loadSlice(out uvec4 ra[LA], out uvec4 rb[LB], out uint va, out uint vb,
         va |= (rok && klo ? 1u : 0u) << (2u * i);
         va |= (rok && khi ? 2u : 0u) << (2u * i);
     }
+#ifdef PRESCALE
+    [[unroll]] for (uint i = 0u; i < LA; i++) {
+        if (wide) rsc[i] = sc8[(rowS[i] >> 1) + qc];
+        else rsc[i] = pack8(sc[rowS[i] + v0], sc[rowS[i] + v1]);
+    }
+#endif
 #endif
     [[unroll]] for (uint i = 0u; i < LB; i++) {
         uint gn = n0 + r0 + i * RSTEP;
@@ -171,6 +190,10 @@ void storeSlice(uvec4 ra[LA], uvec4 rb[LB], uint va, uint vb, uint buf, uint r0,
         uint o = buf * BM * LDS + (r0 + i * RSTEP) * LDS + kq * 2u;
         f16vec4 lo = f16vec4(unpackFloat2x16(ra[i].x), unpackFloat2x16(ra[i].y));
         f16vec4 hi = f16vec4(unpackFloat2x16(ra[i].z), unpackFloat2x16(ra[i].w));
+#ifdef PRESCALE
+        lo = f16vec4(vec4(lo) * vec4(unpackFloat2x16(rsc[i].x), unpackFloat2x16(rsc[i].y)));
+        hi = f16vec4(vec4(hi) * vec4(unpackFloat2x16(rsc[i].z), unpackFloat2x16(rsc[i].w)));
+#endif
         sA[o] = (va & (1u << (2u * i))) != 0u ? lo : f16vec4(0.0hf);
         sA[o + 1u] = (va & (2u << (2u * i))) != 0u ? hi : f16vec4(0.0hf);
     }
@@ -215,6 +238,11 @@ void main()
         rowY[i] = gm < p.mDim ? int(oy * p.sH) - int(p.pT) : -0x10000;
         rowX[i] = int(ox * p.sW) - int(p.pL);
         rowB[i] = b * p.inH * p.inW;
+    }
+#elif defined(PRESCALE)
+    [[unroll]] for (uint i = 0u; i < LA; i++) {
+        uint gm = min(m0 + r0 + i * RSTEP, p.mDim - 1u);
+        rowS[i] = p.mImg != 0u ? gm / p.mImg * kv : 0u;
     }
 #endif
 
