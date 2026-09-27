@@ -67,6 +67,11 @@ internal static partial class MatMul
         Span<int> indices, Span<float> scores, ReadOnlySpan<int> batches, ReadOnlySpan<int> rows,
         int inner, int columns, float[]? packedWeights, int threads = 1)
     {
+        #if !NETSTANDARD2_0
+        if (TryArgMaxUnitsColumnsAvx512(input, weights, bias, indices, scores, batches, rows,
+                inner, columns, packedWeights, threads))
+            return true;
+        #endif
         int start = 0;
         for (int u = 0; u < batches.Length;)
         {
