@@ -3,7 +3,7 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
 
-// Depthwise conv, shared-tile variant of conv_dw4 (requires C%4==0, k<=5, s<=2).
+// Depthwise conv, shared-tile variant of conv_dw4 (requires C%4==0, k<=9, s<=2).
 // Workgroup = 256 threads covering a 16x16 output tile x 4 channels.
 // The (16*s+k-1)^2 input halo tile is staged once in shared memory instead of
 // every thread re-reading kH*kW global values.
@@ -25,9 +25,9 @@ layout(push_constant) uniform PC {
     uint sh; uint sw; uint pt; uint pl; uint inW; uint inH; uint flags;
 } p;
 
-// worst tile: s=2,k=5 -> 16*2+4 = 36 px per side -> 1296 f16vec4 = 10.4 KB
-shared f16vec4 shTile[36 * 36];
-shared f16vec4 shW[25];   // kH*kW <= 25 taps for this channel-quad
+// worst tile: s=2,k=9 -> 16*2+8 = 40 px per side -> 1600 f16vec4 = 12.8 KB
+shared f16vec4 shTile[40 * 40];
+shared f16vec4 shW[81];   // kH*kW <= 81 taps for this channel-quad
 
 float erf1(float v)
 {

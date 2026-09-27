@@ -820,6 +820,10 @@ internal sealed class GpuGraphModel
             return r;
         }
         uint Div256(long n) => (uint)((n + 255) / 256);
+        // depthwise convs on the shared-tile kernel (emit and addps absorb
+        // must agree); sg32 also tiles the 9x9 taps
+        bool DwTiled(int kh, int kw, int sh, int sw) =>
+            kh <= (_sg32 ? 9 : 5) && kw <= (_sg32 ? 9 : 5) && sh <= 2 && sw <= 2;
         // spatial-reduce partitions: ~512 px per workgroup (a 16-WG cap left
         // most of the GPU idle on large DET maps), bounded by partial storage
         int PartSplits(int hw, int c) =>
@@ -873,8 +877,7 @@ internal sealed class GpuGraphModel
                         sH2 = I32(cp, 16), sW2 = I32(cp, 20);
                     int grp2 = Math.Max(1, checked((int)U32(cp, 4)));
                     if (grp2 == cin2 && cout2 == cin2)
-                        return cin2 % 4 == 0 && kH2 <= 5 && kW2 <= 5
-                            && sH2 <= 2 && sW2 <= 2;              // conv_dw4t
+                        return cin2 % 4 == 0 && DwTiled(kH2, kW2, sH2, sW2);  // conv_dw4t
                     if (grp2 == 1 && kH2 == 1 && kW2 == 1 && sH2 == 1 && sW2 == 1)
                     {
                         int cinI2 = (srcPhys == inIdx && cin2 % 4 != 0) ? 4 : cin2;
@@ -1270,7 +1273,7 @@ internal sealed class GpuGraphModel
                     {
                         if (cin % 4 == 0)
                         {
-                            if (kH <= 5 && kW <= 5 && sH <= 2 && sW <= 2)
+                            if (DwTiled(kH, kW, sH, sW))
                             {
                                 // shared-tile variant: ~kH*kW less global traffic
                                 uint tx = (uint)((outW + 15) / 16),
