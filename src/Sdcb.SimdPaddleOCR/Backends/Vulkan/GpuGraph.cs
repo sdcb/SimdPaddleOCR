@@ -76,6 +76,9 @@ internal sealed class GpuGraphModel
     // sg32 only (128x128 / 128x64 / 128x32 tiles): implicit-GEMM kxk conv,
     // SE-prescaled pointwise conv
     private readonly VkPipeline? _pConvK, _pConvKN64, _pConvKN32, _pConvPs, _pConvPsN64, _pConvPsN32;
+    // sg32 lite family only: direct-load plain GEMM (M >= 16, K % 16 == 0)
+    private readonly VkPipeline? _pCmD, _pCmDN64, _pCmDN32;
+    private readonly bool _lite;
 
     // fp16 copies of constant tensors (weights, biases, scalars), lazy
     private readonly Dictionary<(int, int, int, int), VkBuffer> _constF16 = new();
@@ -191,15 +194,27 @@ internal sealed class GpuGraphModel
                 || !(dev.ComputeSubgroupSize || (dev.SubgroupMin == 32 && dev.SubgroupMax == 32)))
                 throw new NotSupportedException(
                     "Vulkan: sg32 coopmat path needs 16x16x16 fp16 coopmat and a 32-lane compute subgroup");
-            _pConv1x1 = Pipe("conv1x1_cm_sg32", 6, 16, 32);
-            _pConv1x1N64 = Pipe("conv1x1_cm_sg32_n64", 6, 16, 32);
-            _pConv1x1N32 = Pipe("conv1x1_cm_sg32_n32", 6, 16, 32);
-            _pConvPs = Pipe("conv1x1_cm_sg32_ps", 7, 20, 32);
-            _pConvPsN64 = Pipe("conv1x1_cm_sg32_ps_n64", 7, 20, 32);
-            _pConvPsN32 = Pipe("conv1x1_cm_sg32_ps_n32", 7, 20, 32);
-            _pConvK = Pipe("convk_cm_sg32", 6, 68, 32);
-            _pConvKN64 = Pipe("convk_cm_sg32_n64", 6, 68, 32);
-            _pConvKN32 = Pipe("convk_cm_sg32_n32", 6, 68, 32);
+            // wave64-capable parts (RDNA) or a shared-memory cap below the
+            // 48 KB the staged kernels take: 28 KB single-buffered staging,
+            // scalar epilogue, grouped tile raster, plus direct global loads
+            // for plain GEMMs (sg32l / sg32d)
+            _lite = dev.SubgroupMax >= 64 || dev.MaxSharedMemory < 48 * 1024;
+            string f = _lite ? "sg32l" : "sg32";
+            _pConv1x1 = Pipe($"conv1x1_cm_{f}", 6, 16, 32);
+            _pConv1x1N64 = Pipe($"conv1x1_cm_{f}_n64", 6, 16, 32);
+            _pConv1x1N32 = Pipe($"conv1x1_cm_{f}_n32", 6, 16, 32);
+            _pConvPs = Pipe($"conv1x1_cm_{f}_ps", 7, 20, 32);
+            _pConvPsN64 = Pipe($"conv1x1_cm_{f}_ps_n64", 7, 20, 32);
+            _pConvPsN32 = Pipe($"conv1x1_cm_{f}_ps_n32", 7, 20, 32);
+            _pConvK = Pipe($"convk_cm_{f}", 6, 68, 32);
+            _pConvKN64 = Pipe($"convk_cm_{f}_n64", 6, 68, 32);
+            _pConvKN32 = Pipe($"convk_cm_{f}_n32", 6, 68, 32);
+            if (_lite)
+            {
+                _pCmD = Pipe("conv1x1_cm_sg32d", 6, 16, 32);
+                _pCmDN64 = Pipe("conv1x1_cm_sg32d_n64", 6, 16, 32);
+                _pCmDN32 = Pipe("conv1x1_cm_sg32d_n32", 6, 16, 32);
+            }
         }
         else
         {
@@ -837,8 +852,11 @@ internal sealed class GpuGraphModel
             Math.Max(1, Math.Min(Math.Min((hw + 511) / 512, 256), PartCtrElem / (c * nb)));
         // coopmat tile: cout<=32 -> 512x32, cout<=64 -> 256x64, else 128x128
         // sg32: cout<=32 -> 128x32, cout<=64 -> 128x64, else 128x128
-        (VkPipeline pipe, uint tm, uint tn) CmTile(int c) =>
-            _sg32 ? (c <= 32 ? (_pConv1x1N32, 128u, 32u)
+        // m/k > 0: a plain GEMM that may take the direct-load kernel (lite)
+        (VkPipeline pipe, uint tm, uint tn) CmTile(int c, long m = 0, int k = 0) =>
+            _pCmD is not null && m >= 16 && k > 0 && k % 16 == 0
+                ? (c <= 32 ? (_pCmDN32!, 128u, 32u) : c <= 64 ? (_pCmDN64!, 128u, 64u) : (_pCmD, 128u, 128u))
+            : _sg32 ? (c <= 32 ? (_pConv1x1N32, 128u, 32u)
                      : c <= 64 ? (_pConv1x1N64, 128u, 64u)
                      : (_pConv1x1, 128u, 128u))
             : c <= 32 ? (_pConv1x1N32, 512u, 32u)
@@ -1257,7 +1275,7 @@ internal sealed class GpuGraphModel
                         }
                         else
                         {
-                            var (cp, tm, tn) = CmTile(cout);
+                            var (cp, tm, tn) = CmTile(cout, hasPs ? 0 : M, cinIn);
                             (VkBuffer, long, int)[] cb =
                                 [(arena, hasPs ? SlotOf(psv.x) : SlotOf(node.Inputs[0]), 2), (wbuf, 0, 2),
                                  (biasBuf, 0, 2),
@@ -2093,7 +2111,7 @@ internal sealed class GpuGraphModel
                             splitK ? (uint)((tiles + 15) / 16) : Div256(tiles));
                         break;
                     }
-                    var (cp2, tm2, tn2) = CmTile(mmN);
+                    var (cp2, tm2, tn2) = CmTile(mmN, mmM, mmK);
                     Emit(cp2, $"matmul n{ni} {mmM}x{mmK}x{mmN}",
                         [(arena, SlotOf(node.Inputs[0]), 2),
                          (ConstGemmW(checked((int)node.Inputs[1]), mmK, mmN), 0, 2),

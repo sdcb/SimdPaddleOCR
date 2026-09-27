@@ -31,6 +31,15 @@
 // shared memory (the SE gate of a skipped Mul; binding 6, pc mImg). A
 // separate variant: its registers cost the plain GEMM ~10%.
 //
+// LITE (sg32l, wave64-capable parts / 32 KB shared memory): single-buffered
+// staging (28 KB instead of 48 KB), scalar epilogue (the 16 B one costs
+// occupancy there) and tiles rastered in groups of RASTER N-columns so the
+// workgroups in flight share A strips in L2.
+// DIRECT (sg32d, plain GEMM only): LITE minus the staging — A/B fragments load
+// straight from global memory. Needs mDim >= 16 and kDim % 16 == 0: an A
+// fragment past mDim is shifted back to end at mDim and its duplicate rows are
+// not stored; W rows are padded to the 128-row tile.
+//
 // flags: bit0 hasBias, bit1 hasResidual, bit3 dual output, bits[4:7] activation
 //   act: 0=none 1=relu 2=gelu 3=hardswish(x*hs(x)) 4=sigmoid
 
@@ -50,6 +59,13 @@
 #define NTHR 256      // threads (must be SGX*SGY*32)
 #endif
 #define SGSZ 32u
+#ifdef DIRECT
+#if defined(CONVK) || defined(PRESCALE)
+#error DIRECT loads A as is: no gather, no prescale
+#endif
+#define LITE
+#endif
+#define RASTER 4u
 
 layout(local_size_x = NTHR) in;
 
@@ -93,8 +109,15 @@ layout(push_constant) uniform PC { uint mDim; uint nDim; uint kDim; uint flags; 
 layout(push_constant) uniform PC { uint mDim; uint nDim; uint kDim; uint flags; } p;
 #endif
 
-shared f16vec4 sA[2u * BM * LDS];
-shared f16vec4 sB[2u * BN * LDS];
+#ifdef LITE
+const uint NBUF = 1u;
+#else
+const uint NBUF = 2u;
+#endif
+#ifndef DIRECT
+shared f16vec4 sA[NBUF * BM * LDS];
+shared f16vec4 sB[NBUF * BN * LDS];
+#endif
 shared float stage[NTHR / SGSZ * 16 * 16];
 
 // Abramowitz-Stegun style erf, |err| < 1.5e-4 — plenty for fp16 outputs
@@ -184,6 +207,7 @@ void loadSlice(out uvec4 ra[LA], out uvec4 rb[LB], out uint va, out uint vb,
     }
 }
 
+#ifndef DIRECT
 void storeSlice(uvec4 ra[LA], uvec4 rb[LB], uint va, uint vb, uint buf, uint r0, uint kq)
 {
     [[unroll]] for (uint i = 0u; i < LA; i++) {
@@ -205,6 +229,7 @@ void storeSlice(uvec4 ra[LA], uvec4 rb[LB], uint va, uint vb, uint buf, uint r0,
         sB[o + 1u] = (vb & (2u << (2u * i))) != 0u ? hi : f16vec4(0.0hf);
     }
 }
+#endif
 
 void main()
 {
@@ -212,8 +237,19 @@ void main()
     uint sg = gl_SubgroupID;
     uint lane = gl_SubgroupInvocationID;
     uint sgx = sg & (SGX - 1u), sgy = sg / SGX;
+#ifdef LITE
+    // walk RASTER N-columns at a time, M fastest within the group
+    uint gmt = gl_NumWorkGroups.x;
+    uint lin = gl_WorkGroupID.y * gmt + gl_WorkGroupID.x;
+    uint grp = lin / (RASTER * gmt);
+    uint gw = min(gl_NumWorkGroups.y - grp * RASTER, RASTER);
+    uint gr = lin - grp * RASTER * gmt;
+    uint m0 = gr / gw * BM;
+    uint n0 = (grp * RASTER + gr % gw) * BN;
+#else
     uint m0 = gl_WorkGroupID.x * BM;
     uint n0 = gl_WorkGroupID.y * BN;
+#endif
 
     uint act = (p.flags >> 4) & 7u;
     bool hasBias = (p.flags & 1u) != 0u;
@@ -225,6 +261,23 @@ void main()
             acc[i][j] = coopmat<float, gl_ScopeSubgroup, 16, 16, gl_MatrixUseAccumulator>(0.0f);
 
     uint kv = p.kDim >> 2;             // kDim in vec4 units
+#ifdef DIRECT
+    uint rowA[TSM];                    // fragment's first row, shifted back to end at mDim
+    [[unroll]] for (uint i = 0u; i < TSM; i++)
+        rowA[i] = min(m0 + sgy * STRM + i * 16u, p.mDim - 16u);
+    uint wb = (n0 + sgx * STRN) * kv;
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> ma[TSM];
+    coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb[TSN];
+    for (uint kb = 0u; kb < kv; kb += 4u) {
+        [[unroll]] for (uint i = 0u; i < TSM; i++)
+            coopMatLoad(ma[i], x, rowA[i] * kv + kb, kv, gl_CooperativeMatrixLayoutRowMajor);
+        [[unroll]] for (uint j = 0u; j < TSN; j++)
+            coopMatLoad(mb[j], w, wb + j * 16u * kv + kb, kv, gl_CooperativeMatrixLayoutColumnMajor);
+        [[unroll]] for (uint i = 0u; i < TSM; i++)
+            [[unroll]] for (uint j = 0u; j < TSN; j++)
+                acc[i][j] = coopMatMulAdd(ma[i], mb[j], acc[i][j]);
+    }
+#else
     uint nk = (kv + BKV - 1u) / BKV;
     bool wide = (kv & 1u) == 0u;       // rows 16 B aligned: one 16 B load per quad
     uint kq = tid % BKQ;               // this thread's 16 B quad in a slice row
@@ -256,7 +309,11 @@ void main()
     coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseB> mb[TSN];
     uint aw = sgy * STRM * LDS, bw = sgx * STRN * LDS;
     for (uint kt = 0u; kt < nk; kt++) {
+#ifdef LITE
+        uint cur = 0u;
+#else
         uint cur = kt & 1u;
+#endif
         bool more = kt + 1u < nk;
         if (more) loadSlice(ra, rb, va, vb, kt + 1u, m0, n0, r0, kq, kv, kv2, wide);
         uint ab = cur * BM * LDS + aw, bb = cur * BN * LDS + bw;
@@ -269,9 +326,15 @@ void main()
                 [[unroll]] for (uint j = 0u; j < TSN; j++)
                     acc[i][j] = coopMatMulAdd(ma[i], mb[j], acc[i][j]);
         }
+#ifdef LITE
+        barrier();                     // one buffer: every read done before the refill
+        if (more) storeSlice(ra, rb, va, vb, 0u, r0, kq);
+#else
         if (more) storeSlice(ra, rb, va, vb, cur ^ 1u, r0, kq);
+#endif
         barrier();
     }
+#endif
 
     // always go through shared stage: epilogue needs element access.
     // Row-major stage: each lane owns 8 consecutive columns of one row, so
@@ -281,6 +344,39 @@ void main()
 #else
     uint ostr = p.nDim, ooff = 0u;
 #endif
+#ifdef LITE
+    // lane owns elements lane + 32l: scalar fp16 stores, half-row coalesced
+    bool dual = (p.flags & 8u) != 0u, dualRaw = (p.flags & 1024u) != 0u;
+    [[unroll]] for (uint i = 0u; i < TSM; i++) {
+        [[unroll]] for (uint j = 0u; j < TSN; j++) {
+            coopMatStore(acc[i][j], stage, sg * 256u, 16u, gl_CooperativeMatrixLayoutRowMajor);
+            subgroupMemoryBarrierShared();
+            subgroupBarrier();
+            uint fr = m0 + sgy * STRM + i * 16u;
+#ifdef DIRECT
+            uint rb = rowA[i];
+#else
+            uint rb = fr;
+#endif
+            uint cn = n0 + sgx * STRN + j * 16u;
+            for (uint l = 0u; l < 8u; l++) {
+                uint e = l * 32u + lane;
+                uint gmr = rb + (e >> 4), gn = cn + (e & 15u);
+                if (gmr >= fr && gmr < p.mDim && gn < p.nDim) {
+                    float v = stage[sg * 256u + e];
+                    if (hasBias) v += float(bias[gn]);
+                    if (hasRes) v += float(res[gmr * p.nDim + gn]);
+                    uint oe = gmr * ostr + ooff + gn;
+                    o[oe] = actf(v, act, p.flags);
+                    if (dual)
+                        o2[oe] = dualRaw ? float16_t(v) : actf(v, 2u, p.flags);
+                }
+            }
+            subgroupMemoryBarrierShared();
+            subgroupBarrier();
+        }
+    }
+#else
     bool vec8 = ((p.nDim | ostr | ooff) & 7u) == 0u;
     bool dual = (p.flags & 8u) != 0u, dualRaw = (p.flags & 1024u) != 0u;
     uint mm = lane >> 1, nb = (lane & 1u) * 8u;
@@ -340,4 +436,5 @@ void main()
             subgroupBarrier();
         }
     }
+#endif
 }

@@ -30,3 +30,18 @@ echo glslc sg32 variants
 "%GLSLC%" -O --target-env=vulkan1.1 -DCONVK "%SG32%" -o "%DIR%\convk_cm_sg32.spv" || exit /b 1
 "%GLSLC%" -O --target-env=vulkan1.1 -DCONVK %N64% "%SG32%" -o "%DIR%\convk_cm_sg32_n64.spv" || exit /b 1
 "%GLSLC%" -O --target-env=vulkan1.1 -DCONVK %N32% "%SG32%" -o "%DIR%\convk_cm_sg32_n32.spv" || exit /b 1
+rem sg32l: the same nine for wave64-capable / 32 KB shared-memory parts;
+rem sg32d: direct-load plain GEMM on those parts
+echo glslc sg32l / sg32d variants
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE "%SG32%" -o "%DIR%\conv1x1_cm_sg32l.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE %N64% "%SG32%" -o "%DIR%\conv1x1_cm_sg32l_n64.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE %N32% "%SG32%" -o "%DIR%\conv1x1_cm_sg32l_n32.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE -DPRESCALE "%SG32%" -o "%DIR%\conv1x1_cm_sg32l_ps.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE -DPRESCALE %N64% "%SG32%" -o "%DIR%\conv1x1_cm_sg32l_ps_n64.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE -DPRESCALE %N32% "%SG32%" -o "%DIR%\conv1x1_cm_sg32l_ps_n32.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE -DCONVK "%SG32%" -o "%DIR%\convk_cm_sg32l.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE -DCONVK %N64% "%SG32%" -o "%DIR%\convk_cm_sg32l_n64.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DLITE -DCONVK %N32% "%SG32%" -o "%DIR%\convk_cm_sg32l_n32.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DDIRECT "%SG32%" -o "%DIR%\conv1x1_cm_sg32d.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DDIRECT %N64% "%SG32%" -o "%DIR%\conv1x1_cm_sg32d_n64.spv" || exit /b 1
+"%GLSLC%" -O --target-env=vulkan1.1 -DDIRECT %N32% "%SG32%" -o "%DIR%\conv1x1_cm_sg32d_n32.spv" || exit /b 1
