@@ -184,6 +184,13 @@ internal sealed class GpuGraphModel
         _sg32 = dev.SubgroupMin > 16 && dev.SubgroupMax >= 32;
         if (_sg32)
         {
+            // the sg32 lane mapping is hard-wired: without a pinned 32-lane
+            // compute subgroup (a wave64 default) or the 16x16x16 fp16 MMA
+            // these pipes would silently compute garbage
+            if (!dev.CoopMatrix || !dev.Coop16x16x16
+                || !(dev.ComputeSubgroupSize || (dev.SubgroupMin == 32 && dev.SubgroupMax == 32)))
+                throw new NotSupportedException(
+                    "Vulkan: sg32 coopmat path needs 16x16x16 fp16 coopmat and a 32-lane compute subgroup");
             _pConv1x1 = Pipe("conv1x1_cm_sg32", 6, 16, 32);
             _pConv1x1N64 = Pipe("conv1x1_cm_sg32_n64", 6, 16, 32);
             _pConv1x1N32 = Pipe("conv1x1_cm_sg32_n32", 6, 16, 32);

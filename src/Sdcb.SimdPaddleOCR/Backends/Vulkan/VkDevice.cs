@@ -19,7 +19,10 @@ internal unsafe sealed class VkDevice : IDisposable
     public bool CoherentDeviceLocal;   // DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT exists (ReBAR)
     public bool CoopMatrix;            // VK_KHR_cooperative_matrix (feature + ext enabled)
     public bool SubgroupSizeControl;   // VK_EXT_subgroup_size_control
+    public bool ComputeSubgroupSize;   // ...and requiredSubgroupSizeStages covers compute
+    public bool Coop16x16x16;          // fp16 A/B, fp32 C/result, subgroup scope 16x16x16
     public uint SubgroupMin = 1, SubgroupMax = 128;
+    public uint MaxSharedMemory;       // maxComputeSharedMemorySize (bytes per workgroup)
     public int CoopM, CoopN, CoopK;    // best fp16->fp32 subgroup coopmat config
     public bool Storage16Bit;          // storageBuffer16BitAccess + shaderInt16 enabled
     public bool ShaderFloat16;         // shaderFloat16 (VK_KHR_shader_float16_int8) enabled — required by fp16 shaders
@@ -97,6 +100,7 @@ internal unsafe sealed class VkDevice : IDisposable
         d.DeviceName = Marshal.PtrToStringAnsi((IntPtr)props.DeviceName) ?? "?";
         d.VendorId = props.VendorID;
         d.TimestampPeriodNs = props.TimestampPeriodNs;
+        d.MaxSharedMemory = props.MaxComputeSharedMemorySize;
 
         uint nqf = 0;
         Vk.vkGetPhysicalDeviceQueueFamilyProperties(d.PhysDevice, &nqf, null);
@@ -191,7 +195,11 @@ internal unsafe sealed class VkDevice : IDisposable
             d.SubgroupSize = sgP.SubgroupSize;
             d.SubgroupOps = sgP.SupportedOperations;
             d.SubgroupStages = sgP.SupportedStages;
-            if (hasSgc) { d.SubgroupMin = sgcP.MinSubgroupSize; d.SubgroupMax = sgcP.MaxSubgroupSize; }
+            if (hasSgc)
+            {
+                d.SubgroupMin = sgcP.MinSubgroupSize; d.SubgroupMax = sgcP.MaxSubgroupSize;
+                d.ComputeSubgroupSize = (sgcP.RequiredSubgroupSizeStages & VkConst.StageComputeShader) != 0;
+            }
         }
 
         Vk.VkPhysicalDeviceSubgroupSizeControlFeaturesEXT sgcEn = new()
@@ -240,7 +248,7 @@ internal unsafe sealed class VkDevice : IDisposable
             PpEnabledExtensionNames = nExt > 0 ? extsToEnable : null,
         };
         if (Environment.GetEnvironmentVariable("HYMT_VK_VERBOSE") == "1")
-            Console.Error.WriteLine($"[vk] devext push={hasPush} coop={d.CoopMatrix} sgc={hasSgc} sgRange={d.SubgroupMin}-{d.SubgroupMax} prio={prioExt}");
+            Console.Error.WriteLine($"[vk] devext push={hasPush} coop={d.CoopMatrix} sgc={hasSgc} sgRange={d.SubgroupMin}-{d.SubgroupMax} sgcCompute={d.ComputeSubgroupSize} lds={d.MaxSharedMemory} prio={prioExt}");
         // Global queue priority (latency-sensitive inference sharing the GPU
         // with a desktop/compositor): try HIGH, then fall back to default when
         // the OS refuses (VK_ERROR_NOT_PERMITTED / INITIALIZATION_FAILED).
@@ -301,6 +309,9 @@ internal unsafe sealed class VkDevice : IDisposable
                     {
                         d.CoopM = (int)cmprops[i].MSize; d.CoopN = (int)cmprops[i].NSize; d.CoopK = (int)cmprops[i].KSize;
                     }
+                    if (cmprops[i].AType == 0 && cmprops[i].BType == 0 && cmprops[i].CType == 1 && cmprops[i].ResultType == 1
+                        && cmprops[i].Scope == 3 && cmprops[i].MSize == 16 && cmprops[i].NSize == 16 && cmprops[i].KSize == 16)
+                        d.Coop16x16x16 = true;
                     if (Environment.GetEnvironmentVariable("HYMT_VK_VERBOSE") == "1")
                         Console.Error.WriteLine($"[vk] coopmat {cmprops[i].MSize}x{cmprops[i].NSize}x{cmprops[i].KSize} at={cmprops[i].AType} bt={cmprops[i].BType} ct={cmprops[i].CType} rt={cmprops[i].ResultType} scope={cmprops[i].Scope}");
                 }

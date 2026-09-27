@@ -62,6 +62,11 @@ internal static unsafe partial class Vk
         {
             get { fixed (byte* p = LimitsAndSparse) return *(float*)(p + 428); }
         }
+        // limits start 4 bytes in (8-byte aligned natively); maxComputeSharedMemorySize @216
+        public uint MaxComputeSharedMemorySize
+        {
+            get { fixed (byte* p = LimitsAndSparse) return *(uint*)(p + 4 + 216); }
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
