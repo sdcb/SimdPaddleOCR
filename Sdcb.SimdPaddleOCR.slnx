@@ -29,6 +29,7 @@
     <Project Path="examples/SystemDrawing.WinForms/SystemDrawing.WinForms.csproj" />
   </Folder>
   <Folder Name="/test/">
+    <Project Path="test/Sdcb.SimdPaddleOCR.GpuBench/Sdcb.SimdPaddleOCR.GpuBench.csproj" />
     <Project Path="test/Sdcb.SimdPaddleOCR.TestData/Sdcb.SimdPaddleOCR.TestData.csproj" />
     <Project Path="test/Sdcb.SimdPaddleOCR.Tests/Sdcb.SimdPaddleOCR.Tests.csproj" />
     <Project Path="test/Sdcb.SimdPaddleOCR.TestReport/Sdcb.SimdPaddleOCR.TestReport.csproj" />

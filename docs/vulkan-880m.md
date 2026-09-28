@@ -62,7 +62,7 @@
 | small  | 950 / 0.41% | 951 / 0.39% |
 | medium | 1004 / 0.14% | 1003 / 0.15% |
 
-cls 全对。tiny 的 2 行差来自 `436aa5c` 把几层小 1×1 卷积从 split-K 点积换到 coopmat（fp16 求和顺序噪声，含已知的 img-014）；其余提交逐图一致。`SIMD_OCR_VK_NOPUSH=1`、`SIMD_OCR_VK_QUEUE=gfx`、`SIMD_OCR_NOSK=1` 三档都与默认逐图一致；GpuPoc `--conc` 4/8 线程零差异、无 fallback（medium 8 线程设备内存峰值 2.2 GB）；CPU 路径与 `d6c260c` 三档逐图一致。
+cls 全对。tiny 的 2 行差来自 `436aa5c` 把几层小 1×1 卷积从 split-K 点积换到 coopmat（fp16 求和顺序噪声，含已知的 img-014）；其余提交逐图一致。`SIMD_OCR_VK_NOPUSH=1`、`SIMD_OCR_VK_QUEUE=gfx`、`SIMD_OCR_NOSK=1` 三档都与默认逐图一致；GpuBench `--conc` 4/8 线程零差异、无 fallback（medium 8 线程设备内存峰值 2.2 GB）；CPU 路径与 `d6c260c` 三档逐图一致。
 
 工作集 peak（MB，CPU / Vulkan）：tiny 511 / 603，small 667 / 664，medium 1203 / 913。
 

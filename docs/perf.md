@@ -200,7 +200,7 @@ x64 / ARM64 本库 peak 大约少 **300 MB**。c 仍然略省，但更慢。Open
 - medium `rec_graph` 22 ms 里约 12 ms 是 CPU 上的 CTC 投影 + ArgMax（词表 18710 列，契约要求留在 CPU）；small 同一个词表，也基本是这部分。tiny 端到端主要是 CPU 前后处理，GPU 部分 DET ~2 ms、REC ~1 ms。
 - mean 明显高于 median 主要来自前 ~40 张的 .NET 分层 JIT 预热（`DOTNET_TieredCompilation=0` 下消失），不是 GPU。
 - 准确率与纯 CPU 持平，差异是 fp16 噪声：tiny 差 1 行，small 行精确一致，medium GPU 多对 2 行。cls 全对。
-- 显存：sg32 上 arena 按生命周期复用，medium DET 960×960 每个 session 1233 MB → 108 MB。GpuPoc `--conc` medium 8 线程不再 OOM 回退 CPU（`26ad4c3`：76.9 s；现在 1.6 s，显存峰值 4.8 GB）。进程工作集有界，peak 后不再爬升。
+- 显存：sg32 上 arena 按生命周期复用，medium DET 960×960 每个 session 1233 MB → 108 MB。GpuBench `--conc` medium 8 线程不再 OOM 回退 CPU（`26ad4c3`：76.9 s；现在 1.6 s，显存峰值 4.8 GB）。进程工作集有界，peak 后不再爬升。
 - JSON：`bench-out/fin-cpu-{tiny,small,medium}.json`、`bench-out/fin-{base,new}-{tiny,small,medium}-vulkan-r{1,2,3}.json`。复现：`--engine sharp|vulkan --workers 4 --model {tiny,small,medium} --input dataset --warmup 1`。
 
 ### lw.PPOCR.C 4w（`20d0de6`）

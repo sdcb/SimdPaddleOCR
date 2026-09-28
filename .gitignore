@@ -21,7 +21,4 @@ fonts/
 c-assets/
 dataset/
 bench-out/
-.wrangler/test/Sdcb.SimdPaddleOCR.GpuPoc/
-
-# Local GPU PoC harness (kept on disk, intentionally not committed)
-test/Sdcb.SimdPaddleOCR.GpuPoc/
+.wrangler/test/Sdcb.SimdPaddleOCR.GpuBench/
