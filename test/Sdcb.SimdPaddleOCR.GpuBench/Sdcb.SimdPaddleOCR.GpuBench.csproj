@@ -16,4 +16,7 @@
     <PackageReference Include="System.Drawing.Common" Version="8.0.7" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Shaders\*.spv" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

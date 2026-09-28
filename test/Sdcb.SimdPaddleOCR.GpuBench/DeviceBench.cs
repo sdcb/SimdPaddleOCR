@@ -10,8 +10,8 @@ static class DeviceBench
 {
     internal static int Run(string[] args)
     {
-        // --sgtest <sgsize.spv>: device caps + actual subgroup size under requiredSubgroupSize
-        if (args.Length >= 2 && args[0] == "--sgtest")
+        // --sgtest [sgsize.spv]: device caps + actual subgroup size under requiredSubgroupSize
+        if (args.Length >= 1 && args[0] == "--sgtest")
         {
             using var sdev = VkDevice.Create();
             unsafe
@@ -30,7 +30,8 @@ static class DeviceBench
                     Console.WriteLine($"type {i}: flags=0x{sdev.MemProps.TypeAt(i).PropertyFlags:x} heap={sdev.MemProps.TypeAt(i).HeapIndex}");
                 Console.WriteLine($"DeviceLocalHostVisibleType={sdev.DeviceLocalHostVisibleType} HostVisibleCoherentType={sdev.HostVisibleCoherentType}");
             }
-            byte[] spv = File.ReadAllBytes(args[1]);
+            byte[] spv = File.ReadAllBytes(args.Length >= 2 ? args[1]
+                : Path.Combine(AppContext.BaseDirectory, "Shaders", "sgsize.spv"));
             foreach (uint req in new uint[] { 0, 32, 64 })
             {
                 var sp = sdev.NewPipeline(sdev.NewShaderModule(spv), 1, 4, req);

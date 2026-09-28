@@ -12,7 +12,7 @@ static class Harness
               --detprof <det.onnx> <H> <W> [reps]
               --recprof <rec.onnx> <batch> <W> [reps]     REC up to the CTC projection
               --conc <det> <cls> <rec> <keys> <imgdir> [threads] [backend]
-              --sgtest <sgsize.spv>                       caps + gl_SubgroupSize at required size 0/32/64
+              --sgtest [sgsize.spv]                       caps + gl_SubgroupSize at required size 0/32/64 (default: Shaders/sgsize.spv)
               --rawbench <spv> <bindings> <gx> <gy> <reps> <bufMB> [pc uints...]
               --argmax <inner> <cols> <rows> <threads> <reps>
               --argmaxu <inner> <cols> <threads> <reps> <TxN,TxN,...>

@@ -1,0 +1,23 @@
+#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+
+// GpuBench --sgtest probe: every workgroup reports the subgroup size and
+// count it actually ran with, so a pipeline created with (or without)
+// requiredSubgroupSize can be checked on the device.
+// Rebuild: glslc -O --target-env=vulkan1.1 sgsize.comp -o sgsize.spv
+
+layout(local_size_x = 256) in;
+layout(std430, binding = 0) buffer O { uint o[]; };
+void main()
+{
+    if (gl_LocalInvocationIndex == 0u)
+    {
+        o[gl_WorkGroupID.x * 4u + 0u] = gl_SubgroupSize;
+        o[gl_WorkGroupID.x * 4u + 1u] = gl_NumSubgroups;
+    }
+    if (gl_LocalInvocationIndex == 255u)
+    {
+        o[gl_WorkGroupID.x * 4u + 2u] = gl_SubgroupID;
+        o[gl_WorkGroupID.x * 4u + 3u] = gl_SubgroupInvocationID;
+    }
+}
