@@ -258,6 +258,14 @@ JSON：`bench-out/local-5800x-c-{tiny,small,medium}-4w.json`。
 | Intel UHD 770 核显（无协作矩阵，`Auto` 走 CPU） | [vulkan-uhd770.md](vulkan-uhd770.md) |
 | Apple M1 / M4（Metal） | [metal-m4.md](metal-m4.md)、[perf-devin-m4.md](perf-devin-m4.md) |
 
+## 与其它 C# OCR 库对照
+
+同机同尺子、同一套 PP-OCRv6 权重，把别的 ONNX Runtime GPU 实现塞进同一个 harness 的对照实验：
+
+| 对照对象 | 结论 | 文档 |
+| ---- | ---- | ---- |
+| RapidOcrNet 4.2.0（ONNX Runtime 1.29 + CUDA EP，`--engine rapid`） | 本机 3080 Ti 上 Vulkan 快 **13–18×**；对齐检测输入并给到 16 workers 后仍快 **9–15×** | [rapidocr-cuda.md](rapidocr-cuda.md) |
+
 ## 数据来源与复现
 
 | 版本 | Actions | 提交 | 说明 |
@@ -277,4 +285,4 @@ dotnet build test/Sdcb.SimdPaddleOCR.Tests -c Release -o artifacts/net10
 artifacts/net10/Sdcb.SimdPaddleOCR.Tests --benchmark --engine sharp --workers 4 --model tiny --input dataset --out bench-out/tiny-4w.json
 ```
 
-C 另加 `--engine c --c-assets bench-out/c-runtime`。Vulkan 另加 `--engine vulkan`。`--summarize` 可并排多份 JSON。本表的 1.4.2 A/B 用的是 harness 临时开关 `UseNuget142=true`（`dotnet build test/Sdcb.SimdPaddleOCR.Tests -c Release -p:UseNuget142=true`，产出在 `bin/Release/nuget142/`，引用 NuGet `Sdcb.SimdPaddleOCR` 1.4.2 + 模型包 1.0.0），复测后已从树里还原。
+C 另加 `--engine c --c-assets bench-out/c-runtime`。Vulkan 另加 `--engine vulkan`。RapidOcrNet 需要另编一份（`dotnet build test/Sdcb.SimdPaddleOCR.Tests -c Release -p:EnableRapidOcr=true`）再用 `--engine rapid|rapid-cpu`，运行库与 A/B 脚本见 [rapidocr-cuda.md](rapidocr-cuda.md)。`--summarize` 可并排多份 JSON。本表的 1.4.2 A/B 用的是 harness 临时开关 `UseNuget142=true`（`dotnet build test/Sdcb.SimdPaddleOCR.Tests -c Release -p:UseNuget142=true`，产出在 `bin/Release/nuget142/`，引用 NuGet `Sdcb.SimdPaddleOCR` 1.4.2 + 模型包 1.0.0），复测后已从树里还原。

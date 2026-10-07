@@ -43,16 +43,23 @@ static class BenchBoxes
 
 static class BenchEngines
 {
-    public static IBenchEngine Create(string engine, string modelType, int workers, string cAssetsDir) => engine switch
+    public static IBenchEngine Create(string engine, string modelType, int workers, string cAssetsDir, BenchEngineSettings settings) => engine switch
     {
         // sharp pins Cpu so historical baselines stay comparable; "auto" lets
         // the factory pick (Vulkan when a usable device exists).
-        "sharp" => new SharpEngine(modelType, workers, OcrBackend.Cpu),
-        "vulkan" => new SharpEngine(modelType, workers, OcrBackend.Vulkan),
-        "metal" => new SharpEngine(modelType, workers, OcrBackend.Metal),
-        "auto" => new SharpEngine(modelType, workers, OcrBackend.Auto),
+        "sharp" => new SharpEngine(modelType, workers, OcrBackend.Cpu, settings.DetLimitSideLength),
+        "vulkan" => new SharpEngine(modelType, workers, OcrBackend.Vulkan, settings.DetLimitSideLength),
+        "metal" => new SharpEngine(modelType, workers, OcrBackend.Metal, settings.DetLimitSideLength),
+        "auto" => new SharpEngine(modelType, workers, OcrBackend.Auto, settings.DetLimitSideLength),
         "c" => new CEngine(cAssetsDir, workers, modelType),
-        _ => throw new ArgumentException("--engine must be sharp, vulkan, metal, auto, or c"),
+#if RAPIDOCR
+        "rapid" => new RapidEngine(modelType, workers, cuda: true, settings.RapidModelsDir, settings.RapidDetLimitSideLength, settings.RapidImgResize),
+        "rapid-cpu" => new RapidEngine(modelType, workers, cuda: false, settings.RapidModelsDir, settings.RapidDetLimitSideLength, settings.RapidImgResize),
+#else
+        "rapid" or "rapid-cpu" => throw new InvalidOperationException(
+            $"--engine {engine} needs a build with RapidOcrNet: add -p:EnableRapidOcr=true (pulls the ONNX Runtime CUDA package)."),
+#endif
+        _ => throw new ArgumentException("--engine must be sharp, vulkan, metal, auto, c, rapid, or rapid-cpu"),
     };
 
     public static PaddleOcrModelBundle Bundle(string modelType) => modelType switch
@@ -62,4 +69,23 @@ static class BenchEngines
         "medium" => ChineseV6MediumModels.Default,
         _ => throw new ArgumentException("--model must be tiny, small, or medium"),
     };
+}
+
+sealed record BenchEngineSettings
+{
+    /// <summary>Short side the hand-written detector resizes to (--det-limit).</summary>
+    public int DetLimitSideLength { get; init; } = 960;
+
+    /// <summary>Directory holding the PP-OCRv6 det/cls/rec weights RapidOcrNet loads (--rapid-models).</summary>
+    public string RapidModelsDir { get; init; } = "models";
+
+    /// <summary>Short side RapidOcrNet's detector resizes to (--rapid-det-limit).</summary>
+    public int RapidDetLimitSideLength { get; init; } = 736;
+
+    /// <summary>
+    /// RapidOcrNet's legacy max-side cap (--rapid-img-resize). When set it replaces the
+    /// short-side rule, which is how the detector input is matched to this library's
+    /// <see cref="DetLimitSideLength"/>.
+    /// </summary>
+    public int RapidImgResize { get; init; }
 }

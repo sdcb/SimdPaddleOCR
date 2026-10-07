@@ -16,7 +16,7 @@ using ImageSharpImage = SixLabors.ImageSharp.Image;
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
-    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|vulkan|metal|auto|c] [--smoke|--benchmark] [--benchmark-kind simd|engine] [--count N] [--warmup N] [--case-id ID] [--replica N] [--c-assets <dir>]");
+    Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|vulkan|metal|auto|c|rapid|rapid-cpu] [--smoke|--benchmark] [--benchmark-kind simd|engine] [--count N] [--warmup N] [--case-id ID] [--replica N] [--c-assets <dir>] [--det-limit N] [--rapid-models <dir>] [--rapid-det-limit N] [--rapid-img-resize N]");
     Console.WriteLine("       --summarize <file...> [--input <dataset>] [--out-md <path>]");
     return args.Length == 0 ? 2 : 0;
 }
@@ -38,6 +38,10 @@ int replica = 1;
 string? inputDir = null;
 string? outPath = null;
 string cAssetsDir = "c-assets";
+string rapidModelsDir = "models";
+int detLimitSideLength = 960;
+int rapidDetLimitSideLength = 736;
+int rapidImgResize = 0;
 for (int i = 0; i < args.Length; i++)
 {
     string Next() => i + 1 < args.Length ? args[++i] : throw new ArgumentException($"missing value for {args[i]}");
@@ -56,6 +60,10 @@ for (int i = 0; i < args.Length; i++)
         case "--input": inputDir = Next(); break;
         case "--out": outPath = Next(); break;
         case "--c-assets": cAssetsDir = Next(); break;
+        case "--det-limit": detLimitSideLength = int.Parse(Next()); break;
+        case "--rapid-models": rapidModelsDir = Next(); break;
+        case "--rapid-det-limit": rapidDetLimitSideLength = int.Parse(Next()); break;
+        case "--rapid-img-resize": rapidImgResize = int.Parse(Next()); break;
         default: throw new ArgumentException($"unknown argument: {args[i]}");
     }
 }
@@ -64,8 +72,8 @@ if (workers is < 1 or > 16)
     throw new ArgumentException("--workers must be 1..16");
 if (modelType is not ("tiny" or "small" or "medium"))
     throw new ArgumentException("--model must be tiny, small, or medium");
-if (engineName is not ("sharp" or "vulkan" or "metal" or "auto" or "c"))
-    throw new ArgumentException("--engine must be sharp, vulkan, metal, auto, or c");
+if (engineName is not ("sharp" or "vulkan" or "metal" or "auto" or "c" or "rapid" or "rapid-cpu"))
+    throw new ArgumentException("--engine must be sharp, vulkan, metal, auto, c, rapid, or rapid-cpu");
 if (benchmarkKind is not ("simd" or "engine"))
     throw new ArgumentException("--benchmark-kind must be simd or engine");
 if (count is < 1 or > 100)
@@ -74,12 +82,19 @@ if (warmupImages < 0)
     throw new ArgumentException("--warmup must be >= 0");
 if (replica < 1)
     throw new ArgumentException("--replica must be >= 1");
+if (detLimitSideLength is < 32 or > 4096)
+    throw new ArgumentException("--det-limit must be 32..4096");
+if (rapidDetLimitSideLength is < 32 or > 4096)
+    throw new ArgumentException("--rapid-det-limit must be 32..4096");
+if (rapidImgResize is < 0 or > 4096)
+    throw new ArgumentException("--rapid-img-resize must be 0..4096");
 if (inputDir is null || outPath is null)
     throw new ArgumentException("--input and --out are required");
 
 inputDir = Path.GetFullPath(inputDir);
 outPath = Path.GetFullPath(outPath);
 cAssetsDir = Path.GetFullPath(cAssetsDir);
+rapidModelsDir = Path.GetFullPath(rapidModelsDir);
 string metadataPath = Path.Combine(inputDir, "metadata.json");
 bool hasMetadata = File.Exists(metadataPath);
 
@@ -111,7 +126,13 @@ for (int i = 0; i < files.Length; i++)
     decoded[i] = (Path.GetFileName(files[i]), pixels, image.Width, image.Height);
 }
 
-using IBenchEngine engine = BenchEngines.Create(engineName, modelType, workers, cAssetsDir);
+using IBenchEngine engine = BenchEngines.Create(engineName, modelType, workers, cAssetsDir, new BenchEngineSettings
+{
+    DetLimitSideLength = detLimitSideLength,
+    RapidModelsDir = rapidModelsDir,
+    RapidDetLimitSideLength = rapidDetLimitSideLength,
+    RapidImgResize = rapidImgResize,
+});
 double wsLoaded = WorkingSetMb();
 GCMemoryInfo gcLoaded = GC.GetGCMemoryInfo();
 double gcHeapLoadedMb = gcLoaded.HeapSizeBytes / (1024d * 1024d);

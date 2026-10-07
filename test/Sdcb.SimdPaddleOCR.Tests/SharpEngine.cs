@@ -15,13 +15,18 @@ sealed class SharpEngine : IBenchEngine
     private (long Ticks, long Calls)[] _prevConv;
     private readonly OcrBackend _backend;
 
-    public SharpEngine(string modelType, int workers, OcrBackend backend)
+    public SharpEngine(string modelType, int workers, OcrBackend backend, int detLimitSideLength = 960)
     {
         _backend = backend;
         _ocr = PaddleOcrAll.Load(BenchEngines.Bundle(modelType), new PaddleOcrOptions
         {
             LineWorkerCount = workers,
-            Detector = new PaddleOcrDetectorOptions { MaxSessionCacheEntries = CacheEntries, Backend = backend },
+            Detector = new PaddleOcrDetectorOptions
+            {
+                MaxSessionCacheEntries = CacheEntries,
+                Backend = backend,
+                LimitSideLength = detLimitSideLength,
+            },
             Recognizer = new PaddleOcrRecognizerOptions { AdaptiveWidth = true, TargetWidth = 320, Backend = backend },
             Classifier = new PaddleOcrClassifierOptions { Backend = backend },
         });
@@ -29,6 +34,7 @@ sealed class SharpEngine : IBenchEngine
         InferenceSession.EnableProfiling(true);
         Extra["cacheEntries"] = CacheEntries;
         Extra["backend"] = backend.ToString().ToLowerInvariant();
+        Extra["detLimitSideLength"] = detLimitSideLength;
         Extra["effectiveWorkers"] = _ocr.EffectiveLineWorkerCount;
         _workers = workers;
         _prevStages = PipelineProfiler.Snapshot();

@@ -8,10 +8,17 @@
     <AssemblyName>Sdcb.SimdPaddleOCR.Tests</AssemblyName>
     <RootNamespace>Sdcb.SimdPaddleOCR.Tests</RootNamespace>
     <UseNs20Library Condition="'$(UseNs20Library)' == ''">false</UseNs20Library>
+    <!-- Opt-in: pulls RapidOcrNet + the ~700 MB ONNX Runtime CUDA package, so the
+         default build (and CI) stays free of GPU natives. -->
+    <EnableRapidOcr Condition="'$(EnableRapidOcr)' == ''">false</EnableRapidOcr>
   </PropertyGroup>
   <PropertyGroup Condition="'$(UseNs20Library)' == 'true'">
     <OutputPath>$(MSBuildProjectDirectory)/bin/$(Configuration)/ns20/</OutputPath>
     <IntermediateOutputPath>$(MSBuildProjectDirectory)/obj/$(Configuration)/ns20/</IntermediateOutputPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(EnableRapidOcr)' == 'true'">
+    <DefineConstants>$(DefineConstants);RAPIDOCR</DefineConstants>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sdcb.SimdPaddleOCR\Sdcb.SimdPaddleOCR.csproj">
@@ -25,5 +32,13 @@
   <ItemGroup Condition="'$(UseNs20Library)' == 'true'">
     <!-- SetTargetFramework does not flow ns2.0 PackageReferences into the net10 host deps.json. -->
     <PackageReference Include="Microsoft.Bcl.Numerics" Version="10.0.11" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EnableRapidOcr)' == 'true'">
+    <PackageReference Include="RapidOcrNet" Version="4.2.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.29.0" />
+    <!-- RapidOcrNet depends on the CPU native runtime, which owns the same
+         onnxruntime.dll / onnxruntime_providers_shared.dll paths as the GPU package.
+         Let the CUDA one win: keep the CPU package for the managed surface only. -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" ExcludeAssets="native" />
   </ItemGroup>
 </Project>
