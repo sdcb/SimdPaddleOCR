@@ -538,6 +538,7 @@ jobs:
           path: results
           if-no-files-found: error
       - name: Delete individual result artifacts
+        continue-on-error: true   # best-effort cleanup; fork PRs run with a read-only token
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
