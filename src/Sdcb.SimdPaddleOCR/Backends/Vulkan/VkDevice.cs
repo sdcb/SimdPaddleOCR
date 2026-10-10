@@ -420,6 +420,7 @@ internal unsafe sealed class VkDevice : IDisposable
             }
             if (memType == uint.MaxValue && preferHost)
             {
+                // relax: some drivers expose host-visible non-local types without CACHED
                 for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
                 {
                     if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
@@ -429,6 +430,10 @@ internal unsafe sealed class VkDevice : IDisposable
                         memType = (uint)i;
                 }
             }
+            // UMA (Intel iGPU): every heap is DEVICE_LOCAL, so the non-local
+            // preference above matches nothing. Cached host-visible is still
+            // the CPU readback type. Discrete parts never get here — they
+            // have a non-local host type and already returned.
             if (memType == uint.MaxValue && preferHost)
             {
                 for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
@@ -511,10 +516,6 @@ internal unsafe sealed class VkDevice : IDisposable
         {
             // Only successful allocations are stored in b; also release the buffer
             // when memory selection, allocation, or binding fails.
-            // UMA (Intel iGPU): every heap is DEVICE_LOCAL, so the non-local
-            // preference above matches nothing. Cached host-visible is still
-            // the CPU readback type. Discrete parts never get here — they
-            // have a non-local host type and already returned.
             b.Free();
             throw;
         }
