@@ -41,73 +41,92 @@ internal static partial class MatMul
             // maxima, indices and tie-breaks are unchanged.
             int tiles = columns >= 16 ? columns / 16 : 0;
             int blockTiles = Math.Max(1, 256 * 1024 / (inner * 16 * sizeof(float)));
+            [MethodImpl(MethodImplCompat.AggressiveOptimization)]
+            [SkipLocalsInit]
             void Worker(int w)
             {
                 int myJobs = (jobs - w + workers - 1) / workers;
-                var allMaxima = new Vector256<float>[myJobs * 4];
-                var allIndices = new Vector256<float>[myJobs * 4];
-                allMaxima.AsSpan().Fill(Vector256.Create(float.NegativeInfinity));
-                float* maxima = stackalloc float[4];
-                int* best = stackalloc int[4];
-                for (int t0 = 0; t0 < tiles; t0 += blockTiles)
+                int stateLength = checked(myJobs * 4);
+                // Two <=4KB workspaces stay on the stack; larger states follow
+                // the existing pool/discard policy. Initialize both before use.
+                Vector256<float>[]? rentedMaxima = null, rentedIndices = null;
+                try
                 {
-                    int t1 = Math.Min(tiles, t0 + blockTiles);
+                    Span<Vector256<float>> allMaxima = stateLength <= 128
+                        ? stackalloc Vector256<float>[stateLength]
+                        : (rentedMaxima = PooledArrays.Rent<Vector256<float>>(stateLength)).AsSpan(0, stateLength);
+                    Span<Vector256<float>> allIndices = stateLength <= 128
+                        ? stackalloc Vector256<float>[stateLength]
+                        : (rentedIndices = PooledArrays.Rent<Vector256<float>>(stateLength)).AsSpan(0, stateLength);
+                    allMaxima.Fill(Vector256.Create(float.NegativeInfinity));
+                    allIndices.Clear();
+                    float* maxima = stackalloc float[4];
+                    int* best = stackalloc int[4];
+                    for (int t0 = 0; t0 < tiles; t0 += blockTiles)
+                    {
+                        int t1 = Math.Min(tiles, t0 + blockTiles);
+                        for (int j = 0; j < myJobs; j++)
+                        {
+                            int job = w + j * workers;
+                            int b = job / rowJobs, row = (job - b * rowJobs) * 4;
+                            Span<Vector256<float>> vectorMaxima = allMaxima.Slice(j * 4, 4);
+                            Span<Vector256<float>> vectorIndices = allIndices.Slice(j * 4, 4);
+                            int inputBase = (b * rows + row) * inner;
+                            for (int t = t0; t < t1; t++)
+                            {
+                                int col = t * 16;
+                                Vector256<float> a0l = Vector256<float>.Zero, a0h = a0l;
+                                Vector256<float> a1l = a0l, a1h = a0l;
+                                Vector256<float> a2l = a0l, a2h = a0l;
+                                Vector256<float> a3l = a0l, a3h = a0l;
+                                float* tile = packedPtr + t * inner * 16;
+                                for (int k = 0; k < inner; k++)
+                                {
+                                    Vector256<float> wl = Avx.LoadVector256(tile + k * 16);
+                                    Vector256<float> wh = Avx.LoadVector256(tile + k * 16 + 8);
+                                    Vector256<float> v0 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + k);
+                                    Vector256<float> v1 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner + k);
+                                    Vector256<float> v2 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 2 + k);
+                                    Vector256<float> v3 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 3 + k);
+                                    a0l = AddMul(a0l, v0, wl); a0h = AddMul(a0h, v0, wh);
+                                    a1l = AddMul(a1l, v1, wl); a1h = AddMul(a1h, v1, wh);
+                                    a2l = AddMul(a2l, v2, wl); a2h = AddMul(a2h, v2, wh);
+                                    a3l = AddMul(a3l, v3, wl); a3h = AddMul(a3h, v3, wh);
+                                }
+                                if (hasBias)
+                                {
+                                    Vector256<float> bl = Avx.LoadVector256(biasPtr + col);
+                                    Vector256<float> bh = Avx.LoadVector256(biasPtr + col + 8);
+                                    a0l = Avx.Add(a0l, bl); a0h = Avx.Add(a0h, bh);
+                                    a1l = Avx.Add(a1l, bl); a1h = Avx.Add(a1h, bh);
+                                    a2l = Avx.Add(a2l, bl); a2h = Avx.Add(a2h, bh);
+                                    a3l = Avx.Add(a3l, bl); a3h = Avx.Add(a3h, bh);
+                                }
+                                Update256(a0l, col, 0, vectorMaxima, vectorIndices);
+                                Update256(a0h, col + 8, 0, vectorMaxima, vectorIndices);
+                                Update256(a1l, col, 1, vectorMaxima, vectorIndices);
+                                Update256(a1h, col + 8, 1, vectorMaxima, vectorIndices);
+                                Update256(a2l, col, 2, vectorMaxima, vectorIndices);
+                                Update256(a2h, col + 8, 2, vectorMaxima, vectorIndices);
+                                Update256(a3l, col, 3, vectorMaxima, vectorIndices);
+                                Update256(a3h, col + 8, 3, vectorMaxima, vectorIndices);
+                            }
+                        }
+                    }
                     for (int j = 0; j < myJobs; j++)
                     {
                         int job = w + j * workers;
                         int b = job / rowJobs, row = (job - b * rowJobs) * 4;
-                        Span<Vector256<float>> vectorMaxima = allMaxima.AsSpan(j * 4, 4);
-                        Span<Vector256<float>> vectorIndices = allIndices.AsSpan(j * 4, 4);
-                        int inputBase = (b * rows + row) * inner;
-                        for (int t = t0; t < t1; t++)
-                        {
-                            int col = t * 16;
-                            Vector256<float> a0l = Vector256<float>.Zero, a0h = a0l;
-                            Vector256<float> a1l = a0l, a1h = a0l;
-                            Vector256<float> a2l = a0l, a2h = a0l;
-                            Vector256<float> a3l = a0l, a3h = a0l;
-                            float* tile = packedPtr + t * inner * 16;
-                            for (int k = 0; k < inner; k++)
-                            {
-                                Vector256<float> wl = Avx.LoadVector256(tile + k * 16);
-                                Vector256<float> wh = Avx.LoadVector256(tile + k * 16 + 8);
-                                Vector256<float> v0 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + k);
-                                Vector256<float> v1 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner + k);
-                                Vector256<float> v2 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 2 + k);
-                                Vector256<float> v3 = Avx.BroadcastScalarToVector256(inputPtr + inputBase + inner * 3 + k);
-                                a0l = AddMul(a0l, v0, wl); a0h = AddMul(a0h, v0, wh);
-                                a1l = AddMul(a1l, v1, wl); a1h = AddMul(a1h, v1, wh);
-                                a2l = AddMul(a2l, v2, wl); a2h = AddMul(a2h, v2, wh);
-                                a3l = AddMul(a3l, v3, wl); a3h = AddMul(a3h, v3, wh);
-                            }
-                            if (hasBias)
-                            {
-                                Vector256<float> bl = Avx.LoadVector256(biasPtr + col);
-                                Vector256<float> bh = Avx.LoadVector256(biasPtr + col + 8);
-                                a0l = Avx.Add(a0l, bl); a0h = Avx.Add(a0h, bh);
-                                a1l = Avx.Add(a1l, bl); a1h = Avx.Add(a1h, bh);
-                                a2l = Avx.Add(a2l, bl); a2h = Avx.Add(a2h, bh);
-                                a3l = Avx.Add(a3l, bl); a3h = Avx.Add(a3h, bh);
-                            }
-                            Update256(a0l, col, 0, vectorMaxima, vectorIndices);
-                            Update256(a0h, col + 8, 0, vectorMaxima, vectorIndices);
-                            Update256(a1l, col, 1, vectorMaxima, vectorIndices);
-                            Update256(a1h, col + 8, 1, vectorMaxima, vectorIndices);
-                            Update256(a2l, col, 2, vectorMaxima, vectorIndices);
-                            Update256(a2h, col + 8, 2, vectorMaxima, vectorIndices);
-                            Update256(a3l, col, 3, vectorMaxima, vectorIndices);
-                            Update256(a3h, col + 8, 3, vectorMaxima, vectorIndices);
-                        }
+                        Reduce256(allMaxima.Slice(j * 4, 4), allIndices.Slice(j * 4, 4), maxima, best);
+                        FinishScalarTail(inputPtr, weightsPtr, biasPtr, hasBias,
+                            indicesPtr, scoresPtr, b, row, 4, rows, inner, columns, tiles * 16,
+                            maxima, best);
                     }
                 }
-                for (int j = 0; j < myJobs; j++)
+                finally
                 {
-                    int job = w + j * workers;
-                    int b = job / rowJobs, row = (job - b * rowJobs) * 4;
-                    Reduce256(allMaxima.AsSpan(j * 4, 4), allIndices.AsSpan(j * 4, 4), maxima, best);
-                    FinishScalarTail(inputPtr, weightsPtr, biasPtr, hasBias,
-                        indicesPtr, scoresPtr, b, row, 4, rows, inner, columns, tiles * 16,
-                        maxima, best);
+                    PooledArrays.Return(rentedMaxima);
+                    PooledArrays.Return(rentedIndices);
                 }
             }
 
