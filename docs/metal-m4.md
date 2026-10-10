@@ -4,6 +4,27 @@
 
 **结论：三档 Metal 全部净胜 CPU（tiny 1.75× / small 4.00× / medium 6.47×），检测行数与 CPU 完全一致，文本差异为 fp16 级噪声（vs CPU 逐图差：tiny 11 图、small 4 图、medium 3 图，多数为单字符空格增减；medium 的 exact_lines/CER 反而略优于 CPU）。受 paravirt 虚拟化所限绝对数偏保守——实测 MMA≈fp32≈3TFLOPS、copy ~84GB/s、dispatch ~45µs，均低于真机 M4，真机数字预期更好。**
 
+## 第二轮优化（metal-squeeze 分支 vs main @b52a09b，同窗口交替 A/B）
+
+这一轮针对 rec 侧图结构补了三处，det 持平：
+
+- **SE 链融合泛化**：`seEmit` 原来只认 det 形态（fc 的 bias 在 Conv 第三输入）；rec 的 SE 是 bias-free Conv + 组内 Add，之前按 6 条散 dispatch 发射。匹配器现在把 bias-Add 组解析回 Conv，并把 `se_join` 容量从 C≤256/R≤64 扩到 C≤1024/R≤256（256-lane 循环），rec 的 6 个 SE 块全部折叠成 `se_part+se_join+binMul` 3 条（118→100 dispatches）。
+- **conv_dw4a 小图选型**：flat depthwise 变体此前只在 det 大图输过被环境变量关掉；实测 rec 的全部 dw conv（hw≤960）上 dw4a 比 dw4t 快 ~2.8ms/图，det 打平。现在按 inH*inW≤2048 自动选 dw4a，默认开启（`SIMD_OCR_NODWA` 兜底）。
+- **nchw2nhwc 重写**：旧 kernel `c=gid.x%Cout` 每 lane 跨 plane 读（~25% 读效率），改成一 thread 一 pixel 连续读 + half4 写。
+
+同窗口 A/B（宿主繁忙时段，绝对值偏高；跑过 2 轮取 median）：
+
+| 阶段 | main | 本分支 | Δ |
+|---|---:|---:|---:|
+| medium e2e (median) | 171.9 / 169.9 | 165.3 / 165.1 | **≈ -6 ms** |
+| rec_graph (stage median) | 106.9 | 103.7 | -3.2 |
+| det_graph (stage median) | 54.2 | 54.2 | 0 |
+| cls_graph (stage median) | 2.6 | 2.4 | -0.2 |
+
+精度同一轮：exact_lines 895/1024 vs main 897（-2，fp16 阈值临界噪声内；SE 融合路径中间保留 fp32 反而更精确，个别边界行翻转方向随机），CER 0.67% 不变，CLS 1023/1023 与 detected 逐图一致。
+
+> paravirt 上消除 dispatch 对墙钟贡献有限——单 CB 内相邻 dispatch 会流水线重叠，省掉的多是小张量算子；dw4a 是本轮唯一的实质 kernel 级收益。真机 dispatch 开销更高，融合收益预期比 paravirt 明显。
+
 ## 端到端（4 workers，median ms/图，越低越好）
 
 | 模型 | CPU(sharp) | Metal | 比值 | CPU img/s | GPU img/s |
