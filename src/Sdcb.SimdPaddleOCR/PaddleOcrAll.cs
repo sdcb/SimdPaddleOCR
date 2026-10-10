@@ -30,6 +30,7 @@ public sealed class PaddleOcrAll : IDisposable
     private readonly int _cropWorkers;
     private readonly int _recIntraOpBase;
     private readonly int _recIntraOpMax;
+    private readonly int _gpuCtcIntraOpThreads;
     private readonly bool _recGpu;
     private readonly int _recBatchEffective;
     private readonly List<byte[]> _cropBuffers = [];
@@ -110,6 +111,10 @@ public sealed class PaddleOcrAll : IDisposable
         _options = options ?? new PaddleOcrOptions();
         if (_options.LineWorkerCount is < 0 or > Parallelism.MaxLineWorkers)
             throw new ArgumentOutOfRangeException(nameof(options));
+        if (_options.GpuCtcIntraOpThreads is < 0 or > 16)
+            throw new ArgumentOutOfRangeException(nameof(options), "GpuCtcIntraOpThreads must be between 0 and 16.");
+        if (_options.PreprocessWorkerCount is < 0 or > 16)
+            throw new ArgumentOutOfRangeException(nameof(options), "PreprocessWorkerCount must be between 0 and 16.");
         if (_options.RecBatchLines < 1) throw new ArgumentOutOfRangeException(nameof(options));
         if (_options.ClassifierThreshold is < 0 or > 1 || !MathCompat.IsFinite(_options.ClassifierThreshold))
             throw new ArgumentOutOfRangeException(nameof(options));
@@ -117,7 +122,9 @@ public sealed class PaddleOcrAll : IDisposable
         if (_options.UseDirectionClassification && classifierModel is null)
             throw new ArgumentNullException(nameof(classifierModel));
         _lineWorkers = Parallelism.ResolveLineWorkers(_options.LineWorkerCount);
-        _cropWorkers = Parallelism.ResolveCropWorkers(_options.LineWorkerCount);
+        _cropWorkers = _options.PreprocessWorkerCount == 0
+            ? Parallelism.ResolveCropWorkers(_options.LineWorkerCount)
+            : Math.Min(_options.PreprocessWorkerCount, Environment.ProcessorCount);
         _detector = new PaddleOcrDetector(detectorModel ?? throw new ArgumentNullException(nameof(detectorModel)), _options.Detector,
             ResolveDetectorIntraThreads(_options));
         _classifier = classifierModel is null ? null : new PaddleOcrClassifier(classifierModel, _options.Classifier);
@@ -127,6 +134,9 @@ public sealed class PaddleOcrAll : IDisposable
         // at 8 on Zen 3, so idle line-worker cores are worth feeding even
         // past the physical-core count.
         _recIntraOpMax = Math.Min(Environment.ProcessorCount, 16);
+        _gpuCtcIntraOpThreads = _options.GpuCtcIntraOpThreads == 0
+            ? _recIntraOpMax
+            : Math.Min(_options.GpuCtcIntraOpThreads, Environment.ProcessorCount);
         _recognizer = new PaddleOcrRecognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)),
             dictionaryUtf8, _options.Recognizer, ownsModel: false,
             _recIntraOpBase);
@@ -209,7 +219,7 @@ public sealed class PaddleOcrAll : IDisposable
             // LineWorkerCount here capped the crop at 4 threads on a 16-core
             // machine and left the phase latency-bound.
             int lineWorkerCount = Math.Min(_lineWorkers, count);
-            int cropWorkers = Math.Min(Math.Max(lineWorkerCount, _cropWorkers), count);
+            int cropWorkers = Math.Min(_cropWorkers, count);
             if (cropWorkers <= 1)
             {
                 for (int i = 0; i < count; i++)
@@ -447,7 +457,7 @@ public sealed class PaddleOcrAll : IDisposable
             long recStart = s_profileEnabled ? Stopwatch.GetTimestamp() : 0;
             if (_recGpu && _recognizer.GpuRecAlive
                 && _recognizer.TryRecognizeUnitsBatched(cropBuffer, offsets, bytes, widths, heights,
-                    units, recWidths, recResults, _recIntraOpMax, _cropWorkers, returnCtcAlignment))
+                    units, recWidths, recResults, _gpuCtcIntraOpThreads, _cropWorkers, returnCtcAlignment))
             {
                 if (s_profileEnabled) AddProfile(4, recStart);
             }
