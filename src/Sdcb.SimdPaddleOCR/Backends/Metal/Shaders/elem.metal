@@ -9,18 +9,34 @@ using namespace metal;
 // Graph input convert: fp32 NCHW [n,C,H,W] → fp16 NHWC [n,H*W,Cout].
 // Cout may exceed C (zero-padded channels for aligned downstream reads).
 struct Pc3 { uint hw, C, Cout; };
+// One thread per pixel: per-plane reads stay w-contiguous (fully
+// coalesced per channel), writes are back-to-back half4 rows.
 kernel void nchw2nhwc(device const float* x [[buffer(0)]],
                       device half* o [[buffer(1)]],
                       constant Pc3& p [[buffer(2)]],
                       uint2 gid [[thread_position_in_grid]])
 {
-    uint total = p.hw * p.Cout;
-    if (gid.x >= total) return;
-    uint c = gid.x % p.Cout;
-    uint px = gid.x / p.Cout;
-    uint b = gid.y;
-    o[b * total + gid.x] = c < p.C
-        ? half(x[b * p.C * p.hw + c * p.hw + px]) : half(0.0);
+    if (gid.x >= p.hw) return;
+    ulong inBase = ulong(gid.y) * p.C * p.hw + gid.x;
+    ulong outBase = (ulong(gid.y) * p.hw + gid.x) * p.Cout;
+    if ((p.Cout & 3u) == 0u)
+    {
+        for (uint i = 0u; i < p.Cout; i += 4u)
+        {
+            half4 v;
+            for (uint j = 0u; j < 4u; j++)
+            {
+                uint c = i + j;
+                v[j] = c < p.C ? half(x[inBase + c * p.hw]) : half(0.0);
+            }
+            ((device half4*)(o + outBase + i))[0] = v;
+        }
+    }
+    else
+    {
+        for (uint i = 0u; i < p.Cout; i++)
+            o[outBase + i] = i < p.C ? half(x[inBase + i * p.hw]) : half(0.0);
+    }
 }
 
 // ---------------- sigmoid_out ----------------
