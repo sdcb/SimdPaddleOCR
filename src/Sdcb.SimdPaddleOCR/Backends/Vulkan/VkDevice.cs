@@ -392,77 +392,138 @@ internal unsafe sealed class VkDevice : IDisposable
             Usage = VkConst.BufferUsageStorageBuffer | VkConst.BufferUsageTransferSrc | VkConst.BufferUsageTransferDst,
             SharingMode = VkConst.SharingExclusive,
         };
-        Vk.Check(Vk.vkCreateBuffer(Device, &bci, null, out b.Buffer), "vkCreateBuffer");
-        Vk.VkMemoryRequirements req;
-        Vk.vkGetBufferMemoryRequirements(Device, b.Buffer, &req);
-
-        uint memType = uint.MaxValue;
-        for (int i = 0; i < (int)MemProps.MemoryTypeCount; i++)
+        Vk.Check(Vk.vkCreateBuffer(Device, &bci, null, out IntPtr buffer), "vkCreateBuffer");
+        b.Buffer = buffer;
+        try
         {
-            if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
-            uint f = MemProps.TypeAt(i).PropertyFlags;
-            bool ok;
-            if (!hostVisible)
-                ok = (f & VkConst.MemDeviceLocal) != 0;
-            else if (preferHost)
-                ok = (f & (VkConst.MemHostVisible | VkConst.MemHostCoherent)) == (VkConst.MemHostVisible | VkConst.MemHostCoherent)
-                     && (f & VkConst.MemDeviceLocal) == 0
-                     && (f & VkConst.MemHostCached) != 0;
-            else
-                ok = (f & VkConst.MemHostVisible) != 0 && (f & VkConst.MemHostCoherent) != 0;
-            if (ok && (memType == uint.MaxValue || (!preferHost && (f & VkConst.MemDeviceLocal) != 0)))
-            {
-                memType = (uint)i;
-                if (preferHost || (f & VkConst.MemDeviceLocal) != 0) break;
-            }
-        }
-        if (memType == uint.MaxValue && preferHost)
-        {
-            // relax: some drivers expose host-visible non-local types without CACHED
-            for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
+            Vk.VkMemoryRequirements req;
+            Vk.vkGetBufferMemoryRequirements(Device, b.Buffer, &req);
+            uint memType = uint.MaxValue;
+            for (int i = 0; i < (int)MemProps.MemoryTypeCount; i++)
             {
                 if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
                 uint f = MemProps.TypeAt(i).PropertyFlags;
-                if ((f & (VkConst.MemHostVisible | VkConst.MemHostCoherent)) == (VkConst.MemHostVisible | VkConst.MemHostCoherent)
-                    && (f & VkConst.MemDeviceLocal) == 0)
+                bool ok;
+                if (!hostVisible)
+                    ok = (f & VkConst.MemDeviceLocal) != 0;
+                else if (preferHost)
+                    ok = (f & (VkConst.MemHostVisible | VkConst.MemHostCoherent)) == (VkConst.MemHostVisible | VkConst.MemHostCoherent)
+                         && (f & VkConst.MemDeviceLocal) == 0
+                         && (f & VkConst.MemHostCached) != 0;
+                else
+                    ok = (f & VkConst.MemHostVisible) != 0 && (f & VkConst.MemHostCoherent) != 0;
+                if (ok && (memType == uint.MaxValue || (!preferHost && (f & VkConst.MemDeviceLocal) != 0)))
+                {
                     memType = (uint)i;
+                    if (preferHost || (f & VkConst.MemDeviceLocal) != 0) break;
+                }
             }
+            if (memType == uint.MaxValue && preferHost)
+            {
+                for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
+                {
+                    if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
+                    uint f = MemProps.TypeAt(i).PropertyFlags;
+                    if ((f & (VkConst.MemHostVisible | VkConst.MemHostCoherent)) == (VkConst.MemHostVisible | VkConst.MemHostCoherent)
+                        && (f & VkConst.MemDeviceLocal) == 0)
+                        memType = (uint)i;
+                }
+            }
+            if (memType == uint.MaxValue && preferHost)
+            {
+                for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
+                {
+                    if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
+                    uint f = MemProps.TypeAt(i).PropertyFlags;
+                    if ((f & (VkConst.MemHostVisible | VkConst.MemHostCoherent | VkConst.MemHostCached))
+                        == (VkConst.MemHostVisible | VkConst.MemHostCoherent | VkConst.MemHostCached))
+                        memType = (uint)i;
+                }
+                for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
+                {
+                    if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
+                    uint f = MemProps.TypeAt(i).PropertyFlags;
+                    if ((f & (VkConst.MemHostVisible | VkConst.MemHostCoherent))
+                        == (VkConst.MemHostVisible | VkConst.MemHostCoherent))
+                        memType = (uint)i;
+                }
+            }
+            if (memType == uint.MaxValue)
+                throw new PlatformNotSupportedException($"Vulkan: no suitable memory type for {bytes}-byte buffer (hostVisible={hostVisible})");
+            Vk.VkMemoryAllocateInfo mai = new()
+            {
+                SType = VkConst.StMemoryAllocateInfo,
+                AllocationSize = req.Size, MemoryTypeIndex = memType,
+            };
+            VkResult allocation = Vk.vkAllocateMemory(Device, &mai, null, out IntPtr memory);
+            if (allocation == VkResult.Success)
+            {
+                b.Memory = memory;
+            }
+            else
+            {
+                string attempts = $"{DescribeMemoryType(memType)}: {allocation}";
+                if (hostVisible && allocation is (VkResult.ErrorOutOfDeviceMemory or VkResult.ErrorOutOfHostMemory))
+                {
+                    // A host-visible device-local heap can expose a smaller mapping window
+                    // than total VRAM. Keep running the same GPU graph using compatible
+                    // coherent memory, trying non-device-local types first.
+                    uint preferredType = memType;
+                    for (int local = 0; local < 2 && allocation is (VkResult.ErrorOutOfDeviceMemory or VkResult.ErrorOutOfHostMemory); local++)
+                    {
+                        for (int i = 0; i < (int)MemProps.MemoryTypeCount; i++)
+                        {
+                            if ((uint)i == preferredType || (req.MemoryTypeBits & (1u << i)) == 0) continue;
+                            uint flags = MemProps.TypeAt(i).PropertyFlags;
+                            const uint memDeviceCoherentAmd = 0x40;
+                            // deviceCoherentMemory is not enabled on this device:
+                            // VUID-vkAllocateMemory-deviceCoherentMemory-02790.
+                            if ((flags & memDeviceCoherentAmd) != 0) continue;
+                            if ((flags & (VkConst.MemHostVisible | VkConst.MemHostCoherent))
+                                != (VkConst.MemHostVisible | VkConst.MemHostCoherent)) continue;
+                            if (((flags & VkConst.MemDeviceLocal) != 0) != (local == 1)) continue;
+                            mai.MemoryTypeIndex = (uint)i;
+                            allocation = Vk.vkAllocateMemory(Device, &mai, null, out memory);
+                            if (allocation == VkResult.Success)
+                            {
+                                memType = (uint)i;
+                                b.Memory = memory;
+                                break;
+                            }
+                            attempts += $"; {DescribeMemoryType((uint)i)}: {allocation}";
+                            if (allocation is not (VkResult.ErrorOutOfDeviceMemory or VkResult.ErrorOutOfHostMemory)) break;
+                        }
+                    }
+                }
+                if (allocation != VkResult.Success)
+                    throw new InvalidOperationException(
+                        $"Vulkan vkAllocateMemory failed: {allocation}; bufferBytes={bytes}, allocationBytes={req.Size}, " +
+                        $"hostVisible={hostVisible}, preferHost={preferHost}, memoryTypeBits=0x{req.MemoryTypeBits:x}; {attempts}");
+            }
+            VkResult binding = Vk.vkBindBufferMemory(Device, b.Buffer, b.Memory, 0);
+            if (binding != VkResult.Success)
+                throw new InvalidOperationException(
+                    $"Vulkan vkBindBufferMemory failed: {binding}; bufferBytes={bytes}, allocationBytes={req.Size}, {DescribeMemoryType(memType)}");
+            b.Flags = MemProps.TypeAt((int)memType).PropertyFlags;
+            return b;
         }
-        if (memType == uint.MaxValue && preferHost)
+        catch
         {
+            // Only successful allocations are stored in b; also release the buffer
+            // when memory selection, allocation, or binding fails.
             // UMA (Intel iGPU): every heap is DEVICE_LOCAL, so the non-local
             // preference above matches nothing. Cached host-visible is still
             // the CPU readback type. Discrete parts never get here — they
             // have a non-local host type and already returned.
-            for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
-            {
-                if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
-                uint f = MemProps.TypeAt(i).PropertyFlags;
-                if ((f & (VkConst.MemHostVisible | VkConst.MemHostCoherent | VkConst.MemHostCached))
-                    == (VkConst.MemHostVisible | VkConst.MemHostCoherent | VkConst.MemHostCached))
-                    memType = (uint)i;
-            }
-            for (int i = 0; i < (int)MemProps.MemoryTypeCount && memType == uint.MaxValue; i++)
-            {
-                if ((req.MemoryTypeBits & (1u << i)) == 0) continue;
-                uint f = MemProps.TypeAt(i).PropertyFlags;
-                if ((f & (VkConst.MemHostVisible | VkConst.MemHostCoherent))
-                    == (VkConst.MemHostVisible | VkConst.MemHostCoherent))
-                    memType = (uint)i;
-            }
+            b.Free();
+            throw;
         }
-        if (memType == uint.MaxValue)
-            throw new PlatformNotSupportedException($"Vulkan: no suitable memory type for {bytes}-byte buffer (hostVisible={hostVisible})");
-
-        Vk.VkMemoryAllocateInfo mai = new()
+        string DescribeMemoryType(uint typeIndex)
         {
-            SType = VkConst.StMemoryAllocateInfo,
-            AllocationSize = req.Size, MemoryTypeIndex = memType,
-        };
-        Vk.Check(Vk.vkAllocateMemory(Device, &mai, null, out b.Memory), "vkAllocateMemory");
-        Vk.Check(Vk.vkBindBufferMemory(Device, b.Buffer, b.Memory, 0), "vkBindBufferMemory");
-        b.Flags = MemProps.TypeAt((int)memType).PropertyFlags;
-        return b;
+            Vk.VkMemoryType type = MemProps.TypeAt((int)typeIndex);
+            Vk.VkMemoryHeap heap = MemProps.HeapAt((int)type.HeapIndex);
+            return $"type={typeIndex}, flags=0x{type.PropertyFlags:x}, heap={type.HeapIndex}, heapBytes={heap.Size}";
+        }
     }
 
     public IntPtr NewShaderModule(byte[] spirv)
