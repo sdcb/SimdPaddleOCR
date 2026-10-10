@@ -38,8 +38,11 @@ internal delegate bool CtcUnitsReady(float[] activations, int[] offsets, int fir
 /// <summary>Shape-independent CTC projection operands (vocab MatMul + bias).</summary>
 internal sealed class CtcHead
 {
-    public byte[] Weights = [];
-    public byte[]? Bias;
-    public float[]? Packed;
-    public int Inner, Columns, MatMulIndex;
+    // Init-only: the shape-plan cache shares one head across calls and consumers must not mutate it.
+    public byte[] Weights { get; init; } = [];
+    public byte[]? Bias { get; init; }
+    public float[]? Packed { get; init; }
+    public int Inner { get; init; }
+    public int Columns { get; init; }
+    public int MatMulIndex { get; init; }
 }
