@@ -31,6 +31,7 @@
       <SetTargetFramework Condition="'$(UseNs20Library)' == 'true'">TargetFramework=netstandard2.0</SetTargetFramework>
     </ProjectReference>
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.TextLineOrientation\Sdcb.SimdPaddleOCR.Models.TextLineOrientation.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
