@@ -804,28 +804,47 @@ internal sealed class MetalGraphModel
             (int conv, uint biasT) PwGroup(int p)
             {
                 if (p < 0) return (-1, uint.MaxValue);
+                int convN; uint bT;
                 if (nodes[p].Operator == OperatorId.Conv)
                 {
                     if (!IsPwConv(p)
                         || nodes[p].Inputs.Length <= 2
                         || nodes[p].Inputs[2] == uint.MaxValue)
                         return (-1, uint.MaxValue);
-                    return (p, nodes[p].Inputs[2]);
+                    convN = p; bT = nodes[p].Inputs[2];
                 }
-                if (nodes[p].Operator == OperatorId.Add)
+                else if (nodes[p].Operator == OperatorId.Add)
                 {
                     uint ia = nodes[p].Inputs[0], ib = nodes[p].Inputs[1];
                     bool aConst = isConst[checked((int)ia)],
                          bConst = isConst[checked((int)ib)];
                     if (aConst == bConst) return (-1, uint.MaxValue);
-                    uint bT = aConst ? ia : ib;
+                    bT = aConst ? ia : ib;
                     int c = prodNode[Phys(checked((int)(aConst ? ib : ia)))];
                     if (c < 0 || !IsPwConv(c)
                         || _compiled.FusedSkip(c) < p - c)
                         return (-1, uint.MaxValue);
-                    return (c, bT);
+                    convN = c;
                 }
-                return (-1, uint.MaxValue);
+                else return (-1, uint.MaxValue);
+                // bias must broadcast per-channel: a single non-1 dim equal to the
+                // conv's Cout at channel position, e.g. [C,1,1] or [1,C,1,1]
+                // (scalar / spatial-HW broadcasts would make se_join read OOB)
+                int[] bsh = shapes[Phys(checked((int)bT))];
+                int[] osh = shapes[Phys(checked((int)nodes[convN].Outputs[0]))];
+                bool ok = false;
+                if (osh.Length >= 2)
+                {
+                    int nz = 0, zi = -1;
+                    for (int i = 0; i < bsh.Length; i++)
+                        if (bsh[i] != 1) { nz++; zi = i; }
+                    ok = nz == 1 && bsh[zi] == osh[1]
+                        && zi + (osh.Length - bsh.Length) == 1;   // right-aligned channel dim
+                    if (!ok && nodes[p].Operator == OperatorId.Conv)
+                        ok = bsh.Length == 1 && bsh[0] == osh[1];   // Conv-carried bias is [Cout]
+                }
+                if (!ok) return (-1, uint.MaxValue);
+                return (convN, bT);
             }
             bool dbg = Environment.GetEnvironmentVariable("SIMD_OCR_GPU_DUMP") == "1";
             for (int hs = 0; hs < nodes.Length; hs++)
