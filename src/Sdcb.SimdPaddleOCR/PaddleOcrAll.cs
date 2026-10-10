@@ -217,7 +217,10 @@ public sealed class PaddleOcrAll : IDisposable
             // This is an exclusive window before any line worker starts, so it
             // gets its own budget the same way DET does; reusing
             // LineWorkerCount here capped the crop at 4 threads on a 16-core
-            // machine and left the phase latency-bound.
+            // machine and left the phase latency-bound. The automatic budget
+            // never falls below the line workers (Parallelism.ResolveCropWorkers)
+            // and an explicit PreprocessWorkerCount may deliberately do so, so
+            // the resolved budget is used as-is without a line-count lift.
             int lineWorkerCount = Math.Min(_lineWorkers, count);
             int cropWorkers = Math.Min(_cropWorkers, count);
             if (cropWorkers <= 1)
