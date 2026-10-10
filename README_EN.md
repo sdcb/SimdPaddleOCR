@@ -162,6 +162,31 @@ using PaddleOcrAll ocr = await PaddleOcrAll.LoadAsync(ChineseV6TinyModels.Defaul
 
 Vulkan loads the system loader directly; Metal covers macOS arm64. Pass `OcrBackend.Cpu` to stay off the GPU entirely. GPU backends are only compiled in the `net10.0` target.
 
+### CPU thread budgets in GPU mode
+
+GPU OCR still runs the perspective crop, resize/normalize, and the vocabulary projection and ArgMax of the recognition results on the CPU.
+`PreprocessWorkerCount` and `GpuCtcIntraOpThreads` control the thread counts of these stages respectively:
+
+```csharp
+var options = new PaddleOcrOptions
+{
+    Detector = new() { Backend = OcrBackend.Vulkan },
+    Classifier = new() { Backend = OcrBackend.Vulkan },
+    Recognizer = new() { Backend = OcrBackend.Vulkan },
+    GpuCtcIntraOpThreads = 4,
+    PreprocessWorkerCount = 6
+};
+using var ocr = PaddleOcrAll.Load(ChineseV6TinyModels.Default, options);
+```
+
+Both default to `0`, preserving the original automatic budgets; explicit values allow `1..16` and are capped by the logical processor count.
+`GpuCtcIntraOpThreads` does not limit pure-CPU inference or the CPU graph operator budgets after a GPU failure.
+`PreprocessWorkerCount` also limits the perspective crop in CPU mode, but does not change detector preprocessing or graph operator budgets.
+
+Multiple images can share one instance, with image concurrency limited on the caller's side, e.g. `ParallelOptions.MaxDegreeOfParallelism = 2`.
+Image concurrency and the per-line `LineWorkerCount` are separate dimensions. Lowering the per-call thread count may reduce process CPU usage, but may also reduce throughput or increase per-image latency;
+compare after warmup with the same models, image sizes, and orientation-classification options, measuring batch throughput and per-image latency separately. The `4/6` above is a testable starting point, not an optimal parameter set for every device.
+
 ## Per-character boxes
 
 Pass `returnCtcAlignment: true` to `Run` and each line carries `CtcSpans`; `EstimateCharacterBoxes()` then returns a per-character quad:
