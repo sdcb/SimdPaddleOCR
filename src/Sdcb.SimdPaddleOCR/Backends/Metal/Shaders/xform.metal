@@ -57,25 +57,26 @@ kernel void se_join(device const float* part [[buffer(0)]],
                     uint2 lp2 [[thread_position_in_threadgroup]])
 {
     uint lane = lp2.x;
-    threadgroup float zf[256];
-    threadgroup float hf[64];
+    // C <= 1024, R <= 256 (gated at emit); stages loop in 256-lane strides.
+    threadgroup float zf[1024];
+    threadgroup float hf[256];
 
     uint b = wg.x;
     uint cv = p.C >> 2;
     uint pb = b * p.S * p.C;
 
-    if (lane < p.C) {
+    for (uint c0 = lane; c0 < p.C; c0 += 256u) {
         float a = 0.0f;
-        for (uint si = 0u; si < p.S; si++) a += part[pb + si * p.C + lane];
-        zf[lane] = a / float(p.hw);
+        for (uint si = 0u; si < p.S; si++) a += part[pb + si * p.C + c0];
+        zf[c0] = a / float(p.hw);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if (lane < p.R) {
-        float acc2 = b1[lane];
+    for (uint r0 = lane; r0 < p.R; r0 += 256u) {
+        float acc2 = b1[r0];
         for (uint c = 0u; c < p.C; c++)
-            acc2 += zf[c] * w1[lane * p.C + c];
-        hf[lane] = max(acc2, 0.0f);
+            acc2 += zf[c] * w1[r0 * p.C + c];
+        hf[r0] = max(acc2, 0.0f);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 

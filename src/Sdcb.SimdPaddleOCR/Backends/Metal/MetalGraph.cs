@@ -198,8 +198,10 @@ internal sealed class MetalGraphModel
         _pDw = _dev.OcrPipe("conv_dw");
         _pDw4 = _dev.OcrPipe("conv_dw4");
         _pDw4T = _dev.OcrPipe("conv_dw4t");
-        _pDw4A = Environment.GetEnvironmentVariable("SIMD_OCR_DWA") != null
-            ? _dev.OcrPipe("conv_dw4a") : null;   // measured: flat loses to conv_dw4t
+        // flat variant wins on small feature maps (rec's dw convs); tiled
+        // still pays off on large det maps — DwFlatA splits them by input hw.
+        _pDw4A = Environment.GetEnvironmentVariable("SIMD_OCR_NODWA") == null
+            ? _dev.OcrPipe("conv_dw4a") : null;
         _pDense = _dev.OcrPipe("conv_dense");
         _pIm2col = _dev.OcrPipe("im2col");
         _pConvT = _dev.OcrPipe("convt2s2");
@@ -783,50 +785,88 @@ internal sealed class MetalGraphModel
         // SE chain fusion: ReduceMean -> Conv1x1(fc1,+bias) -> Conv1x1(fc2,+bias)
         // -> HardSigmoid emits as a single `se` dispatch writing the gate vector
         // directly to the HardSigmoid output slot.
-        var seEmit = new Dictionary<int, (int fc1, int fc2, int hs)>();
+        var seEmit = new Dictionary<int, (int fc1, int fc2, int hs, uint b1, uint b2)>();
         var concatAbsorbed = new HashSet<int>();   // phys tensors written directly into a concat slice
 
         if (Environment.GetEnvironmentVariable("SIMD_OCR_NOSE") == null)
         {
             bool IsPwConv(int ni)
             {
-                if (nodes[ni].Operator != OperatorId.Conv || _compiled.FusedSkip(ni) != 0
-                    || inConvGroup[ni]) return false;
+                if (nodes[ni].Operator != OperatorId.Conv || inConvGroup[ni]) return false;
                 ReadOnlySpan<byte> cp = _model.GetParameters(nodes[ni]);
                 return U32(cp, 4) == 1 && I32(cp, 8) == 1 && I32(cp, 12) == 1
-                    && I32(cp, 16) == 1 && I32(cp, 20) == 1
-                    && nodes[ni].Inputs.Length > 2 && nodes[ni].Inputs[2] != uint.MaxValue;
+                    && I32(cp, 16) == 1 && I32(cp, 20) == 1;
+            }
+            // Resolve the conv group producing the tensor made by node p:
+            // either a bias-carrying Conv (det), or a bias-free Conv whose
+            // channel-bias Add is fused into its compiler group (rec).
+            // Returns (conv node, fp32 bias tensor id) or (-1, MaxValue).
+            (int conv, uint biasT) PwGroup(int p)
+            {
+                if (p < 0) return (-1, uint.MaxValue);
+                int convN; uint bT;
+                if (nodes[p].Operator == OperatorId.Conv)
+                {
+                    if (!IsPwConv(p)
+                        || nodes[p].Inputs.Length <= 2
+                        || nodes[p].Inputs[2] == uint.MaxValue)
+                        return (-1, uint.MaxValue);
+                    convN = p; bT = nodes[p].Inputs[2];
+                }
+                else if (nodes[p].Operator == OperatorId.Add)
+                {
+                    uint ia = nodes[p].Inputs[0], ib = nodes[p].Inputs[1];
+                    bool aConst = isConst[checked((int)ia)],
+                         bConst = isConst[checked((int)ib)];
+                    if (aConst == bConst) return (-1, uint.MaxValue);
+                    bT = aConst ? ia : ib;
+                    int c = prodNode[Phys(checked((int)(aConst ? ib : ia)))];
+                    if (c < 0 || !IsPwConv(c)
+                        || _compiled.FusedSkip(c) < p - c)
+                        return (-1, uint.MaxValue);
+                    convN = c;
+                }
+                else return (-1, uint.MaxValue);
+                // bias must broadcast per-channel: a single non-1 dim equal to the
+                // conv's Cout at channel position, e.g. [C,1,1] or [1,C,1,1]
+                // (scalar / spatial-HW broadcasts would make se_join read OOB)
+                int[] bsh = shapes[Phys(checked((int)bT))];
+                int[] osh = shapes[Phys(checked((int)nodes[convN].Outputs[0]))];
+                bool ok = false;
+                if (osh.Length >= 2)
+                {
+                    int nz = 0, zi = -1;
+                    for (int i = 0; i < bsh.Length; i++)
+                        if (bsh[i] != 1) { nz++; zi = i; }
+                    ok = nz == 1 && bsh[zi] == osh[1]
+                        && zi + (osh.Length - bsh.Length) == 1;   // right-aligned channel dim
+                    if (!ok && nodes[p].Operator == OperatorId.Conv)
+                        ok = bsh.Length == 1 && bsh[0] == osh[1];   // Conv-carried bias is [Cout]
+                }
+                if (!ok) return (-1, uint.MaxValue);
+                return (convN, bT);
             }
             bool dbg = Environment.GetEnvironmentVariable("SIMD_OCR_GPU_DUMP") == "1";
             for (int hs = 0; hs < nodes.Length; hs++)
             {
                 if (nodes[hs].Operator != OperatorId.HardSigmoid
                     || _compiled.FusedSkip(hs) != 0 || inConvGroup[hs]) continue;
-                int fc2 = prodNode[Phys(checked((int)nodes[hs].Inputs[0]))];
+                (int fc2, uint b2T) = PwGroup(
+                    prodNode[Phys(checked((int)nodes[hs].Inputs[0]))]);
                 if (dbg)
-                    Console.Error.WriteLine($"  se? hs=n{hs} fc2=n{fc2} fc2pw={(fc2 >= 0 && IsPwConv(fc2))} rc2={(fc2 >= 0 ? refCount[Phys(checked((int)nodes[fc2].Outputs[0]))] : -1)}");
-                if (fc2 < 0 || !IsPwConv(fc2)
-                    || refCount[Phys(checked((int)nodes[fc2].Outputs[0]))] != 1) continue;
-                int fc1 = prodNode[Phys(checked((int)nodes[fc2].Inputs[0]))];
-                int reluNi = -1;
-                if (fc1 >= 0 && nodes[fc1].Operator == OperatorId.Relu
-                    && refCount[Phys(checked((int)nodes[fc1].Outputs[0]))] == 1)
-                { reluNi = fc1; fc1 = prodNode[Phys(checked((int)nodes[fc1].Inputs[0]))]; }
-                // fc1 may be a Conv+Relu compiler group (skip=1 covering reluNi)
-                bool fc1ok = fc1 >= 0 && reluNi >= 0
-                    && nodes[fc1].Operator == OperatorId.Conv && !inConvGroup[fc1]
-                    && _compiled.FusedSkip(fc1) == 1 && fc1 + 1 == reluNi
-                    && nodes[fc1].Inputs.Length > 2 && nodes[fc1].Inputs[2] != uint.MaxValue;
-                if (fc1ok)
-                {
-                    ReadOnlySpan<byte> cp = _model.GetParameters(nodes[fc1]);
-                    fc1ok = U32(cp, 4) == 1 && I32(cp, 8) == 1 && I32(cp, 12) == 1
-                        && I32(cp, 16) == 1 && I32(cp, 20) == 1;
-                }
+                    Console.Error.WriteLine($"  se? hs=n{hs} fc2=n{fc2} b2={(b2T == uint.MaxValue ? -1 : (int)b2T)} rc2={(fc2 >= 0 ? refCount[Phys(checked((int)nodes[hs].Inputs[0]))] : -1)}");
+                if (fc2 < 0
+                    || refCount[Phys(checked((int)nodes[hs].Inputs[0]))] != 1) continue;
+                int reluNi = prodNode[Phys(checked((int)nodes[fc2].Inputs[0]))];
+                if (reluNi < 0 || nodes[reluNi].Operator != OperatorId.Relu
+                    || refCount[Phys(checked((int)nodes[reluNi].Outputs[0]))] != 1)
+                    continue;
+                (int fc1, uint b1T) = PwGroup(
+                    prodNode[Phys(checked((int)nodes[reluNi].Inputs[0]))]);
                 if (dbg)
-                    Console.Error.WriteLine($"    fc1=n{fc1} relu=n{reluNi} fc1ok={fc1ok}");
-                if (!fc1ok
-                    || refCount[Phys(checked((int)nodes[fc1].Outputs[0]))] != 1) continue;
+                    Console.Error.WriteLine($"    fc1=n{fc1} relu=n{reluNi} b1={(b1T == uint.MaxValue ? -1 : (int)b1T)}");
+                if (fc1 < 0
+                    || refCount[Phys(checked((int)nodes[reluNi].Inputs[0]))] != 1) continue;
                 int rm = prodNode[Phys(checked((int)nodes[fc1].Inputs[0]))];
                 if (dbg)
                     Console.Error.WriteLine($"    rm=n{rm} op={(rm >= 0 ? nodes[rm].Operator.ToString() : "?")} rcIn={(rm >= 0 ? refCount[Phys(checked((int)nodes[fc1].Inputs[0]))] : -1)}");
@@ -838,12 +878,16 @@ internal sealed class MetalGraphModel
                 int rDim = rs.Length >= 2 ? rs[1] : 0;
                 if (dbg)
                     Console.Error.WriteLine($"    xs=[{string.Join('x', xs)}] rDim={rDim}");
-                if (xs.Length != 4 || xs[1] % 4 != 0 || xs[1] > 256
-                    || rDim <= 0 || rDim > 64) continue;
-                seEmit[rm] = (fc1, fc2, hs);
+                if (xs.Length != 4 || xs[1] % 4 != 0 || xs[1] > 1024
+                    || rDim <= 0 || rDim > 256) continue;
+                seEmit[rm] = (fc1, fc2, hs, b1T, b2T);
                 for (int m = fc1; m <= fc1 + _compiled.FusedSkip(fc1); m++)
-                    skipEmit.Add(m);   // conv16 + its fused relu
-                skipEmit.Add(fc2); skipEmit.Add(hs);
+                    skipEmit.Add(m);   // fc1 conv + its group members (bias-add / relu)
+                if (reluNi < fc1 || reluNi > fc1 + _compiled.FusedSkip(fc1))
+                    skipEmit.Add(reluNi);   // standalone relu between the conv groups
+                for (int m = fc2; m <= fc2 + _compiled.FusedSkip(fc2); m++)
+                    skipEmit.Add(m);   // fc2 conv + its group members
+                skipEmit.Add(hs);
             }
         }
         if (Environment.GetEnvironmentVariable("SIMD_OCR_GPU_DUMP") == "1")
@@ -882,9 +926,10 @@ internal sealed class MetalGraphModel
         // channel-quad-consecutive loads beat the tile's per-quad halo
         // there; the rest goes to the shared-tile kernel, which sg32 also
         // uses for the 9x9 taps
-        bool DwFlatA(int kh, int kw, int sh, int sw) =>
-            _pDw4A is not null && kh <= 3 && kw <= 3 && sh <= 2 && sw <= 2;
-        bool DwTiled(int kh, int kw, int sh, int sw) => !DwFlatA(kh, kw, sh, sw)
+        bool DwFlatA(int kh, int kw, int sh, int sw, long hw) =>
+            _pDw4A is not null && kh <= 3 && kw <= 3 && sh <= 2 && sw <= 2
+            && hw <= 2048;
+        bool DwTiled(int kh, int kw, int sh, int sw, long hw) => !DwFlatA(kh, kw, sh, sw, hw)
             && kh <= (_sg32 ? 9 : 5) && kw <= (_sg32 ? 9 : 5) && sh <= 2 && sw <= 2;
         // spatial-reduce partitions: ~512 px per workgroup (a 16-WG cap left
         // most of the GPU idle on large DET maps), bounded by partial storage
@@ -948,8 +993,9 @@ internal sealed class MetalGraphModel
                         sH2 = I32(cp, 16), sW2 = I32(cp, 20);
                     int grp2 = Math.Max(1, checked((int)U32(cp, 4)));
                     if (grp2 == cin2 && cout2 == cin2)
-                        return cin2 % 4 == 0 && (DwTiled(kH2, kW2, sH2, sW2)  // conv_dw4t
-                            || DwFlatA(kH2, kW2, sH2, sW2));                   // conv_dw4a
+                        return cin2 % 4 == 0
+                            && (DwTiled(kH2, kW2, sH2, sW2, (long)ish2[2] * ish2[3])
+                                || DwFlatA(kH2, kW2, sH2, sW2, (long)ish2[2] * ish2[3]));
                     if (grp2 == 1 && kH2 == 1 && kW2 == 1 && sH2 == 1 && sW2 == 1)
                     {
                         int cinI2 = (srcPhys == inIdx && cin2 % 4 != 0) ? 4 : cin2;
@@ -1338,7 +1384,7 @@ internal sealed class MetalGraphModel
                     {
                         if (cin % 4 == 0)
                         {
-                            if (DwTiled(kH, kW, sH, sW))
+                            if (DwTiled(kH, kW, sH, sW, (long)inH * inW))
                             {
                                 // shared-tile variant: ~kH*kW less global traffic
                                 uint tx = (uint)((outW + 15) / 16),
@@ -1358,7 +1404,7 @@ internal sealed class MetalGraphModel
                                      flags | (aps ? 256u : 0u)],
                                     tx * ty * (uint)(cout / 4), (uint)nb);
                             }
-                            else if (DwFlatA(kH, kW, sH, sW))
+                            else if (DwFlatA(kH, kW, sH, sW, (long)inH * inW))
                             {
                                 bool aps = addpsSrc.TryGetValue(
                                     Phys(checked((int)node.Inputs[0])), out var ads);
@@ -1724,7 +1770,7 @@ internal sealed class MetalGraphModel
                     int[] ishp = shapes[node.Inputs[0]];
                     int hw = ishp[2] * ishp[3], c = ishp[1];
                     int cv4 = c / 4;
-                    if (seEmit.TryGetValue(ni, out (int fc1, int fc2, int hs) sev))
+                    if (seEmit.TryGetValue(ni, out (int fc1, int fc2, int hs, uint b1, uint b2) sev))
                     {
                         NodeRecord f1 = nodes[sev.fc1], f2 = nodes[sev.fc2];
                         ReadOnlySpan<byte> hpp = _model.GetParameters(nodes[sev.hs]);
@@ -1747,9 +1793,9 @@ internal sealed class MetalGraphModel
                         Emit(_pSeJoin, $"se_j n{ni} c{c} s{s} r{rDim}",
                             [(pb2, 0, 2),
                              (ConstF32(checked((int)f1.Inputs[1])), 0, 4),
-                             (ConstF32(checked((int)f1.Inputs[2])), 0, 4),
+                             (ConstF32(checked((int)sev.b1)), 0, 4),
                              (ConstF32(checked((int)f2.Inputs[1])), 0, 4),
-                             (ConstF32(checked((int)f2.Inputs[2])), 0, 4),
+                             (ConstF32(checked((int)sev.b2)), 0, 4),
                              (arena, off[hsOut], 2)],
                             pcSe, (uint)nb, 1);
                         break;
@@ -2260,7 +2306,7 @@ internal sealed class MetalGraphModel
             {
                 Pipe = _pNchw,
                 Binds = [new MetalBind(inF32, 0), new MetalBind(arena, (ulong)off[inIdx] * 2)],
-                Gx = Div256((long)hw * cout), Gy = (uint)nb,
+                Gx = Div256((long)hw), Gy = (uint)nb,
                 Pc = Pcu((uint)hw, (uint)c, cout), Tag = "nchw2nhwc",
             });
         }
