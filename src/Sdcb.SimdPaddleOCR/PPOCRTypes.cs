@@ -73,11 +73,13 @@ public sealed class PaddleOcrRecognizerOptions
 /// <summary>
 /// Options for a complete DET → CLS → REC request.
 /// <para>
-/// Two independent knobs: <see cref="DetIntraOpThreads"/> is threads inside
+/// Separate budgets: <see cref="DetIntraOpThreads"/> is threads inside
 /// the single DET session; <see cref="LineWorkerCount"/> is how many CLS/REC
 /// sessions run in parallel (the two stages share that count, clamped to
 /// ProcessorCount). REC may still shard convolutions inside each session
-/// with leftover cores; that budget is not customer-facing.
+/// with leftover cores; that CPU graph budget is not customer-facing.
+/// <see cref="PreprocessWorkerCount"/> controls crop/GPU preprocessing workers;
+/// <see cref="GpuCtcIntraOpThreads"/> controls CPU projection after GPU recognition.
 /// </para>
 /// </summary>
 public sealed class PaddleOcrOptions
@@ -91,7 +93,7 @@ public sealed class PaddleOcrOptions
     /// </summary>
     public float ClassifierThreshold { get; init; } = 0f;
     /// <summary>
-    /// How many crop / CLS / REC line workers run at once. Each worker may
+    /// How many CLS / REC line workers run at once. Each worker may
     /// hold its own CLS and REC session, so memory scales with this value.
     /// A positive value is a maximum, clamped to
     /// <see cref="Environment.ProcessorCount"/> (2-core machine requesting 4
@@ -108,6 +110,12 @@ public sealed class PaddleOcrOptions
     /// separate intra-op knobs.
     /// </summary>
     public int DetIntraOpThreads { get; init; }
+
+    /// <summary>Crop and GPU batch resize/normalize workers. 0 preserves the automatic budget; 1..16 is capped by the logical processor count. Does not change detector preprocessing or graph operator threads.</summary>
+    public int PreprocessWorkerCount { get; init; }
+
+    /// <summary>CPU vocabulary projection/ArgMax threads after GPU batch recognition. 0 preserves the automatic budget; 1..16 is capped by the logical processor count. Does not reduce CPU inference or GPU-fallback operator budgets.</summary>
+    public int GpuCtcIntraOpThreads { get; init; }
     /// <summary>
     /// Maximum lines per batched recognizer graph call (same-target-width
     /// lines only, so results stay bit-identical to per-line execution).
