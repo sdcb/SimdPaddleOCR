@@ -5,6 +5,8 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
 
 return args[0] switch
 {
+    "--resource-perf" => ResourceBench.Run(args),
+    "--orientation" => OrientationBench.Run(args),
     "--sgtest" or "--rawbench" => DeviceBench.Run(args),
     "--argmax" or "--argmaxu" => ArgMaxBench.Run(args),
     "--ops" or "--graph" or "--arena" => InspectBench.Run(args),

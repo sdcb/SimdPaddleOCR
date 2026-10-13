@@ -1,0 +1,273 @@
+{
+  "date": "2026-10-13",
+  "hardware": {
+    "cpu": "Intel Core i7-12700",
+    "gpu": "NVIDIA GeForce RTX 3060",
+    "gpu_driver": "610.88"
+  },
+  "test_sample": "examples/sample.jpg",
+  "unit_tests": {
+    "net10": 131,
+    "netstandard20": 128,
+    "failed": 0
+  },
+  "gpu_profile_min_dispatch_total_ms": {
+    "before": 4.52,
+    "after": 2.4
+  },
+  "runs": {
+    "cpu": {
+      "backend": "Cpu",
+      "iterations": 20,
+      "measurements": [
+        {
+          "threads": 1,
+          "graph_median_ms": 5.5706,
+          "preprocess_median_ms": 0.5009,
+          "max_abs": 1.3947486877441406e-05,
+          "gpu_alive": false
+        },
+        {
+          "threads": 2,
+          "graph_median_ms": 3.8476,
+          "preprocess_median_ms": 0.5194,
+          "max_abs": 1.3947486877441406e-05,
+          "gpu_alive": false
+        },
+        {
+          "threads": 4,
+          "graph_median_ms": 3.1503,
+          "preprocess_median_ms": 0.5312,
+          "max_abs": 1.3947486877441406e-05,
+          "gpu_alive": false
+        },
+        {
+          "threads": 8,
+          "graph_median_ms": 3.1892,
+          "preprocess_median_ms": 0.5317,
+          "max_abs": 1.3947486877441406e-05,
+          "gpu_alive": false
+        }
+      ],
+      "pipeline": [
+        {
+          "angle": 0,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 181.1452
+        },
+        {
+          "angle": 90,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 68.1861
+        },
+        {
+          "angle": 180,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 61.7194
+        },
+        {
+          "angle": 270,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 61.7135
+        }
+      ],
+      "passed": true
+    },
+    "vulkan": {
+      "backend": "Vulkan",
+      "iterations": 20,
+      "measurements": [
+        {
+          "threads": 1,
+          "graph_median_ms": 2.054,
+          "preprocess_median_ms": 0.5006,
+          "max_abs": 0.00027829408645629883,
+          "gpu_alive": true
+        }
+      ],
+      "pipeline": [
+        {
+          "angle": 0,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 576.3457
+        },
+        {
+          "angle": 90,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 63.9473
+        },
+        {
+          "angle": 180,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 64.8757
+        },
+        {
+          "angle": 270,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 57.3169
+        }
+      ],
+      "passed": true
+    },
+    "vulkan_baseline": {
+      "backend": "Vulkan",
+      "iterations": 20,
+      "measurements": [
+        {
+          "threads": 1,
+          "graph_median_ms": 4.0628,
+          "preprocess_median_ms": 0.5529,
+          "max_abs": 0.00027829408645629883,
+          "gpu_alive": true
+        }
+      ],
+      "pipeline": [],
+      "passed": true
+    },
+    "vulkan_short_tuned": {
+      "backend": "Vulkan",
+      "iterations": 20,
+      "measurements": [
+        {
+          "threads": 1,
+          "graph_median_ms": 4.01,
+          "preprocess_median_ms": 0.8068,
+          "max_abs": 0.00027829408645629883,
+          "gpu_alive": true
+        }
+      ],
+      "pipeline": [],
+      "passed": true
+    },
+    "wasm_interpreter": {
+      "backend": "Cpu",
+      "iterations": 20,
+      "measurements": [
+        {
+          "threads": 1,
+          "graph_median_ms": 54.570068,
+          "preprocess_median_ms": 2.919922,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": true
+        },
+        {
+          "threads": 2,
+          "graph_median_ms": 31.71997,
+          "preprocess_median_ms": 2.859864,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": true
+        },
+        {
+          "threads": 4,
+          "graph_median_ms": 22.090088,
+          "preprocess_median_ms": 2.940186,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": true
+        },
+        {
+          "threads": 8,
+          "graph_median_ms": 22.119874,
+          "preprocess_median_ms": 2.954834,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": true
+        }
+      ],
+      "pipeline": [
+        {
+          "angle": 0,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 1686.8798
+        },
+        {
+          "angle": 90,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 1555.7199
+        },
+        {
+          "angle": 180,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 1518.3598
+        },
+        {
+          "angle": 270,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 1481.2248
+        }
+      ],
+      "passed": true
+    },
+    "wasm_aot": {
+      "backend": "Cpu",
+      "iterations": 20,
+      "measurements": [
+        {
+          "threads": 1,
+          "graph_median_ms": 8.424805,
+          "preprocess_median_ms": 0.770019,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": false
+        },
+        {
+          "threads": 2,
+          "graph_median_ms": 6.044922,
+          "preprocess_median_ms": 0.75,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": false
+        },
+        {
+          "threads": 4,
+          "graph_median_ms": 3.949951,
+          "preprocess_median_ms": 0.745117,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": false
+        },
+        {
+          "threads": 8,
+          "graph_median_ms": 3.669921,
+          "preprocess_median_ms": 0.745118,
+          "max_abs": 1.3172626495361328e-05,
+          "gpu_alive": false
+        }
+      ],
+      "pipeline": [
+        {
+          "angle": 0,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 447.7548
+        },
+        {
+          "angle": 90,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 106.76
+        },
+        {
+          "angle": 180,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 91.1599
+        },
+        {
+          "angle": 270,
+          "lines": 16,
+          "hash": 5105274828408708791,
+          "elapsed_ms": 92.2548
+        }
+      ],
+      "passed": true
+    }
+  }
+}

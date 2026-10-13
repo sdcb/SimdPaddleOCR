@@ -14,8 +14,8 @@ public sealed class PaddleOcrDetectorOptions
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool
     /// is full are disposed instead of pooled, capping memory at the cost of
     /// re-creating sessions when concurrency exceeds the cap. The default is
-    /// <see cref="Environment.ProcessorCount">, enough for one session per core;
-    /// set to <see cref="int.MaxValue"> for an unbounded pool.
+    /// <see cref="Environment.ProcessorCount"/>, enough for one session per core;
+    /// set to <see cref="int.MaxValue"/> for an unbounded pool.
     /// </summary>
     public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
     public int LimitSideLength { get; init; } = 960;
@@ -45,10 +45,32 @@ public sealed class PaddleOcrClassifierOptions
     /// <summary>
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool
     /// is full are disposed instead of pooled. The default is
-    /// <see cref="Environment.ProcessorCount">; set to <see cref="int.MaxValue">
+    /// <see cref="Environment.ProcessorCount"/>; set to <see cref="int.MaxValue"/>
     /// for an unbounded pool.
     /// </summary>
     public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
+}
+
+/// <summary>四方向纸张识别阶段的计算后端、线程预算和资源上限。</summary>
+public sealed class PaddleOcrDocumentOrientationOptions
+{
+    /// <summary>推理后端；默认 Auto，由运行平台和可用设备选择 CPU 或 GPU。</summary>
+    public OcrBackend Backend { get; init; } = OcrBackend.Auto;
+    /// <summary>CPU 算子线程预算；0 表示最多使用 4 个逻辑处理器，显式设置允许 1～16。</summary>
+    public int IntraOpThreads { get; init; }
+    /// <summary>输入图像允许的最大像素数，默认四千万；用于在预处理前限制资源消耗。</summary>
+    public long MaxImagePixels { get; init; } = 40_000_000;
+    /// <summary>保留的空闲推理会话上限，默认逻辑处理器数；0 表示每次使用后立即释放。</summary>
+    public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
+}
+
+/// <summary>纸张在原图中的顺时针方向与对应置信度；校正时应按相同角度逆时针旋转。</summary>
+/// <param name="Label">最高分的类别索引；0、1、2、3 分别对应 0°、90°、180°、270°。</param>
+/// <param name="Score">该类别的模型输出分数；官方模型输出为 softmax 概率。</param>
+public readonly record struct PaddleOcrDocumentOrientationResult(uint Label, float Score)
+{
+    /// <summary>原图的顺时针纸张方向，取值为 0、90、180、270 度。</summary>
+    public int OrientationDegrees => checked((int)Label * 90);
 }
 
 /// <summary>Options for the CTC recognizer.</summary>
@@ -58,8 +80,8 @@ public sealed class PaddleOcrRecognizerOptions
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool
     /// is full are disposed instead of pooled, capping memory at the cost of
     /// re-creating sessions when concurrency exceeds the cap. The default is
-    /// <see cref="Environment.ProcessorCount">, enough for one session per core;
-    /// set to <see cref="int.MaxValue"> for an unbounded pool.
+    /// <see cref="Environment.ProcessorCount"/>, enough for one session per core;
+    /// set to <see cref="int.MaxValue"/> for an unbounded pool.
     /// </summary>
     public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
     public int TargetWidth { get; init; } = 320;
@@ -84,6 +106,13 @@ public sealed class PaddleOcrRecognizerOptions
 /// </summary>
 public sealed class PaddleOcrOptions
 {
+    /// <summary>是否执行纸张方向识别；默认开启，但只有显式传入独立纸张方向模型时才运行第一阶段。</summary>
+    public bool UseDocumentOrientationClassification { get; init; } = true;
+    /// <summary>整页旋转的最低置信度，范围 0～1；默认 0，按模型最高分类执行校正。低于阈值时仍返回方向结果。</summary>
+    public float DocumentOrientationThreshold { get; init; }
+    /// <summary>纸张方向识别阶段的独立后端、线程和资源配置。</summary>
+    public PaddleOcrDocumentOrientationOptions DocumentOrientation { get; init; } = new();
+    /// <summary>是否对裁剪后的文本行执行 0°/180° 分类；与整页纸张方向识别分别控制。</summary>
     public bool UseDirectionClassification { get; init; } = true;
     /// <summary>
     /// Minimum class-1 probability required for a 180-degree rotation.
@@ -167,10 +196,12 @@ public readonly record struct PaddleOcrClassificationResult(uint Label, float Sc
     public int OrientationDegrees => Label == 0 ? 0 : 180;
 }
 
-/// <summary>CTC decode of one crop. <see cref="CtcSpans"/> is null unless alignment was requested.</summary>
-/// <param name="ResizedWidth">
-/// Recognizer content width after the height-48 resize, before right padding.
-/// </param>
+/// <summary>单个文本裁剪图的 CTC 识别结果；未请求对齐时 CtcSpans 为 null。</summary>
+/// <param name="Text">CTC 解码后的文本。</param>
+/// <param name="Score">该段文本的识别分数。</param>
+/// <param name="EmittedCount">解码输出的词项数量。</param>
+/// <param name="ResizedWidth">缩放至高 48 后、右侧补零之前的有效内容宽度。</param>
+/// <param name="TimeSteps">识别模型输出的 CTC 时间步数。</param>
 public readonly record struct PaddleOcrRecognitionResult(string Text, float Score, int EmittedCount,
     int ResizedWidth, int TimeSteps)
 {
@@ -230,19 +261,28 @@ public sealed class PaddleOcrLine
     public int RecognitionTimeSteps { get; init; }
 
     /// <summary>
-    /// Maps <see cref="CtcSpans"/> onto <see cref="Box"/>. Blank gaps between
-    /// spans are split at their midpoint. Requires <c>returnCtcAlignment: true</c>
-    /// on the <see cref="PaddleOcrAll.Run"/> or <see cref="PaddleOcrRecognizer.Recognize"/>
-    /// call that produced this line.
+    /// 根据 <see cref="CtcSpans"/> 和 <see cref="Box"/> 估算原图坐标中的字符四边形，空白间隔从中点分割。
+    /// 生成本行时须在 <see cref="PaddleOcrAll.Run(ReadOnlySpan{byte}, int, int, bool, int, ImagePixelFormat)"/>
+    /// 或 <see cref="PaddleOcrRecognizer.Recognize(ReadOnlySpan{byte}, int, int, bool, int, ImagePixelFormat)"/>
+    /// 中传入 <c>returnCtcAlignment: true</c>。
     /// </summary>
+    /// <returns>已考虑整页及文本行旋转的字符框；没有输出字符时返回空数组。</returns>
+    /// <exception cref="InvalidOperationException">生成本行时未保留 CTC 对齐信息。</exception>
     public PaddleOcrCharacterBox[] EstimateCharacterBoxes() => PaddleOcrCharacterBoxes.Estimate(this);
 }
 
 public sealed class PaddleOcrResult
 {
+    /// <summary>整页方向预测与置信度；未传入纸张模型或关闭该阶段时为 null。</summary>
+    public PaddleOcrDocumentOrientationResult? DocumentOrientation { get; init; }
+    /// <summary>文本检测前实际执行的逆时针整页旋转角度；为 0、90、180、270，低置信度跳过旋转时为 0。</summary>
+    public int AppliedDocumentRotationDegrees { get; init; }
+    /// <summary>按校正图阅读顺序排列的识别行；行框及可估算的字符框均已还原到原始输入图坐标。</summary>
     public required PaddleOcrLine[] Lines { get; init; }
     public required int DetectedCount { get; init; }
+    /// <summary>检测器实际使用的缩放图宽度；纸张校正开启时基于旋转后的图像计算。</summary>
     public required int DetectorResizedWidth { get; init; }
+    /// <summary>检测器实际使用的缩放图高度；纸张校正开启时基于旋转后的图像计算。</summary>
     public required int DetectorResizedHeight { get; init; }
 
     public string Text => string.Join("\n", Lines.Select(x => x.Text));

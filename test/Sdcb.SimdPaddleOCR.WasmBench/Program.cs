@@ -24,8 +24,24 @@ namespace Sdcb.SimdPaddleOCR.WasmBench;
 
 public static class Program
 {
+    /// <summary>运行浏览器性能测试；包含 --orientation 时改为验证纸张四方向模型及完整 OCR。</summary>
+    /// <param name="args">页面传入的命令行参数；--base-url 指向本机测试服务，--out 指定报告文件。</param>
+    /// <returns>成功时返回退出码 0，运行或报告保存失败时抛出异常。</returns>
     public static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--orientation"))
+        {
+            // 浏览器复用桌面的四方向数值、文本及坐标验证；WASM 使用 CPU/SIMD 算子路径。
+            Validation.DocumentOrientationReport result = Validation.DocumentOrientationValidation.Run(OcrBackend.Cpu);
+            string baseAddress = args.SkipWhile(a => a != "--base-url").Skip(1).First();
+            string outFile = args.SkipWhile(a => a != "--out").Skip(1).FirstOrDefault() ?? "bench-out/orientation-wasm.json";
+            using HttpClient http = new() { BaseAddress = new Uri(baseAddress) };
+            // 使用预生成 JSON 上下文兼容浏览器 AOT/裁剪，由本机测试服务保存完整报告。
+            using HttpResponseMessage response = await http.PostAsJsonAsync("/api/save-benchmark?out=" + Uri.EscapeDataString(outFile), result,
+                Validation.OrientationJsonContext.Default.DocumentOrientationReport);
+            response.EnsureSuccessStatusCode();
+            return 0;
+        }
         Console.WriteLine("[WASM] SimdPaddleOCR WebAssembly Benchmark Starting...");
 
         int workers = 4;
@@ -162,7 +178,7 @@ public static class Program
 
             if (file == "sample.jpg")
             {
-                using Stream? resStream = typeof(Program).Assembly.GetManifestResourceStream("Sdcb.SimdPaddleOCR.WasmBench.sample.jpg");
+                using Stream? resStream = typeof(Program).Assembly.GetManifestResourceStream("orientation.sample.jpg");
                 if (resStream is null) throw new InvalidOperationException("sample.jpg not found in embedded resources");
                 using MemoryStream ms = new MemoryStream();
                 await resStream.CopyToAsync(ms);

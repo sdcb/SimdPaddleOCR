@@ -35,7 +35,11 @@ internal static class PipelineProfiler
     internal const int RecPool = 18;        // per-line REC: input scratch ensure (was ArrayPool.Rent)
     internal const int RecReshape = 19;     // per-line REC: session.Reshape
     internal const int DetUnclip = 20;      // nested in det_postprocess: convex outward offset
-    internal const int StageCount = 21;
+    // 纸张阶段追加在现有编号之后，保留既有性能统计项的索引。
+    internal const int DocumentPreprocess = 21; // 纸张方向：缩放、中心裁剪和归一化。
+    internal const int DocumentGraph = 22;      // 纸张方向：四分类图推理。
+    internal const int DocumentRotate = 23;     // 纸张方向：整页像素旋转。
+    internal const int StageCount = 24;
 
     internal static readonly string[] StageNames =
     [
@@ -44,7 +48,7 @@ internal static class PipelineProfiler
         "rec_postprocess", "lines_wall",
         "crop_setup", "rec_acquire", "cls_acquire", "rec_decode",
         "rec_release", "cls_release", "rec_cache_get", "rec_rent", "rec_pool",
-        "rec_reshape", "det_unclip"
+        "rec_reshape", "det_unclip", "document_preprocess", "document_graph", "document_rotate"
     ];
 
     private static bool s_enabled;

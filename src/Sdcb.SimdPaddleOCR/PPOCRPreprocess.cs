@@ -15,6 +15,77 @@ internal static class PPOCRPreprocess
     // divide/multiply from the hot loops while retaining the same rounding.
     private static readonly float[] DetNormalized = BuildChannelLut(DetMean, DetInverseStd);
     private static readonly float[] RecNormalized = BuildRecLut();
+    // 三个 RGB 通道各保存 256 个归一化值，热循环只查表，避免逐像素浮点除法。
+    private static readonly float[] DocumentNormalized = BuildDocumentLut();
+
+    /// <summary>建立纸张方向模型的 RGB 归一化表，与 PaddleX 的 float32 运算顺序保持一致。</summary>
+    /// <returns>长度为 768 的查找表，索引为通道编号×256＋原始八位像素值。</returns>
+    private static float[] BuildDocumentLut()
+    {
+        float[] lut = new float[768];
+        double[] std = [0.229, 0.224, 0.225];
+        for (int c = 0; c < 3; c++)
+            for (int v = 0; v < 256; v++)
+                // 先把 alpha、beta 转为 float，再执行 v*alpha+beta，避免改变参考实现的舍入结果。
+                lut[c * 256 + v] = v * (float)(1.0 / 255 / std[c]) + (float)(-DetMean[c] / std[c]);
+        return lut;
+    }
+
+    /// <summary>执行纸张方向模型的预处理：短边缩放至 256、中心裁剪 224×224、RGB 归一化。</summary>
+    /// <param name="source">原始交错通道像素，允许行尾填充。</param>
+    /// <param name="width">原图宽度，单位为像素，必须为正数。</param>
+    /// <param name="height">原图高度，单位为像素，必须为正数。</param>
+    /// <param name="stride">已解析的行字节跨度，至少为 width×每像素字节数，不能传入 0。</param>
+    /// <param name="output">接收模型输入的浮点缓冲区，长度必须为 3×224×224。</param>
+    /// <param name="workspace">本次请求独占的缩放工作区，用于复用横向系数和两行中间结果。</param>
+    /// <param name="nhwc">true 输出 NHWC 交错布局；false 输出 NCHW 分通道布局。</param>
+    /// <param name="format">原图像素格式；四通道格式会忽略 alpha 通道，默认 BGR24。</param>
+    /// <remarks>仅计算缩放图中需要的中心裁剪区域，极宽图像也无需分配完整缩放图。</remarks>
+    internal static unsafe void DocumentOrientation(ReadOnlySpan<byte> source, int width, int height,
+        int stride, Span<float> output, ResizeWorkspace workspace, bool nhwc,
+        ImagePixelFormat format = ImagePixelFormat.Bgr24)
+    {
+        ValidateSource(source, width, height, stride, format);
+        const int size = 224, plane = size * size;
+        if (output.Length != plane * 3) throw new ArgumentException("Invalid document orientation input size.");
+        // 与 Python round 一致，使用中点取偶规则计算缩放后的宽高，再定位中心裁剪区域。
+        double scale = 256.0 / Math.Min(width, height);
+        int resizedWidth = checked((int)Math.Round(width * scale, MidpointRounding.ToEven));
+        int resizedHeight = checked((int)Math.Round(height * scale, MidpointRounding.ToEven));
+        int cropX = (resizedWidth - size) / 2, cropY = (resizedHeight - size) / 2;
+        workspace.Ensure(size);
+        BuildLinearCoefficients(width, resizedWidth, workspace.XOffsets, workspace.XCoefficients, size, cropX);
+        // 横向缩放函数默认输出 BGR；交换它对输入格式的解释，使输出改为模型要求的 RGB。
+        ImagePixelFormat rgbFormat = format switch
+        {
+            ImagePixelFormat.Bgr24 => ImagePixelFormat.Rgb24,
+            ImagePixelFormat.Rgb24 => ImagePixelFormat.Bgr24,
+            ImagePixelFormat.Bgra32 => ImagePixelFormat.Rgba32,
+            ImagePixelFormat.Rgba32 => ImagePixelFormat.Bgra32,
+            _ => throw new ArgumentOutOfRangeException(nameof(format))
+        };
+        fixed (byte* src = source)
+        fixed (float* dst = output)
+        {
+            for (int y = 0; y < size; y++)
+            {
+                GetLinearCoordinate(y + cropY, height, resizedHeight, out int sy, out short b0, out short b1);
+                BuildHorizontalRow(src, stride, width, MathCompat.Clamp(sy, 0, height - 1), size,
+                    workspace.XOffsets, workspace.XCoefficients, workspace.Row0, rgbFormat);
+                BuildHorizontalRow(src, stride, width, MathCompat.Clamp(sy + 1, 0, height - 1), size,
+                    workspace.XOffsets, workspace.XCoefficients, workspace.Row1, rgbFormat);
+                for (int x = 0; x < size; x++)
+                    for (int c = 0; c < 3; c++)
+                    {
+                        int k = x * 3 + c;
+                        // 保留与 OpenCV 八位双线性缩放一致的定点位移及舍入，再查询归一化值。
+                        int value = MathCompat.Clamp((((workspace.Row0[k] >> 4) * b0 >> 16) +
+                            ((workspace.Row1[k] >> 4) * b1 >> 16) + 2) >> 2, 0, 255);
+                        dst[nhwc ? (y * size + x) * 3 + c : c * plane + y * size + x] = DocumentNormalized[c * 256 + value];
+                    }
+            }
+        }
+    }
 
     [ThreadStatic] private static ResizeWorkspace? t_workspace;
 
@@ -225,18 +296,23 @@ internal static class PPOCRPreprocess
             }
         }
     }
+    /// <summary>为缩放目标轴的一段连续坐标预计算双线性采样位置和定点权重。</summary>
+    /// <param name="sourceSize">原图在该轴上的像素数。</param>
+    /// <param name="destinationSize">完整缩放图在该轴上的像素数，用于确定缩放比例。</param>
+    /// <param name="offsets">接收每个目标坐标对应的原图起始采样位置，容量至少为 count。</param>
+    /// <param name="coefficients">接收左右采样权重，每个目标坐标占两个元素，权重单位为 1/2048。</param>
+    /// <param name="count">需要计算的目标坐标数；负数表示计算完整目标轴。</param>
+    /// <param name="start">首个目标坐标在完整缩放图中的偏移；中心裁剪时为裁剪起点。</param>
     private static void BuildLinearCoefficients(int sourceSize, int destinationSize,
-        int[] offsets, short[] coefficients)
+        int[] offsets, short[] coefficients, int count = -1, int start = 0)
     {
         const int scale = 1 << 11;
-        for (int d = 0; d < destinationSize; d++)
+        if (count < 0) count = destinationSize;
+        for (int d = 0; d < count; d++)
         {
-            // OpenCV computes the interpolation coordinate in softdouble
-            // (effectively double precision).  Keeping the coordinate in
-            // float can move coefficients by one at exact/tie boundaries for
-            // narrow text crops (for example 28 -> 160), changing the final
-            // 8-bit pixel after the vertical fixed-point pass.
-            double coordinate = ((double)d + 0.5) * sourceSize / destinationSize - 0.5;
+            // 使用双精度计算半像素中心坐标，与 OpenCV 的 softdouble 保持一致。
+            // 单精度会在边界处改变定点权重，进而影响纵向缩放后的最终八位像素值。
+            double coordinate = ((double)d + start + 0.5) * sourceSize / destinationSize - 0.5;
             int source = checked((int)Math.Floor(coordinate));
             double fraction = coordinate - source;
             if (source < 0) { source = 0; fraction = 0; }

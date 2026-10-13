@@ -23,6 +23,9 @@ static class Harness
             Set SIMD_OCR_GPU_PROF=1 for per-kernel times on --detprof / --recprof.
 
               --detprof <det.onnx> <H> <W> [reps]
+              --resource-perf --backend cpu|vulkan --scope orientation|pipeline [--seconds 20] [--out result.json]
+              --orientation [--cpu] [--no-pipeline] [--out result.json]
+              --orientation --profile                      SIMD_OCR_GPU_PROF=1 per-dispatch timings
               --recprof <rec.onnx> <batch> <W> [reps]     REC up to the CTC projection
               --conc <det> <cls> <rec> <keys> <imgdir> [threads] [backend]
               --sgtest [sgsize.spv]                       caps + gl_SubgroupSize at required size 0/32/64 (default: Shaders/sgsize.spv)

@@ -24,6 +24,13 @@ Sources:
 - <https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx>
 - <https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx>
 - <https://huggingface.co/PaddlePaddle/PP-LCNet_x0_25_textline_ori_onnx>
+- <https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_doc_ori>
+- <https://huggingface.co/PaddlePaddle/PP-LCNet_x1_0_textline_ori>
+
+`doc_ori.onnx` and `textline_ori_x1.onnx` are derived by conversion and
+independent graph simplification from those two Paddle parameter models.
+Pinned revisions, source hashes, converter versions and numerical comparisons
+are recorded in `models/orientation-manifest.json`.
 
 The model files are distributed for use with this project and remain subject
 to the upstream model terms. PaddleOCR and PP-OCR are trademarks of their

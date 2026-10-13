@@ -16,6 +16,7 @@
     <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.ChineseV6Small/Sdcb.SimdPaddleOCR.Models.ChineseV6Small.csproj" />
     <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny/Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
     <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.TextLineOrientation/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.csproj" />
+    <Project Path="src/models/Sdcb.SimdPaddleOCR.Models.DocumentOrientation/Sdcb.SimdPaddleOCR.Models.DocumentOrientation.csproj" />
   </Folder>
   <Folder Name="/build/">
     <File Path="build/00-common.linq" />

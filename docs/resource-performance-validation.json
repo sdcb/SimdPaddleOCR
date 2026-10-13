@@ -1,0 +1,2077 @@
+{
+  "date": "2026-10-13",
+  "timezone": "Asia/Shanghai",
+  "hardware": {
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+    "logical_processors": 20,
+    "gpu": "NVIDIA GeForce RTX 3060",
+    "driver": "610.88",
+    "total_gpu_memory_mi_b": 12288,
+    "total_system_memory_mi_b": 32509.42578125
+  },
+  "scope": "Single-request sustained workload; orientation classifier and document-orientation-enabled ChineseV6Tiny OCR.",
+  "aggregation": {
+    "latency": "call-count weighted arithmetic mean across two 20-second runs",
+    "process_cpu": "CPU-time / wall-time / 20 logical processors; wall-time weighted",
+    "sampled_resources": "arithmetic mean across all 250ms samples; peaks are sampled peaks",
+    "gpu_utilization_and_memory": "whole NVIDIA GPU, including desktop/other applications; baseline not subtracted"
+  },
+  "pipeline_speedup": 2.4106562250205408,
+  "source_sha256": {
+    "test/Sdcb.SimdPaddleOCR.GpuBench/ResourceBench.cs": "bd2a560f61d03762bfbfc6d8822aac42fbcf166d0059bbfdb3a373142d3fe032",
+    "models/doc_ori.onnx": "27ff8d574e1b9c00734f4b803cf505abc7dbf12c7a97d3f3917cf98f1d105424",
+    "examples/sample.jpg": "30c417c9f758a3b62718729f5a944f7d2e10cdd2bde0e8ce6785523ddb68ffe9"
+  },
+  "aggregate": [
+    {
+      "scope": "orientation",
+      "backend": "cpu",
+      "seconds": 40.0020243,
+      "calls": 14192,
+      "sample_count": 152,
+      "mean_ms": 2.8180496688274976,
+      "throughput_per_second": 354.78204536763906,
+      "process_cpu_mean_percent": 12.263051272632719,
+      "round_mean_ms": [
+        2.3478121052013545,
+        3.5237788898678253
+      ],
+      "round_median_ms": [
+        2.2392,
+        2.3645
+      ],
+      "round_p95_ms": [
+        2.9407,
+        8.8105
+      ],
+      "gpu_idle_mean_percent": 6.722222222222222,
+      "resources": {
+        "process_cpu_percent": {
+          "mean": 12.265794910885075,
+          "min": 3.5661018341745523,
+          "max": 19.989572454905442
+        },
+        "system_cpu_percent": {
+          "mean": 16.4050423678131,
+          "min": 8.55457227138643,
+          "max": 36.69467787114846
+        },
+        "process_working_set_mi_b": {
+          "mean": 108.84989206414474,
+          "min": 107.15234375,
+          "max": 114.85546875
+        },
+        "process_private_mi_b": {
+          "mean": 74.63052528782895,
+          "min": 72.890625,
+          "max": 80.72265625
+        },
+        "process_memory_percent": {
+          "mean": 0.33482563732923415,
+          "min": 0.3296039261690089,
+          "max": 0.3532989771115661
+        },
+        "system_memory_percent": {
+          "mean": 43.4078947368421,
+          "min": 43,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 7.822368421052632,
+          "min": 0,
+          "max": 84
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2204.4965049342104,
+          "min": 2004.59765625,
+          "max": 2663.7578125
+        },
+        "gpu_memory_percent": {
+          "mean": 17.940238484165118,
+          "min": 16.313457489013672,
+          "max": 21.677716573079426
+        },
+        "gpu_clock_m_hz": {
+          "mean": 844.8223684210526,
+          "min": 210,
+          "max": 1852
+        },
+        "gpu_power_watts": {
+          "mean": 26.306546052631568,
+          "min": 16.655,
+          "max": 43.176
+        },
+        "gpu_temperature_c": {
+          "mean": 50.598684210526315,
+          "min": 49,
+          "max": 52
+        }
+      }
+    },
+    {
+      "scope": "orientation",
+      "backend": "vulkan",
+      "seconds": 40.001711900000004,
+      "calls": 38988,
+      "sample_count": 156,
+      "mean_ms": 1.0248077331486598,
+      "throughput_per_second": 974.6582870619594,
+      "process_cpu_mean_percent": 2.9608107847004415,
+      "round_mean_ms": [
+        1.026786419943454,
+        1.0228369477294859
+      ],
+      "round_median_ms": [
+        0.9959,
+        0.9864
+      ],
+      "round_p95_ms": [
+        1.2056,
+        1.1826
+      ],
+      "gpu_idle_mean_percent": 14.333333333333334,
+      "resources": {
+        "process_cpu_percent": {
+          "mean": 2.953245472676124,
+          "min": 0.925929583919345,
+          "max": 4.692192192192192
+        },
+        "system_cpu_percent": {
+          "mean": 5.769923438025953,
+          "min": 2.19435736677116,
+          "max": 18.674698795180724
+        },
+        "process_working_set_mi_b": {
+          "mean": 242.40584935897436,
+          "min": 236.421875,
+          "max": 247.79296875
+        },
+        "process_private_mi_b": {
+          "mean": 212.81628104967947,
+          "min": 205.90625,
+          "max": 219.5625
+        },
+        "process_memory_percent": {
+          "mean": 0.745647896059682,
+          "min": 0.7272410057035141,
+          "max": 0.7622188420593883
+        },
+        "system_memory_percent": {
+          "mean": 44.01282051282051,
+          "min": 44,
+          "max": 45
+        },
+        "gpu_utilization_percent": {
+          "mean": 38.92307692307692,
+          "min": 0,
+          "max": 72
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2135.07574619391,
+          "min": 2012,
+          "max": 2265.61328125
+        },
+        "gpu_memory_percent": {
+          "mean": 17.37529090327076,
+          "min": 16.373697916666668,
+          "max": 18.43760808308919
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1785.0128205128206,
+          "min": 337,
+          "max": 1920
+        },
+        "gpu_power_watts": {
+          "mean": 57.96642948717948,
+          "min": 17.27,
+          "max": 68.797
+        },
+        "gpu_temperature_c": {
+          "mean": 52.94230769230769,
+          "min": 48,
+          "max": 55
+        }
+      }
+    },
+    {
+      "scope": "pipeline",
+      "backend": "cpu",
+      "seconds": 40.0308931,
+      "calls": 1084,
+      "sample_count": 151,
+      "mean_ms": 36.92633265682657,
+      "throughput_per_second": 27.079086077147753,
+      "process_cpu_mean_percent": 40.168195747798585,
+      "round_mean_ms": [
+        36.58746764168193,
+        37.271508007448766
+      ],
+      "round_median_ms": [
+        36.1764,
+        36.2236
+      ],
+      "round_p95_ms": [
+        39.6159,
+        43.7038
+      ],
+      "gpu_idle_mean_percent": 3.7777777777777777,
+      "resources": {
+        "process_cpu_percent": {
+          "mean": 40.17250220709648,
+          "min": 28.764973592475833,
+          "max": 55.297223571461714
+        },
+        "system_cpu_percent": {
+          "mean": 44.54453873968004,
+          "min": 32.16374269005848,
+          "max": 70.53824362606233
+        },
+        "process_working_set_mi_b": {
+          "mean": 239.69329470198676,
+          "min": 202.515625,
+          "max": 285.18359375
+        },
+        "process_private_mi_b": {
+          "mean": 202.3320053807947,
+          "min": 165.3515625,
+          "max": 247.546875
+        },
+        "process_memory_percent": {
+          "mean": 0.7373039939703615,
+          "min": 0.6229443311693376,
+          "max": 0.8772335619489203
+        },
+        "system_memory_percent": {
+          "mean": 44.0728476821192,
+          "min": 43,
+          "max": 45
+        },
+        "gpu_utilization_percent": {
+          "mean": 11.509933774834437,
+          "min": 0,
+          "max": 63
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2083.4854873758277,
+          "min": 1976.76953125,
+          "max": 2243.8203125
+        },
+        "gpu_memory_percent": {
+          "mean": 16.95544830221214,
+          "min": 16.086991628011067,
+          "max": 18.26025644938151
+        },
+        "gpu_clock_m_hz": {
+          "mean": 507.8079470198675,
+          "min": 210,
+          "max": 1852
+        },
+        "gpu_power_watts": {
+          "mean": 20.9351523178808,
+          "min": 16.442,
+          "max": 41.253
+        },
+        "gpu_temperature_c": {
+          "mean": 49.77483443708609,
+          "min": 47,
+          "max": 54
+        }
+      }
+    },
+    {
+      "scope": "pipeline",
+      "backend": "vulkan",
+      "seconds": 40.015837000000005,
+      "calls": 2612,
+      "sample_count": 156,
+      "mean_ms": 15.317958767228173,
+      "throughput_per_second": 65.27415632965517,
+      "process_cpu_mean_percent": 9.865234731938756,
+      "round_mean_ms": [
+        15.196445668693,
+        15.441347067901237
+      ],
+      "round_median_ms": [
+        15.0144,
+        15.0895
+      ],
+      "round_p95_ms": [
+        16.322,
+        16.6949
+      ],
+      "gpu_idle_mean_percent": 2.2777777777777777,
+      "resources": {
+        "process_cpu_percent": {
+          "mean": 9.854769773652448,
+          "min": 0.30834462450235806,
+          "max": 16.04765828620091
+        },
+        "system_cpu_percent": {
+          "mean": 12.489741967229302,
+          "min": 2.8213166144200628,
+          "max": 26.366559485530548
+        },
+        "process_working_set_mi_b": {
+          "mean": 332.3688151041667,
+          "min": 296.578125,
+          "max": 382.2890625
+        },
+        "process_private_mi_b": {
+          "mean": 399.9429336939103,
+          "min": 361.73046875,
+          "max": 450.98046875
+        },
+        "process_memory_percent": {
+          "mean": 1.0223767634058374,
+          "min": 0.912283492780279,
+          "max": 1.1759329896269266
+        },
+        "system_memory_percent": {
+          "mean": 44.02564102564103,
+          "min": 44,
+          "max": 45
+        },
+        "gpu_utilization_percent": {
+          "mean": 44.1025641025641,
+          "min": 40,
+          "max": 69
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2170.8234174679487,
+          "min": 2095.125,
+          "max": 2264.8359375
+        },
+        "gpu_memory_percent": {
+          "mean": 17.666206196842026,
+          "min": 17.0501708984375,
+          "max": 18.43128204345703
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1896.1666666666667,
+          "min": 397,
+          "max": 1935
+        },
+        "gpu_power_watts": {
+          "mean": 73.10153846153847,
+          "min": 18.098,
+          "max": 78.076
+        },
+        "gpu_temperature_c": {
+          "mean": 53.64102564102564,
+          "min": 44,
+          "max": 59
+        }
+      }
+    }
+  ],
+  "runs": [
+    {
+      "round": 1,
+      "source": "bench-out/resource-orientation-cpu.json",
+      "captured_at": "2026-10-13T16:06:02.1041294+08:00",
+      "backend": "Cpu",
+      "scope": "orientation",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": null,
+        "text_hash": null,
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_calls": 1082,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0003667,
+        "calls": 8517,
+        "throughput_per_second": 425.8421921834063,
+        "mean_ms": 2.3478121052013545,
+        "median_ms": 2.2392,
+        "p95_ms": 2.9407,
+        "min_ms": 2.0353,
+        "max_ms": 19.6869,
+        "process_cpu_mean_percent": 13.261475600844857,
+        "process_cpu_core_equivalents": 2.6522951201689717
+      },
+      "resources": {
+        "sample_count": 76,
+        "process_cpu_percent": {
+          "mean": 13.229392883849192,
+          "min": 8.022868879168179,
+          "max": 19.989572454905442
+        },
+        "system_cpu_percent": {
+          "mean": 16.9034659444789,
+          "min": 8.55457227138643,
+          "max": 36.69467787114846
+        },
+        "process_working_set_mi_b": {
+          "mean": 108.81938733552632,
+          "min": 107.49609375,
+          "max": 114.85546875
+        },
+        "process_private_mi_b": {
+          "mean": 74.71247944078948,
+          "min": 72.890625,
+          "max": 80.72265625
+        },
+        "process_memory_percent": {
+          "mean": 0.33473180383976053,
+          "min": 0.3306613118094476,
+          "max": 0.3532989771115661
+        },
+        "system_memory_percent": {
+          "mean": 43.35526315789474,
+          "min": 43,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 10.210526315789474,
+          "min": 0,
+          "max": 84
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2163.080386513158,
+          "min": 2004.59765625,
+          "max": 2201.56640625
+        },
+        "gpu_memory_percent": {
+          "mean": 17.603193249618787,
+          "min": 16.313457489013672,
+          "max": 17.916393280029297
+        },
+        "gpu_clock_m_hz": {
+          "mean": 714.9078947368421,
+          "min": 210,
+          "max": 1852
+        },
+        "gpu_power_watts": {
+          "mean": 24.30388157894736,
+          "min": 17.003,
+          "max": 42.815
+        },
+        "gpu_temperature_c": {
+          "mean": 50.21052631578947,
+          "min": 49,
+          "max": 52
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0,
+          "min": 0,
+          "max": 0
+        },
+        "system_cpu_percent": {
+          "mean": 2.433571227144063,
+          "min": 1.5015015015015014,
+          "max": 3.216374269005848
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.27256944444444,
+          "min": 48.171875,
+          "max": 48.60546875
+        },
+        "process_private_mi_b": {
+          "mean": 27.62152777777778,
+          "min": 27.53125,
+          "max": 28.03515625
+        },
+        "process_memory_percent": {
+          "mean": 0.14848791784038806,
+          "min": 0.1481781786123808,
+          "max": 0.1495119264088432
+        },
+        "system_memory_percent": {
+          "mean": 43,
+          "min": 43,
+          "max": 43
+        },
+        "gpu_utilization_percent": {
+          "mean": 8,
+          "min": 1,
+          "max": 17
+        },
+        "gpu_memory_mi_b": {
+          "mean": 1978.6731770833333,
+          "min": 1974.90234375,
+          "max": 1979.21484375
+        },
+        "gpu_memory_percent": {
+          "mean": 16.10248353746202,
+          "min": 16.071796417236328,
+          "max": 16.106891632080078
+        },
+        "gpu_clock_m_hz": {
+          "mean": 271.6666666666667,
+          "min": 210,
+          "max": 390
+        },
+        "gpu_power_watts": {
+          "mean": 18.278555555555556,
+          "min": 17.311,
+          "max": 20.778
+        },
+        "gpu_temperature_c": {
+          "mean": 49.77777777777778,
+          "min": 49,
+          "max": 50
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "source": "bench-out/resource-orientation-cpu-repeat.json",
+      "captured_at": "2026-10-13T16:11:40.6773855+08:00",
+      "backend": "Cpu",
+      "scope": "orientation",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": null,
+        "text_hash": null,
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_seconds": 3.0058137,
+        "warmup_calls": 801,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0016576,
+        "calls": 5675,
+        "throughput_per_second": 283.72648474894396,
+        "mean_ms": 3.5237788898678253,
+        "median_ms": 2.3645,
+        "p95_ms": 8.8105,
+        "min_ms": 2.0729,
+        "max_ms": 111.5666,
+        "process_cpu_mean_percent": 11.264691382378226,
+        "process_cpu_core_equivalents": 2.2529382764756454
+      },
+      "resources": {
+        "sample_count": 76,
+        "process_cpu_percent": {
+          "mean": 11.302196937920959,
+          "min": 3.5661018341745523,
+          "max": 19.59835975652447
+        },
+        "system_cpu_percent": {
+          "mean": 15.9066187911473,
+          "min": 8.670520231213873,
+          "max": 24.705882352941178
+        },
+        "process_working_set_mi_b": {
+          "mean": 108.88039679276316,
+          "min": 107.15234375,
+          "max": 114.81640625
+        },
+        "process_private_mi_b": {
+          "mean": 74.54857113486842,
+          "min": 73.046875,
+          "max": 80.65234375
+        },
+        "process_memory_percent": {
+          "mean": 0.3349194708187078,
+          "min": 0.3296039261690089,
+          "max": 0.3531788196524253
+        },
+        "system_memory_percent": {
+          "mean": 43.46052631578947,
+          "min": 43,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 5.434210526315789,
+          "min": 0,
+          "max": 66
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2245.9126233552633,
+          "min": 2053.82421875,
+          "max": 2663.7578125
+        },
+        "gpu_memory_percent": {
+          "mean": 18.27728371871145,
+          "min": 16.71406428019206,
+          "max": 21.677716573079426
+        },
+        "gpu_clock_m_hz": {
+          "mean": 974.7368421052631,
+          "min": 210,
+          "max": 1852
+        },
+        "gpu_power_watts": {
+          "mean": 28.309210526315777,
+          "min": 16.655,
+          "max": 43.176
+        },
+        "gpu_temperature_c": {
+          "mean": 50.98684210526316,
+          "min": 50,
+          "max": 52
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0.09638878489398352,
+          "min": 0,
+          "max": 0.29283682700943225
+        },
+        "system_cpu_percent": {
+          "mean": 5.08671502384102,
+          "min": 1.8126888217522659,
+          "max": 11.965811965811966
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.334201388888886,
+          "min": 48.2578125,
+          "max": 48.609375
+        },
+        "process_private_mi_b": {
+          "mean": 27.62543402777778,
+          "min": 27.55859375,
+          "max": 28.01171875
+        },
+        "process_memory_percent": {
+          "mean": 0.1486774996092546,
+          "min": 0.14844252502249047,
+          "max": 0.14952394215475728
+        },
+        "system_memory_percent": {
+          "mean": 44,
+          "min": 44,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 5.444444444444445,
+          "min": 0,
+          "max": 39
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2288.7092013888887,
+          "min": 2235.7578125,
+          "max": 2296.0703125
+        },
+        "gpu_memory_percent": {
+          "mean": 18.625563162344474,
+          "min": 18.19464365641276,
+          "max": 18.685468037923176
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1751.5555555555557,
+          "min": 540,
+          "max": 1920
+        },
+        "gpu_power_watts": {
+          "mean": 49.52633333333334,
+          "min": 41.235,
+          "max": 63.382
+        },
+        "gpu_temperature_c": {
+          "mean": 52.22222222222222,
+          "min": 52,
+          "max": 54
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "source": "bench-out/resource-orientation-vulkan.json",
+      "captured_at": "2026-10-13T16:06:33.2852936+08:00",
+      "backend": "Vulkan",
+      "scope": "orientation",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": null,
+        "text_hash": null,
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_calls": 10,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0008173,
+        "calls": 19455,
+        "throughput_per_second": 972.7102501956257,
+        "mean_ms": 1.026786419943454,
+        "median_ms": 0.9959,
+        "p95_ms": 1.2056,
+        "min_ms": 0.9383,
+        "max_ms": 7.2499,
+        "process_cpu_mean_percent": 2.995971319632023,
+        "process_cpu_core_equivalents": 0.5991942639264046
+      },
+      "resources": {
+        "sample_count": 78,
+        "process_cpu_percent": {
+          "mean": 2.994194110997351,
+          "min": 0.925929583919345,
+          "max": 4.692192192192192
+        },
+        "system_cpu_percent": {
+          "mean": 5.506279676055362,
+          "min": 2.7950310559006213,
+          "max": 12.094395280235988
+        },
+        "process_working_set_mi_b": {
+          "mean": 242.33819110576923,
+          "min": 236.77734375,
+          "max": 247.6640625
+        },
+        "process_private_mi_b": {
+          "mean": 213.5411157852564,
+          "min": 208.02734375,
+          "max": 219.5625
+        },
+        "process_memory_percent": {
+          "mean": 0.7454397771785289,
+          "min": 0.728334438581695,
+          "max": 0.7618223224442238
+        },
+        "system_memory_percent": {
+          "mean": 44,
+          "min": 44,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 38.35897435897436,
+          "min": 0,
+          "max": 42
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2051.108974358974,
+          "min": 2012,
+          "max": 2254.453125
+        },
+        "gpu_memory_percent": {
+          "mean": 16.6919675647703,
+          "min": 16.373697916666668,
+          "max": 18.346786499023438
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1794.423076923077,
+          "min": 1687,
+          "max": 1920
+        },
+        "gpu_power_watts": {
+          "mean": 58.342089743589746,
+          "min": 31.393,
+          "max": 68.797
+        },
+        "gpu_temperature_c": {
+          "mean": 54.03846153846154,
+          "min": 51,
+          "max": 55
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0.13172841708706265,
+          "min": 0,
+          "max": 0.2981555003535886
+        },
+        "system_cpu_percent": {
+          "mean": 4.81956418278924,
+          "min": 2.0833333333333335,
+          "max": 9.25925925925926
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.162326388888886,
+          "min": 48.078125,
+          "max": 48.47265625
+        },
+        "process_private_mi_b": {
+          "mean": 27.49001736111111,
+          "min": 27.4453125,
+          "max": 27.83984375
+        },
+        "process_memory_percent": {
+          "mean": 0.14814880678903528,
+          "min": 0.147889800710443,
+          "max": 0.14910339104776463
+        },
+        "system_memory_percent": {
+          "mean": 43,
+          "min": 43,
+          "max": 43
+        },
+        "gpu_utilization_percent": {
+          "mean": 26.88888888888889,
+          "min": 1,
+          "max": 86
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2197.19140625,
+          "min": 2194.59765625,
+          "max": 2201.56640625
+        },
+        "gpu_memory_percent": {
+          "mean": 17.88078943888346,
+          "min": 17.859681447347004,
+          "max": 17.916393280029297
+        },
+        "gpu_clock_m_hz": {
+          "mean": 490.77777777777777,
+          "min": 307,
+          "max": 525
+        },
+        "gpu_power_watts": {
+          "mean": 18.60322222222222,
+          "min": 17.505,
+          "max": 19.201
+        },
+        "gpu_temperature_c": {
+          "mean": 50,
+          "min": 50,
+          "max": 50
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "source": "bench-out/resource-orientation-vulkan-repeat.json",
+      "captured_at": "2026-10-13T16:11:14.7770276+08:00",
+      "backend": "Vulkan",
+      "scope": "orientation",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": null,
+        "text_hash": null,
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_seconds": 8.4928061,
+        "warmup_calls": 10,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0008946,
+        "calls": 19533,
+        "throughput_per_second": 976.6063163994675,
+        "mean_ms": 1.0228369477294859,
+        "median_ms": 0.9864,
+        "p95_ms": 1.1826,
+        "min_ms": 0.9388,
+        "max_ms": 10.8798,
+        "process_cpu_mean_percent": 2.9256503856582494,
+        "process_cpu_core_equivalents": 0.5851300771316499
+      },
+      "resources": {
+        "sample_count": 78,
+        "process_cpu_percent": {
+          "mean": 2.912296834354897,
+          "min": 1.5401092753118077,
+          "max": 4.3231122772040855
+        },
+        "system_cpu_percent": {
+          "mean": 6.033567199996543,
+          "min": 2.19435736677116,
+          "max": 18.674698795180724
+        },
+        "process_working_set_mi_b": {
+          "mean": 242.47350761217947,
+          "min": 236.421875,
+          "max": 247.79296875
+        },
+        "process_private_mi_b": {
+          "mean": 212.09144631410257,
+          "min": 205.90625,
+          "max": 217.875
+        },
+        "process_memory_percent": {
+          "mean": 0.7458560149408349,
+          "min": 0.7272410057035141,
+          "max": 0.7622188420593883
+        },
+        "system_memory_percent": {
+          "mean": 44.02564102564103,
+          "min": 44,
+          "max": 45
+        },
+        "gpu_utilization_percent": {
+          "mean": 39.48717948717949,
+          "min": 37,
+          "max": 72
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2219.042518028846,
+          "min": 2204.3671875,
+          "max": 2265.61328125
+        },
+        "gpu_memory_percent": {
+          "mean": 18.058614241771213,
+          "min": 17.939186096191406,
+          "max": 18.43760808308919
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1775.6025641025642,
+          "min": 337,
+          "max": 1920
+        },
+        "gpu_power_watts": {
+          "mean": 57.59076923076922,
+          "min": 17.27,
+          "max": 68.146
+        },
+        "gpu_temperature_c": {
+          "mean": 51.84615384615385,
+          "min": 48,
+          "max": 53
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0.1630997693670985,
+          "min": 0,
+          "max": 0.29437730862460515
+        },
+        "system_cpu_percent": {
+          "mean": 6.340518606527685,
+          "min": 1.2269938650306749,
+          "max": 13.00578034682081
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.134982638888886,
+          "min": 48.01953125,
+          "max": 48.46484375
+        },
+        "process_private_mi_b": {
+          "mean": 27.501302083333332,
+          "min": 27.45703125,
+          "max": 27.84375
+        },
+        "process_memory_percent": {
+          "mean": 0.14806469656763677,
+          "min": 0.14770956452173187,
+          "max": 0.14907935955593649
+        },
+        "system_memory_percent": {
+          "mean": 44,
+          "min": 44,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 1.7777777777777777,
+          "min": 1,
+          "max": 2
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2240.4661458333335,
+          "min": 2235.0703125,
+          "max": 2242.8203125
+        },
+        "gpu_memory_percent": {
+          "mean": 18.232960171169704,
+          "min": 18.189048767089844,
+          "max": 18.252118428548176
+        },
+        "gpu_clock_m_hz": {
+          "mean": 216.66666666666666,
+          "min": 210,
+          "max": 240
+        },
+        "gpu_power_watts": {
+          "mean": 17.967444444444446,
+          "min": 17.327,
+          "max": 18.175
+        },
+        "gpu_temperature_c": {
+          "mean": 47.666666666666664,
+          "min": 47,
+          "max": 48
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "orientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "source": "bench-out/resource-pipeline-cpu.json",
+      "captured_at": "2026-10-13T16:06:59.2506638+08:00",
+      "backend": "Cpu",
+      "scope": "pipeline",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": 16,
+        "text_hash": "46d99468540b5eb7",
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_calls": 49,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0147195,
+        "calls": 547,
+        "throughput_per_second": 27.32988588723414,
+        "mean_ms": 36.58746764168193,
+        "median_ms": 36.1764,
+        "p95_ms": 39.6159,
+        "min_ms": 34.2731,
+        "max_ms": 58.4541,
+        "process_cpu_mean_percent": 39.833964448015365,
+        "process_cpu_core_equivalents": 7.966792889603074
+      },
+      "resources": {
+        "sample_count": 76,
+        "process_cpu_percent": {
+          "mean": 39.80546511536473,
+          "min": 28.764973592475833,
+          "max": 50.63384684451854
+        },
+        "system_cpu_percent": {
+          "mean": 43.47041403800776,
+          "min": 32.16374269005848,
+          "max": 57.18475073313783
+        },
+        "process_working_set_mi_b": {
+          "mean": 226.30658922697367,
+          "min": 202.515625,
+          "max": 244.4765625
+        },
+        "process_private_mi_b": {
+          "mean": 189.23643092105263,
+          "min": 165.3515625,
+          "max": 207.37890625
+        },
+        "process_memory_percent": {
+          "mean": 0.6961260735570952,
+          "min": 0.6229443311693376,
+          "max": 0.752017473778338
+        },
+        "system_memory_percent": {
+          "mean": 43.98684210526316,
+          "min": 43,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 10.381578947368421,
+          "min": 0,
+          "max": 48
+        },
+        "gpu_memory_mi_b": {
+          "mean": 1999.6083470394738,
+          "min": 1976.76953125,
+          "max": 2045.73828125
+        },
+        "gpu_memory_percent": {
+          "mean": 16.272854386714467,
+          "min": 16.086991628011067,
+          "max": 16.648260752360027
+        },
+        "gpu_clock_m_hz": {
+          "mean": 506.88157894736844,
+          "min": 210,
+          "max": 1852
+        },
+        "gpu_power_watts": {
+          "mean": 21.432328947368415,
+          "min": 16.712,
+          "max": 41.253
+        },
+        "gpu_temperature_c": {
+          "mean": 52.19736842105263,
+          "min": 52,
+          "max": 54
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0.09811239524387647,
+          "min": 0,
+          "max": 0.296046112331926
+        },
+        "system_cpu_percent": {
+          "mean": 7.174158194551222,
+          "min": 2.840909090909091,
+          "max": 11.612903225806452
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.11024305555556,
+          "min": 47.99609375,
+          "max": 48.43359375
+        },
+        "process_private_mi_b": {
+          "mean": 27.450520833333332,
+          "min": 27.40625,
+          "max": 27.796875
+        },
+        "process_memory_percent": {
+          "mean": 0.1479885968435143,
+          "min": 0.14763747004624742,
+          "max": 0.14898323358862386
+        },
+        "system_memory_percent": {
+          "mean": 43,
+          "min": 43,
+          "max": 43
+        },
+        "gpu_utilization_percent": {
+          "mean": 7.444444444444445,
+          "min": 1,
+          "max": 42
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2004.61328125,
+          "min": 2000.70703125,
+          "max": 2007.73828125
+        },
+        "gpu_memory_percent": {
+          "mean": 16.31358464558919,
+          "min": 16.281795501708984,
+          "max": 16.33901596069336
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1371.5555555555557,
+          "min": 390,
+          "max": 1830
+        },
+        "gpu_power_watts": {
+          "mean": 44.081444444444436,
+          "min": 29.458,
+          "max": 59.348
+        },
+        "gpu_temperature_c": {
+          "mean": 53.666666666666664,
+          "min": 52,
+          "max": 55
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "classifier",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "recognizer",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "classifier",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "recognizer",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "source": "bench-out/resource-pipeline-cpu-repeat.json",
+      "captured_at": "2026-10-13T16:10:43.447144+08:00",
+      "backend": "Cpu",
+      "scope": "pipeline",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": 16,
+        "text_hash": "46d99468540b5eb7",
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_seconds": 3.0274701,
+        "warmup_calls": 63,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0161736,
+        "calls": 537,
+        "throughput_per_second": 26.828304486727674,
+        "mean_ms": 37.271508007448766,
+        "median_ms": 36.2236,
+        "p95_ms": 43.7038,
+        "min_ms": 34.0238,
+        "max_ms": 64.1824,
+        "process_cpu_mean_percent": 40.50240276693044,
+        "process_cpu_core_equivalents": 8.100480553386088
+      },
+      "resources": {
+        "sample_count": 75,
+        "process_cpu_percent": {
+          "mean": 40.54443312671798,
+          "min": 32.703581646898016,
+          "max": 55.297223571461714
+        },
+        "system_cpu_percent": {
+          "mean": 45.63298510404129,
+          "min": 35.27696793002915,
+          "max": 70.53824362606233
+        },
+        "process_working_set_mi_b": {
+          "mean": 253.25848958333333,
+          "min": 215.53125,
+          "max": 285.18359375
+        },
+        "process_private_mi_b": {
+          "mean": 215.6021875,
+          "min": 177.9140625,
+          "max": 247.546875
+        },
+        "process_memory_percent": {
+          "mean": 0.7790309533224714,
+          "min": 0.6629807965550376,
+          "max": 0.8772335619489203
+        },
+        "system_memory_percent": {
+          "mean": 44.16,
+          "min": 44,
+          "max": 45
+        },
+        "gpu_utilization_percent": {
+          "mean": 12.653333333333334,
+          "min": 0,
+          "max": 63
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2168.480989583333,
+          "min": 2114.19921875,
+          "max": 2243.8203125
+        },
+        "gpu_memory_percent": {
+          "mean": 17.647143469916447,
+          "min": 17.20539728800456,
+          "max": 18.26025644938151
+        },
+        "gpu_clock_m_hz": {
+          "mean": 508.74666666666667,
+          "min": 210,
+          "max": 1852
+        },
+        "gpu_power_watts": {
+          "mean": 20.43134666666668,
+          "min": 16.442,
+          "max": 41.112
+        },
+        "gpu_temperature_c": {
+          "mean": 47.32,
+          "min": 47,
+          "max": 49
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0.1314217179081594,
+          "min": 0,
+          "max": 0.2982927916043514
+        },
+        "system_cpu_percent": {
+          "mean": 3.033721460764764,
+          "min": 1.492537313432836,
+          "max": 4.678362573099415
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.205729166666664,
+          "min": 48.09765625,
+          "max": 48.48046875
+        },
+        "process_private_mi_b": {
+          "mean": 27.504774305555557,
+          "min": 27.4609375,
+          "max": 27.84765625
+        },
+        "process_memory_percent": {
+          "mean": 0.14828231507696946,
+          "min": 0.14794987944001337,
+          "max": 0.1491274225395928
+        },
+        "system_memory_percent": {
+          "mean": 43,
+          "min": 43,
+          "max": 43
+        },
+        "gpu_utilization_percent": {
+          "mean": 0.1111111111111111,
+          "min": 0,
+          "max": 1
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2121.0915798611113,
+          "min": 2114.69921875,
+          "max": 2123.73046875
+        },
+        "gpu_memory_percent": {
+          "mean": 17.261487466317636,
+          "min": 17.209466298421223,
+          "max": 17.282962799072266
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1418.3333333333333,
+          "min": 390,
+          "max": 1920
+        },
+        "gpu_power_watts": {
+          "mean": 48.787444444444446,
+          "min": 33.33,
+          "max": 67.333
+        },
+        "gpu_temperature_c": {
+          "mean": 49.44444444444444,
+          "min": 48,
+          "max": 50
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "classifier",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "recognizer",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "classifier",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        },
+        {
+          "name": "recognizer",
+          "sessions": 4,
+          "session_types": "InferenceSession",
+          "gpu_alive": false
+        }
+      ]
+    },
+    {
+      "round": 1,
+      "source": "bench-out/resource-pipeline-vulkan.json",
+      "captured_at": "2026-10-13T16:07:31.427368+08:00",
+      "backend": "Vulkan",
+      "scope": "pipeline",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": 16,
+        "text_hash": "46d99468540b5eb7",
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_calls": 10,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0008348,
+        "calls": 1316,
+        "throughput_per_second": 65.79725362263379,
+        "mean_ms": 15.196445668693,
+        "median_ms": 15.0144,
+        "p95_ms": 16.322,
+        "min_ms": 14.3071,
+        "max_ms": 32.5017,
+        "process_cpu_mean_percent": 10.042549573980782,
+        "process_cpu_core_equivalents": 2.0085099147961563
+      },
+      "resources": {
+        "sample_count": 78,
+        "process_cpu_percent": {
+          "mean": 10.036428922200598,
+          "min": 4.307367439413309,
+          "max": 14.774336780021974
+        },
+        "system_cpu_percent": {
+          "mean": 12.263515912129236,
+          "min": 4.761904761904762,
+          "max": 23.006134969325153
+        },
+        "process_working_set_mi_b": {
+          "mean": 332.1708733974359,
+          "min": 296.69140625,
+          "max": 382.2890625
+        },
+        "process_private_mi_b": {
+          "mean": 401.3563201121795,
+          "min": 364.9375,
+          "max": 450.98046875
+        },
+        "process_memory_percent": {
+          "mean": 1.0217678885888455,
+          "min": 0.9126319494117872,
+          "max": 1.1759329896269266
+        },
+        "system_memory_percent": {
+          "mean": 44,
+          "min": 44,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 43.84615384615385,
+          "min": 40,
+          "max": 69
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2102.719150641026,
+          "min": 2095.125,
+          "max": 2108.40625
+        },
+        "gpu_memory_percent": {
+          "mean": 17.111972254565636,
+          "min": 17.0501708984375,
+          "max": 17.158253987630207
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1905.6666666666667,
+          "min": 397,
+          "max": 1935
+        },
+        "gpu_power_watts": {
+          "mean": 74.22694871794873,
+          "min": 18.098,
+          "max": 78.076
+        },
+        "gpu_temperature_c": {
+          "mean": 57.294871794871796,
+          "min": 52,
+          "max": 59
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0.2293433649043616,
+          "min": 0,
+          "max": 0.5874585771208101
+        },
+        "system_cpu_percent": {
+          "mean": 4.891027774793144,
+          "min": 2.005730659025788,
+          "max": 13.753581661891117
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.29730902777778,
+          "min": 48.2265625,
+          "max": 48.56640625
+        },
+        "process_private_mi_b": {
+          "mean": 27.55685763888889,
+          "min": 27.4921875,
+          "max": 27.953125
+        },
+        "process_memory_percent": {
+          "mean": 0.14856401756451054,
+          "min": 0.14834639905517788,
+          "max": 0.14939176894970244
+        },
+        "system_memory_percent": {
+          "mean": 43,
+          "min": 43,
+          "max": 43
+        },
+        "gpu_utilization_percent": {
+          "mean": 2.4444444444444446,
+          "min": 1,
+          "max": 9
+        },
+        "gpu_memory_mi_b": {
+          "mean": 1981.4778645833333,
+          "min": 1976.83203125,
+          "max": 1983.80078125
+        },
+        "gpu_memory_percent": {
+          "mean": 16.125308142768013,
+          "min": 16.087500254313152,
+          "max": 16.14421208699544
+        },
+        "gpu_clock_m_hz": {
+          "mean": 210,
+          "min": 210,
+          "max": 210
+        },
+        "gpu_power_watts": {
+          "mean": 17.053444444444448,
+          "min": 16.76,
+          "max": 17.208
+        },
+        "gpu_temperature_c": {
+          "mean": 51.77777777777778,
+          "min": 51,
+          "max": 52
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "classifier",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "recognizer",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "classifier",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "recognizer",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ]
+    },
+    {
+      "round": 2,
+      "source": "bench-out/resource-pipeline-vulkan-repeat.json",
+      "captured_at": "2026-10-13T16:10:17.4580061+08:00",
+      "backend": "Vulkan",
+      "scope": "pipeline",
+      "hardware": {
+        "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+        "logical_processors": 20,
+        "gpu": "NVIDIA GeForce RTX 3060",
+        "driver": "610.88",
+        "total_gpu_memory_mi_b": 12288,
+        "total_system_memory_mi_b": 32509.42578125
+      },
+      "input": {
+        "file": "examples/sample.jpg",
+        "width": 500,
+        "height": 500,
+        "clockwise_degrees": 90,
+        "format": "Bgr24",
+        "lines": 16,
+        "text_hash": "46d99468540b5eb7",
+        "label": 90
+      },
+      "settings": {
+        "concurrency": 1,
+        "orientation_threads": 4,
+        "det_threads": 8,
+        "line_workers": 4,
+        "preprocess_workers": 4,
+        "gpu_ctc_threads": 4,
+        "warmup_seconds": 9.9804425,
+        "warmup_calls": 10,
+        "sample_interval_ms": 250,
+        "includes_image_decoding": false,
+        "includes_model_loading": false,
+        "includes_preprocessing": true,
+        "ctc_alignment": false,
+        "cpu_percent_denominator": "all logical processors",
+        "gpu_utilization_scope": "whole NVIDIA GPU, including other applications"
+      },
+      "measurement": {
+        "seconds": 20.0150022,
+        "calls": 1296,
+        "throughput_per_second": 64.75142930536374,
+        "mean_ms": 15.441347067901237,
+        "median_ms": 15.0895,
+        "p95_ms": 16.6949,
+        "min_ms": 14.2654,
+        "max_ms": 45.1787,
+        "process_cpu_mean_percent": 9.688045400264807,
+        "process_cpu_core_equivalents": 1.9376090800529613
+      },
+      "resources": {
+        "sample_count": 78,
+        "process_cpu_percent": {
+          "mean": 9.673110625104297,
+          "min": 0.30834462450235806,
+          "max": 16.04765828620091
+        },
+        "system_cpu_percent": {
+          "mean": 12.715968022329367,
+          "min": 2.8213166144200628,
+          "max": 26.366559485530548
+        },
+        "process_working_set_mi_b": {
+          "mean": 332.56675681089746,
+          "min": 296.578125,
+          "max": 382.1640625
+        },
+        "process_private_mi_b": {
+          "mean": 398.52954727564105,
+          "min": 361.73046875,
+          "max": 448.16796875
+        },
+        "process_memory_percent": {
+          "mean": 1.0229856382228295,
+          "min": 0.912283492780279,
+          "max": 1.1755484857576763
+        },
+        "system_memory_percent": {
+          "mean": 44.05128205128205,
+          "min": 44,
+          "max": 45
+        },
+        "gpu_utilization_percent": {
+          "mean": 44.35897435897436,
+          "min": 42,
+          "max": 57
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2238.9276842948716,
+          "min": 2227.3359375,
+          "max": 2264.8359375
+        },
+        "gpu_memory_percent": {
+          "mean": 18.220440139118416,
+          "min": 18.12610626220703,
+          "max": 18.43128204345703
+        },
+        "gpu_clock_m_hz": {
+          "mean": 1886.6666666666667,
+          "min": 585,
+          "max": 1927
+        },
+        "gpu_power_watts": {
+          "mean": 71.97612820512819,
+          "min": 18.213,
+          "max": 76.297
+        },
+        "gpu_temperature_c": {
+          "mean": 49.98717948717949,
+          "min": 44,
+          "max": 52
+        }
+      },
+      "baseline": {
+        "sample_count": 9,
+        "process_cpu_percent": {
+          "mean": 0.09862217113702562,
+          "min": 0,
+          "max": 0.3063584925711251
+        },
+        "system_cpu_percent": {
+          "mean": 10.496129166113896,
+          "min": 5.982905982905983,
+          "max": 17.10144927536232
+        },
+        "process_working_set_mi_b": {
+          "mean": 48.1953125,
+          "min": 48.0859375,
+          "max": 48.53515625
+        },
+        "process_private_mi_b": {
+          "mean": 27.53949652777778,
+          "min": 27.375,
+          "max": 28.125
+        },
+        "process_memory_percent": {
+          "mean": 0.14825027308786526,
+          "min": 0.14791383220227114,
+          "max": 0.14929564298238984
+        },
+        "system_memory_percent": {
+          "mean": 44,
+          "min": 44,
+          "max": 44
+        },
+        "gpu_utilization_percent": {
+          "mean": 2.111111111111111,
+          "min": 0,
+          "max": 15
+        },
+        "gpu_memory_mi_b": {
+          "mean": 2092.10546875,
+          "min": 2086.32421875,
+          "max": 2096.54296875
+        },
+        "gpu_memory_percent": {
+          "mean": 17.025597890218094,
+          "min": 16.97854995727539,
+          "max": 17.061710357666016
+        },
+        "gpu_clock_m_hz": {
+          "mean": 672.2222222222222,
+          "min": 232,
+          "max": 1852
+        },
+        "gpu_power_watts": {
+          "mean": 31.35966666666667,
+          "min": 18.269,
+          "max": 40.57
+        },
+        "gpu_temperature_c": {
+          "mean": 44.22222222222222,
+          "min": 44,
+          "max": 45
+        }
+      },
+      "sessions_before": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "classifier",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "recognizer",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ],
+      "sessions_after": [
+        {
+          "name": "documentOrientation",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "detector",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "classifier",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        },
+        {
+          "name": "recognizer",
+          "sessions": 1,
+          "session_types": "GpuSession",
+          "gpu_alive": true
+        }
+      ]
+    }
+  ]
+}

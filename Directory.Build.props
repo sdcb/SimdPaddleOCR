@@ -5,8 +5,9 @@
   -->
   <PropertyGroup>
     <SdcbSimdPaddleOCRVersion Condition="'$(SdcbSimdPaddleOCRVersion)' == ''">2.0.0</SdcbSimdPaddleOCRVersion>
-    <SdcbSimdPaddleOCRModelProviderVersion Condition="'$(SdcbSimdPaddleOCRModelProviderVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelProviderVersion>
+    <SdcbSimdPaddleOCRModelProviderVersion Condition="'$(SdcbSimdPaddleOCRModelProviderVersion)' == ''">1.1.0</SdcbSimdPaddleOCRModelProviderVersion>
     <SdcbSimdPaddleOCRModelsTextLineOrientationVersion Condition="'$(SdcbSimdPaddleOCRModelsTextLineOrientationVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsTextLineOrientationVersion>
+    <SdcbSimdPaddleOCRModelsDocumentOrientationVersion Condition="'$(SdcbSimdPaddleOCRModelsDocumentOrientationVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsDocumentOrientationVersion>
     <SdcbSimdPaddleOCRModelsChineseV6TinyVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6TinyVersion>
     <SdcbSimdPaddleOCRModelsChineseV6SmallVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6SmallVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6SmallVersion>
     <SdcbSimdPaddleOCRModelsChineseV6MediumVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6MediumVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6MediumVersion>
@@ -43,6 +44,11 @@
     <Version>$(SdcbSimdPaddleOCRModelsTextLineOrientationVersion)</Version>
     <IsPackable>true</IsPackable>
     <Description>Embedded PP-LCNet text-line orientation (CLS) model for PP-OCR.</Description>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR.Models.DocumentOrientation'">
+    <Version>$(SdcbSimdPaddleOCRModelsDocumentOrientationVersion)</Version>
+    <IsPackable>true</IsPackable>
+    <Description>Independent PP-LCNet_x1_0 document orientation model (0, 90, 180, 270 degrees). Simplified ONNX verified against Paddle.</Description>
   </PropertyGroup>
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny'">
     <Version>$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)</Version>

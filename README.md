@@ -10,6 +10,8 @@ GPU 支持 Vulkan 与 Metal（macOS），仅 .NET 10；同样纯 C#、不内嵌�
 
 ## 快速开始
 
+需要整张纸的 0°/90°/180°/270° 校正，可单独引用 `Sdcb.SimdPaddleOCR.Models.DocumentOrientation`，通过 `PaddleOcrAll.Load/LoadAsync` 显式传入 `DocumentOrientationModel.Provider`。该阶段在 DET 前执行；接入、模型转换校验与 CPU/GPU/WASM 实测见 [纸张方向识别](docs/document-orientation.md)。
+
 安装核心包和 tiny 模型（tiny 会传递引用 CLS 与 `ModelProvider`）：
 
 ```powershell
@@ -124,6 +126,7 @@ finally
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Small`      | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Small.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Small)           | PP-OCRv6 small；`ChineseV6SmallModels.Default`                                 |
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Medium`     | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium)         | PP-OCRv6 medium；`ChineseV6MediumModels.Default`                               |
 | `Sdcb.SimdPaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.TextLineOrientation) | PP-LCNet 文本行方向 CLS，被三个中文模型包传递引用                              |
+| `Sdcb.SimdPaddleOCR.Models.DocumentOrientation` | 独立可选模型包 | PP-LCNet_x1_0 纸张四方向（0/90/180/270）；在 DET 前执行 |
 
 每个 `IPaddleOcrModelProvider` 提供 `Name`、`Kind`、`Format`、语言和版本元数据以及 `OpenRead()` / `OpenReadAsync()`。完整 OCR 组合由 `PaddleOcrModelBundle` 表达（DET、REC、字典和可选 CLS）。当前语言代码为 `zh`。单个模型也可被其他推理实现消费，例如 `ChineseV6TinyModel.Detection.OpenReadAsync()`。`Model`、`PaddleOcrDetector`、`PaddleOcrClassifier`、`PaddleOcrRecognizer` 和 `PaddleOcrAll` 均提供 Stream 加载入口；解析完成后不会继续保留完整的 ONNX 原始字节。
 
