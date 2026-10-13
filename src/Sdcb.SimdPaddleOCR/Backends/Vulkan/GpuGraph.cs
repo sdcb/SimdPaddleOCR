@@ -1272,7 +1272,12 @@ internal sealed class GpuGraphModel
                         uint mImg = (uint)(outH * outW);
                         uint M = mImg * (uint)nb;   // flat rows span the batch
                         bool dotOk = cout % 4 == 0 && scalarBias == 0
-                            && (cinIn <= 128 || (hasPs && cinIn <= 256))
+                            && (cinIn <= 128 || (hasPs && cinIn <= 256)
+                                // LCNet 的 14×14 特征图及 1×1 分类头在协作矩阵路径上利用率较低。
+                                // sg32 设备上的小矩阵改用 Split-K 点积，增加可并行的线程束数量。
+                                // 已在 RTX 3060 的 256/512 输入通道上实测；环境变量置 0 可回到原路径对比。
+                                || (_sg32 && M <= 256 && cinIn <= 512
+                                    && Environment.GetEnvironmentVariable("SIMD_OCR_NARROW_DOT") != "0"))
                             && Environment.GetEnvironmentVariable("SIMD_OCR_NODOT") == null;
                         // sg32 coopmat (SE prescale included) outruns the dot
                         // kernel once the output leaves split-K range (lite:

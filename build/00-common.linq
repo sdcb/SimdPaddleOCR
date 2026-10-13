@@ -29,8 +29,9 @@ static void Run(string exe, string args, Encoding encoding) => Util.Cmd(exe, arg
 static ProjectVersion[] Projects =
 {
 	new("Sdcb.SimdPaddleOCR", "2.0.0"),
-	new("Sdcb.SimdPaddleOCR.ModelProvider", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR.ModelProvider", "1.1.0"),
 	new("Sdcb.SimdPaddleOCR.Models.TextLineOrientation", "1.0.0"),
+	new("Sdcb.SimdPaddleOCR.Models.DocumentOrientation", "1.0.0"),
 	new("Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny", "1.0.0"),
 	new("Sdcb.SimdPaddleOCR.Models.ChineseV6Small", "1.0.0"),
 	new("Sdcb.SimdPaddleOCR.Models.ChineseV6Medium", "1.0.0"),

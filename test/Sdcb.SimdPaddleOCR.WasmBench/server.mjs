@@ -153,6 +153,8 @@ server.listen(port, '127.0.0.1', () => {
         autorun: '1'
     });
     for (const pair of envPairs) queryParams.append('env', pair);
+    // 把方向验证开关传入页面，再由页面转为 .NET 的 --orientation 参数。
+    if (argv.includes('--orientation')) queryParams.set('orientation', '1');
     const targetUrl = `http://127.0.0.1:${assignedPort}/index.html?${queryParams.toString()}`;
 
     console.log(`[SERVER] WasmBench server running at http://127.0.0.1:${assignedPort}/`);
@@ -174,12 +176,20 @@ server.listen(port, '127.0.0.1', () => {
     let browserPath = edgeCandidates.find(p => fs.existsSync(p));
     if (!browserPath) browserPath = "msedge";
 
+    // 使用工作区独立的临时配置目录，避免复用桌面 Edge 进程或写入只读用户配置。
+    const browserScratch = path.join(repoRoot, '.tmp-artifacts');
+    fs.mkdirSync(browserScratch, { recursive: true });
+    const browserProfile = fs.mkdtempSync(path.join(browserScratch, 'wasm-browser-'));
+
     const browserArgs = isHeadless
-        ? ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--log-level=3', targetUrl]
+        ? ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--log-level=3', `--user-data-dir=${browserProfile}`, targetUrl]
         : [targetUrl];
+    // 仅显式请求时关闭测试浏览器沙箱，用于受限环境里的本机可信页面。
+    if (argv.includes('--browser-no-sandbox')) browserArgs.push('--no-sandbox');
 
     console.log(`[SERVER] Launching ${path.basename(browserPath)} (${isHeadless ? 'Headless' : 'Windowed'})...`);
-    const browser = spawn(browserPath, browserArgs, { stdio: isHeadless ? ['ignore', 'ignore', 'ignore'] : 'inherit' });
+    const browser = spawn(browserPath, browserArgs, { windowsHide: isHeadless, stdio: isHeadless ? ['ignore', 'ignore', 'pipe'] : 'inherit' });
+    browser.stderr?.on('data', chunk => process.stderr.write(chunk));
 
     browser.on('error', (err) => {
         console.error('[SERVER] Failed to launch browser:', err.message);

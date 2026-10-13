@@ -9,13 +9,10 @@ using Sdcb.SimdPaddleOCR.ModelProvider;
 namespace Sdcb.SimdPaddleOCR;
 
 /// <summary>
-/// Complete pure managed PP-OCR pipeline. It accepts packed BGR8 memory and
-/// deliberately has no image-decoding or file-system dependency.
+/// 完整 OCR 流水线，接收原始像素，依次执行可选的纸张方向校正、文本检测、文本行分类及文字识别。
 /// <para>
-/// Thread-safe: the detector, classifier and recognizer each hold one shared
-/// compiled model and pool per-call inference requests, while every run rents
-/// its own crop workspace. Concurrent <see cref="Run"/> calls are safe and
-/// execute without a global engine lock.
+/// 各阶段共享只读编译模型，并分别池化推理会话；每次请求独占裁剪和整页旋转缓冲区，支持并发 Run。
+/// 返回的行框和字符框使用原始输入图坐标；图像解码由调用方完成。
 /// </para>
 /// </summary>
 public sealed class PaddleOcrAll : IDisposable
@@ -25,6 +22,8 @@ public sealed class PaddleOcrAll : IDisposable
     private readonly PaddleOcrDetector _detector;
     private readonly PaddleOcrClassifier? _classifier;
     private readonly PaddleOcrRecognizer _recognizer;
+    private readonly PaddleOcrDocumentOrientationClassifier? _documentOrientation; // 未提供纸张模型或禁用阶段时为 null。
+    private Model? _ownedDocumentOrientationModel; // 通过独立 provider 加载的模型由引擎统一释放。
     private readonly PaddleOcrOptions _options;
     private readonly int _lineWorkers;
     private readonly int _cropWorkers;
@@ -64,6 +63,61 @@ public sealed class PaddleOcrAll : IDisposable
     public static async Task<PaddleOcrAll> LoadAsync(PaddleOcrModelBundle bundle,
         PaddleOcrOptions? options = null, CancellationToken cancellationToken = default)
         => new(await PaddleOcrModelSet.LoadAsync(bundle, cancellationToken).ConfigureAwait(false), options);
+
+    /// <summary>从 OCR 模型集合和独立纸张方向模型提供方加载带第一阶段的完整流水线。</summary>
+    /// <param name="bundle">文本检测、文本行分类、识别和字典组成的 OCR 模型集合。</param>
+    /// <param name="documentOrientation">独立四方向模型提供方，Kind 必须为 DocumentOrientation。</param>
+    /// <param name="options">流水线和各阶段配置；传入 null 使用默认配置。</param>
+    /// <returns>拥有本次加载模型的 OCR 引擎；使用完毕后由调用方释放。</returns>
+    public static PaddleOcrAll Load(PaddleOcrModelBundle bundle, IPaddleOcrModelProvider documentOrientation,
+        PaddleOcrOptions? options)
+    {
+        ValidateDocumentProvider(documentOrientation);
+        using Stream stream = documentOrientation.OpenRead();
+        Model orientation = Model.Load(stream);
+        PaddleOcrModelSet? models = null;
+        try
+        {
+            models = PaddleOcrModelSet.Load(bundle);
+            return new PaddleOcrAll(models.DetectionModel, models.ClassificationModel, models.RecognitionModel,
+                models.DictionaryUtf8.Span, options, orientation)
+                { _ownedModels = models, _ownedDocumentOrientationModel = orientation };
+        }
+        catch { models?.Dispose(); orientation.Dispose(); throw; }
+    }
+
+    /// <summary>异步加载 OCR 模型集合及独立纸张方向模型，构造带整页校正的流水线。</summary>
+    /// <param name="bundle">文本检测、文本行分类、识别和字典组成的 OCR 模型集合。</param>
+    /// <param name="documentOrientation">独立四方向模型提供方，Kind 必须为 DocumentOrientation。</param>
+    /// <param name="options">流水线和各阶段配置；传入 null 使用默认配置。</param>
+    /// <param name="cancellationToken">取消模型流读取、解析及模型集合加载的令牌。</param>
+    /// <returns>拥有本次加载模型的 OCR 引擎。</returns>
+    public static async Task<PaddleOcrAll> LoadAsync(PaddleOcrModelBundle bundle,
+        IPaddleOcrModelProvider documentOrientation, PaddleOcrOptions? options,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateDocumentProvider(documentOrientation);
+        using Stream stream = await documentOrientation.OpenReadAsync(cancellationToken).ConfigureAwait(false);
+        Model orientation = await Model.LoadAsync(stream, cancellationToken).ConfigureAwait(false);
+        PaddleOcrModelSet? models = null;
+        try
+        {
+            models = await PaddleOcrModelSet.LoadAsync(bundle, cancellationToken).ConfigureAwait(false);
+            return new PaddleOcrAll(models.DetectionModel, models.ClassificationModel, models.RecognitionModel,
+                models.DictionaryUtf8.Span, options, orientation)
+                { _ownedModels = models, _ownedDocumentOrientationModel = orientation };
+        }
+        catch { models?.Dispose(); orientation.Dispose(); throw; }
+    }
+
+    /// <summary>验证提供方属于四方向纸张模型，避免误将文本行两分类模型接入第一阶段。</summary>
+    /// <param name="provider">待验证的非空模型提供方。</param>
+    private static void ValidateDocumentProvider(IPaddleOcrModelProvider provider)
+    {
+        if (provider is null) throw new ArgumentNullException(nameof(provider));
+        if (provider.Kind != PaddleOcrModelKind.DocumentOrientation)
+            throw new ArgumentException("Expected a four-way document orientation provider.", nameof(provider));
+    }
 
     /// <summary>Loads a complete OCR pipeline directly from model streams.</summary>
     public static PaddleOcrAll Load(
@@ -105,8 +159,25 @@ public sealed class PaddleOcrAll : IDisposable
     {
     }
 
+    /// <summary>使用已加载的 OCR 模型创建不带纸张方向阶段的流水线。</summary>
+    /// <param name="detectorModel">文本检测模型，由调用方管理其生命周期。</param>
+    /// <param name="classifierModel">文本行 0°/180° 分类模型；关闭文本行分类时可为 null。</param>
+    /// <param name="recognizerModel">文字识别模型，由调用方管理其生命周期。</param>
+    /// <param name="dictionaryUtf8">UTF-8 字典内容，定义识别类别对应的字符。</param>
+    /// <param name="options">流水线配置；为 null 时使用默认配置。</param>
     public PaddleOcrAll(Model detectorModel, Model? classifierModel, Model recognizerModel,
         ReadOnlySpan<byte> dictionaryUtf8, PaddleOcrOptions? options = null)
+        : this(detectorModel, classifierModel, recognizerModel, dictionaryUtf8, options, null) { }
+
+    /// <summary>使用已加载模型创建流水线，可显式接入独立的四方向纸张模型。</summary>
+    /// <param name="detectorModel">文本检测模型，由调用方管理其生命周期。</param>
+    /// <param name="classifierModel">文本行 0°/180° 分类模型；关闭文本行分类时可为 null。</param>
+    /// <param name="recognizerModel">文字识别模型，由调用方管理其生命周期。</param>
+    /// <param name="dictionaryUtf8">UTF-8 字典内容，定义识别类别对应的字符。</param>
+    /// <param name="options">流水线配置；为 null 时使用默认配置。</param>
+    /// <param name="documentOrientationModel">四方向纸张模型；为 null 时跳过第一阶段，模型本身由调用方释放。</param>
+    public PaddleOcrAll(Model detectorModel, Model? classifierModel, Model recognizerModel,
+        ReadOnlySpan<byte> dictionaryUtf8, PaddleOcrOptions? options, Model? documentOrientationModel)
     {
         _options = options ?? new PaddleOcrOptions();
         if (_options.LineWorkerCount is < 0 or > Parallelism.MaxLineWorkers)
@@ -118,6 +189,8 @@ public sealed class PaddleOcrAll : IDisposable
         if (_options.RecBatchLines < 1) throw new ArgumentOutOfRangeException(nameof(options));
         if (_options.ClassifierThreshold is < 0 or > 1 || !MathCompat.IsFinite(_options.ClassifierThreshold))
             throw new ArgumentOutOfRangeException(nameof(options));
+        if (_options.DocumentOrientationThreshold is < 0 or > 1 || !MathCompat.IsFinite(_options.DocumentOrientationThreshold))
+            throw new ArgumentOutOfRangeException(nameof(options));
         if (!_options.UseDirectionClassification) classifierModel = null;
         if (_options.UseDirectionClassification && classifierModel is null)
             throw new ArgumentNullException(nameof(classifierModel));
@@ -127,22 +200,35 @@ public sealed class PaddleOcrAll : IDisposable
             : Math.Min(_options.PreprocessWorkerCount, Environment.ProcessorCount);
         _detector = new PaddleOcrDetector(detectorModel ?? throw new ArgumentNullException(nameof(detectorModel)), _options.Detector,
             ResolveDetectorIntraThreads(_options));
-        _classifier = classifierModel is null ? null : new PaddleOcrClassifier(classifierModel, _options.Classifier);
-        _recIntraOpBase = Parallelism.ResolveRecognizerIntraOp(_lineWorkers);
-        // Tail boost ceiling: CompiledModel clamps to 16 anyway. The NHWC
-        // kernels are FMA-bound and the detector measured faster at 16 than
-        // at 8 on Zen 3, so idle line-worker cores are worth feeding even
-        // past the physical-core count.
-        _recIntraOpMax = Math.Min(Environment.ProcessorCount, 16);
-        _gpuCtcIntraOpThreads = _options.GpuCtcIntraOpThreads == 0
-            ? _recIntraOpMax
-            : Math.Min(_options.GpuCtcIntraOpThreads, Environment.ProcessorCount);
-        _recognizer = new PaddleOcrRecognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)),
-            dictionaryUtf8, _options.Recognizer, ownsModel: false,
-            _recIntraOpBase);
-        _recGpu = OnnxSharp.OcrSessionFactory.IsGpuBackend(_options.Recognizer.Backend);
-        _recBatchEffective = _options.HasExplicitRecBatchLines ? _options.RecBatchLines
-            : _recGpu ? 16 : _options.RecBatchLines;
+        try
+        {
+            _classifier = classifierModel is null ? null : new PaddleOcrClassifier(classifierModel, _options.Classifier);
+            _recIntraOpBase = Parallelism.ResolveRecognizerIntraOp(_lineWorkers);
+            // 剩余行减少时可使用空闲线程提升识别速度，最高不超过编译模型支持的 16 线程。
+            // NHWC 算子受 FMA 吞吐限制，已有测量表明 SMT 线程也可提供额外计算吞吐。
+            _recIntraOpMax = Math.Min(Environment.ProcessorCount, 16);
+            _gpuCtcIntraOpThreads = _options.GpuCtcIntraOpThreads == 0
+                ? _recIntraOpMax
+                : Math.Min(_options.GpuCtcIntraOpThreads, Environment.ProcessorCount);
+            _recognizer = new PaddleOcrRecognizer(recognizerModel ?? throw new ArgumentNullException(nameof(recognizerModel)),
+                dictionaryUtf8, _options.Recognizer, ownsModel: false,
+                _recIntraOpBase);
+            _recGpu = OnnxSharp.OcrSessionFactory.IsGpuBackend(_options.Recognizer.Backend);
+            _recBatchEffective = _options.HasExplicitRecBatchLines ? _options.RecBatchLines
+                : _recGpu ? 16 : _options.RecBatchLines;
+            // 模型独立且显式传入；仅开启配置不会隐式加载或下载纸张模型。
+            _documentOrientation = documentOrientationModel is not null && _options.UseDocumentOrientationClassification
+                ? new PaddleOcrDocumentOrientationClassifier(documentOrientationModel, _options.DocumentOrientation) : null;
+        }
+        catch
+        {
+            // 构造后续阶段失败时，释放此前已创建的会话和编译结果；调用方拥有的 Model 不在这里释放。
+            _documentOrientation?.Dispose();
+            _recognizer?.Dispose();
+            _classifier?.Dispose();
+            _detector.Dispose();
+            throw;
+        }
     }
 
     private static byte[] ReadDictionary(Stream source)
@@ -154,20 +240,78 @@ public sealed class PaddleOcrAll : IDisposable
         return buffer.ToArray();
     }
 
-    /// <summary>Runs DET, perspective crop, optional CLS and CTC REC.</summary>
+    /// <summary>执行可选整页校正、文本检测、透视裁剪、文本行分类和文字识别。</summary>
+    /// <param name="source">原始输入像素，不会被修改。</param>
+    /// <param name="sourceWidth">输入图宽度，单位为像素。</param>
+    /// <param name="sourceHeight">输入图高度，单位为像素。</param>
+    /// <param name="sourceStride">输入行字节跨度；0 表示紧密排列。</param>
+    /// <param name="format">输入像素格式，默认 BGR24。</param>
+    /// <returns>识别文本、原图坐标框及可选纸张方向结果。</returns>
     public PaddleOcrResult Run(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride = 0, ImagePixelFormat format = ImagePixelFormat.Bgr24)
         => Run(source, sourceWidth, sourceHeight, returnCtcAlignment: false, sourceStride, format);
 
     /// <summary>
-    /// Same as <see cref="Run(ReadOnlySpan{byte}, int, int, int, ImagePixelFormat)"/>.
-    /// <paramref name="returnCtcAlignment"/> asks this call's greedy decode to
-    /// keep one <see cref="PaddleOcrCtcSpan"/> per emitted token. It does not
-    /// change the graph, the session, or the tensor shape. False leaves
-    /// <see cref="PaddleOcrLine.CtcSpans"/> null and allocates no span array.
+    /// 执行完整 OCR，可在解码时保留 CTC 字符对齐，供原图坐标中的字符框估算使用。
     /// </summary>
+    /// <param name="source">原始输入像素，可含行尾填充，不会被修改。</param>
+    /// <param name="sourceWidth">原始输入图宽度，单位为像素。</param>
+    /// <param name="sourceHeight">原始输入图高度，单位为像素。</param>
+    /// <param name="returnCtcAlignment">是否保留各输出字符的 CTC 时间区间；false 时 CtcSpans 为 null。</param>
+    /// <param name="sourceStride">输入行字节跨度；0 表示按宽度和格式计算紧密排列的跨度。</param>
+    /// <param name="format">输入像素格式，默认 BGR24。</param>
+    /// <returns>包含方向预测、实际校正角度及原图坐标识别行的结果。</returns>
     public PaddleOcrResult Run(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         bool returnCtcAlignment, int sourceStride = 0, ImagePixelFormat format = ImagePixelFormat.Bgr24)
+    {
+        if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrAll));
+        if (_documentOrientation is null)
+            return RunCore(source, sourceWidth, sourceHeight, returnCtcAlignment, sourceStride, format);
+        sourceStride = ImagePixels.ResolveStride(sourceWidth, sourceStride, format);
+        if ((long)sourceWidth * sourceHeight > _options.Detector.MaxImagePixels)
+            throw new InvalidOperationException("Source image exceeds MaxImagePixels.");
+        PaddleOcrDocumentOrientationResult orientation = _documentOrientation.Classify(source,
+            sourceWidth, sourceHeight, sourceStride, format);
+        // 方向预测表示顺时针倾转；按相同角度逆时针校正。低置信度只跳过旋转，不丢弃预测结果。
+        int rotation = orientation.Score >= _options.DocumentOrientationThreshold ? orientation.OrientationDegrees : 0;
+        byte[]? rotated = null;
+        try
+        {
+            PaddleOcrResult result;
+            if (rotation == 0) result = RunCore(source, sourceWidth, sourceHeight, returnCtcAlignment, sourceStride, format);
+            else
+            {
+                long started = PipelineProfiler.Enabled ? PipelineProfiler.Now() : 0;
+                // 每次请求独占旋转缓冲区；目标像素紧密排列，因此 RunCore 的 stride 传 0。
+                rotated = PooledArrays.Rent<byte>(checked(sourceWidth * sourceHeight * ImagePixels.BytesPerPixel(format)));
+                DocumentRotation.Rotate(source, sourceWidth, sourceHeight, sourceStride, format, rotation, rotated);
+                if (PipelineProfiler.Enabled) PipelineProfiler.Add(PipelineProfiler.DocumentRotate, started);
+                var size = DocumentRotation.Size(sourceWidth, sourceHeight, rotation);
+                result = RunCore(rotated, size.Width, size.Height, returnCtcAlignment, 0, format);
+                // 逐点还原行框并保留阅读顺序，CTC 字符框后续也能正确映射回原图。
+                for (int i = 0; i < result.Lines.Length; i++)
+                    result.Lines[i] = DocumentRotation.ToSource(result.Lines[i], sourceWidth, sourceHeight, rotation);
+            }
+            return new PaddleOcrResult
+            {
+                Lines = result.Lines, DetectedCount = result.DetectedCount,
+                DetectorResizedWidth = result.DetectorResizedWidth, DetectorResizedHeight = result.DetectorResizedHeight,
+                DocumentOrientation = orientation, AppliedDocumentRotationDegrees = rotation
+            };
+        }
+        finally { if (rotated is not null) PooledArrays.Return(rotated); }
+    }
+
+    /// <summary>对当前输入图像执行 DET、文本行 CLS 和 REC；本方法不执行整页方向预测或校正。</summary>
+    /// <param name="source">当前图像的像素；可能是原图，也可能是整页旋转后的临时图。</param>
+    /// <param name="sourceWidth">当前图像宽度，单位为像素。</param>
+    /// <param name="sourceHeight">当前图像高度，单位为像素。</param>
+    /// <param name="returnCtcAlignment">是否在识别解码时保留字符对齐信息。</param>
+    /// <param name="sourceStride">当前图像行字节跨度；0 表示紧密排列。</param>
+    /// <param name="format">当前图像的像素格式。</param>
+    /// <returns>当前图像坐标系中的 OCR 结果；原图坐标还原由外层 Run 负责。</returns>
+    private PaddleOcrResult RunCore(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
+        bool returnCtcAlignment, int sourceStride, ImagePixelFormat format)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrAll));
         sourceStride = ImagePixels.ResolveStride(sourceWidth, sourceStride, format);
@@ -721,6 +865,8 @@ public sealed class PaddleOcrAll : IDisposable
         _detector.Dispose();
         _classifier?.Dispose();
         _recognizer.Dispose();
+        _documentOrientation?.Dispose();
+        _ownedDocumentOrientationModel?.Dispose();
         _ownedModels?.Dispose();
     }
 }

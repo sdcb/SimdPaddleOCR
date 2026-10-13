@@ -13,11 +13,16 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sdcb.SimdPaddleOCR\Sdcb.SimdPaddleOCR.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.DocumentOrientation\Sdcb.SimdPaddleOCR.Models.DocumentOrientation.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.7" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Shaders\*.spv" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Include="..\Shared\DocumentOrientationValidation.cs" Link="DocumentOrientationValidation.cs" />
+    <EmbeddedResource Include="..\..\examples\sample.jpg" LogicalName="orientation.sample.jpg" />
+    <EmbeddedResource Include="..\..\models\orientation-manifest.json" LogicalName="orientation.manifest.json" />
     <Compile Include="..\Sdcb.SimdPaddleOCR.AndroidBench\LayerProbe.cs" Link="LayerProbe.cs" />
     <Compile Include="..\Sdcb.SimdPaddleOCR.AndroidBench\GemmTest.cs" Link="GemmTest.cs" />
     <Compile Include="..\Sdcb.SimdPaddleOCR.AndroidBench\Paths.cs" Link="Paths.cs" />

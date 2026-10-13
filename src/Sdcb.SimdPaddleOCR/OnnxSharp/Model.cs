@@ -418,7 +418,9 @@ public sealed class Model : IDisposable
             OnnxAttributeData? value = constant.Attributes.FirstOrDefault(a => a.Name == "value");
             if (value?.Tensor is OnnxTensorData tensor)
             {
-                if (tensor.Name.Length == 0) tensor.Name = constant.Outputs[0];
+                // TensorProto.name 只是描述性名称；图连接实际使用 Constant 的输出边名称。
+                // onnxsim 可能只重命名输出边，必须以输出边为准登记常量，避免常量丢失。
+                tensor.Name = constant.Outputs[0];
                 initializers[constant.Outputs[0]] = tensor;
                 continue;
             }
@@ -556,6 +558,12 @@ public sealed class Model : IDisposable
             string[] resolvedOutputs = [.. node.Outputs.Select(Resolve)];
             node.Inputs.Clear(); node.Inputs.AddRange(resolvedInputs);
             node.Outputs.Clear(); node.Outputs.AddRange(resolvedOutputs);
+            if (node.OpType == "Gemm" && node.Domain is "" or "ai.onnx")
+            {
+                // 仅转换标准 ONNX Gemm，自定义域中同名算子不能套用此规则。
+                LowerGemm(node, transformed, initializers, graph);
+                continue;
+            }
             transformed.Add(node);
         }
 
@@ -668,6 +676,96 @@ public sealed class Model : IDisposable
         if (strides[0] != 1 || strides[1] != 1) return;
         long ph = (kernel[0] - 1) * dilation[0], pw = (kernel[1] - 1) * dilation[1];
         node.Attributes.Remove(auto); node.Attributes.Add(new OnnxAttributeData { Name = "pads", Ints = { ph / 2, pw / 2, ph - ph / 2, pw - pw / 2 } });
+    }
+
+    /// <summary>将 Gemm 转换为现有后端支持的 MatMul、Add、Mul 和必要的转置节点。</summary>
+    /// <param name="node">待展开的标准 ONNX Gemm，计算 alpha×op(A)×op(B)＋beta×C，C 可省略。</param>
+    /// <param name="nodes">按拓扑顺序接收展开节点的列表。</param>
+    /// <param name="initializers">常量表；转换时加入预转置权重、缩放权重或标量常量。</param>
+    /// <param name="graph">原始图，用于避开已有名称并补充中间张量的类型和形状信息。</param>
+    /// <remarks>
+    /// onnxsim 会把模型末端的 MatMul＋Add 合并为 Gemm；导入时再展开即可复用 CPU、WASM
+    /// 的打包矩阵权重和 GPU 矩阵计算路径，无需在各后端重复增加 Gemm 实现。
+    /// </remarks>
+    private static void LowerGemm(OnnxNodeData node, List<OnnxNodeData> nodes,
+        Dictionary<string, OnnxTensorData> initializers, OnnxGraphData graph)
+    {
+        if (node.Inputs.Count is < 2 or > 3 || node.Outputs.Count != 1)
+            throw new InvalidDataException($"Invalid Gemm '{node.Name}'.");
+        long transA = node.Attributes.FirstOrDefault(a => a.Name == "transA")?.Int ?? 0;
+        long transB = node.Attributes.FirstOrDefault(a => a.Name == "transB")?.Int ?? 0;
+        if (transA is not (0 or 1) || transB is not (0 or 1))
+            throw new InvalidDataException("Gemm transpose attributes must be 0 or 1.");
+        float alpha = node.Attributes.FirstOrDefault(a => a.Name == "alpha")?.Float ?? 1f;
+        float beta = node.Attributes.FirstOrDefault(a => a.Name == "beta")?.Float ?? 1f;
+        string prefix = node.Outputs[0] + ".sdcb_gemm";
+        HashSet<string> names = new(initializers.Keys, StringComparer.Ordinal);
+        foreach (OnnxNodeData n in graph.Nodes)
+            foreach (string name in n.Inputs.Concat(n.Outputs)) names.Add(name);
+        // 生成新张量名称：suffix 是用途后缀，遇到与原图名称冲突时追加下划线。
+        string Unique(string suffix)
+        {
+            string name = prefix + suffix;
+            while (!names.Add(name)) name += "_";
+            return name;
+        }
+        // 追加节点：op 为算子类型，inputs 为输入边，output 为输出边；transpose 表示交换两个矩阵轴。
+        void Emit(string op, string[] inputs, string output, bool transpose = false)
+        {
+            OnnxNodeData n = new() { Name = output, OpType = op };
+            n.Inputs.AddRange(inputs); n.Outputs.Add(output);
+            if (transpose) n.Attributes.Add(new OnnxAttributeData { Name = "perm", Ints = { 1, 0 } });
+            nodes.Add(n);
+            OnnxValueInfoData? info = graph.ValueInfo.Concat(graph.Outputs).FirstOrDefault(v => v.Name == node.Outputs[0]);
+            if (info is not null && !transpose)
+                graph.ValueInfo.Add(new OnnxValueInfoData { Name = output, ElementType = info.ElementType, Shape = info.Shape });
+        }
+        // 生成缩放后的张量边：input 为原张量名称，factor 为系数；常量直接折叠，动态值使用 Mul。
+        string Scale(string input, float factor)
+        {
+            if (factor == 1f) return input;
+            string output = Unique(".scale");
+            if (initializers.TryGetValue(input, out OnnxTensorData? tensor))
+                initializers[output] = MakeFloatTensor(output, tensor.Dims, TensorFloats(tensor).Select(v => v * factor).ToArray());
+            else
+            {
+                string scalar = Unique(".factor");
+                initializers[scalar] = MakeFloatTensor(scalar, [], [factor]);
+                Emit("Mul", [input, scalar], output);
+            }
+            return output;
+        }
+        string a = node.Inputs[0], b = node.Inputs[1];
+        if (transA == 1) { string t = Unique(".aT"); Emit("Transpose", [a], t, true); a = t; }
+        if (transB == 1)
+        {
+            string t = Unique(".bT");
+            if (initializers.TryGetValue(b, out OnnxTensorData? tensor))
+            {
+                if (tensor.Dims.Count != 2) throw new InvalidDataException("Gemm B must have rank 2.");
+                // 常量 B 在导入时完成转置，避免每次推理转置，并保留后续 MatMul 权重打包能力。
+                int rows = checked((int)tensor.Dims[0]), cols = checked((int)tensor.Dims[1]);
+                float[] input = TensorFloats(tensor), output = new float[input.Length];
+                for (int r = 0; r < rows; r++) for (int c = 0; c < cols; c++) output[c * rows + r] = input[r * cols + c];
+                initializers[t] = MakeFloatTensor(t, [cols, rows], output);
+            }
+            else Emit("Transpose", [b], t, true);
+            b = t;
+        }
+        // alpha 折叠进常量 B，省去一次完整输出遍历；动态 B 则在 MatMul 后缩放以保留原表达式。
+        bool scaleAfter = alpha != 1f && !initializers.ContainsKey(b);
+        if (!scaleAfter) b = Scale(b, alpha);
+        bool bias = node.Inputs.Count == 3 && node.Inputs[2].Length != 0;
+        string product = bias || scaleAfter ? Unique(".product") : node.Outputs[0];
+        Emit("MatMul", [a, b], product);
+        if (scaleAfter)
+        {
+            string factor = Unique(".alpha"); initializers[factor] = MakeFloatTensor(factor, [], [alpha]);
+            string scaled = bias ? Unique(".scaled") : node.Outputs[0];
+            Emit("Mul", [product, factor], scaled); product = scaled;
+        }
+        // C 的标量、行或列偏置继续使用现有 Add 广播规则；beta 也可直接折叠进常量 C。
+        if (bias) Emit("Add", [product, Scale(node.Inputs[2], beta)], node.Outputs[0]);
     }
 
     private static void FoldConvBatchNormalization(List<OnnxNodeData> nodes,

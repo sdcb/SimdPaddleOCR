@@ -10,6 +10,8 @@ The core API accepts interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA
 
 ## Quick start
 
+For whole-page 0°/90°/180°/270° correction, reference the independent `Sdcb.SimdPaddleOCR.Models.DocumentOrientation` package and explicitly pass `DocumentOrientationModel.Provider` to `PaddleOcrAll.Load/LoadAsync` (with `options: null` or your options). The stage runs before detection and returns boxes in source-image coordinates. See [conversion, validation and CPU/GPU/WASM measurements](docs/document-orientation.md).
+
 Install the core package and the tiny models (tiny transitively references CLS and `ModelProvider`):
 
 ```powershell
@@ -124,6 +126,7 @@ finally
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Small`      | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Small.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Small)           | PP-OCRv6 small; `ChineseV6SmallModels.Default`                                                        |
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Medium`     | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium)         | PP-OCRv6 medium; `ChineseV6MediumModels.Default`                                                      |
 | `Sdcb.SimdPaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.TextLineOrientation) | PP-LCNet text-line orientation CLS, transitively referenced by the three Chinese model packages       |
+| `Sdcb.SimdPaddleOCR.Models.DocumentOrientation` | Independent optional package | PP-LCNet_x1_0 whole-page orientation (0/90/180/270), before DET |
 
 Each `IPaddleOcrModelProvider` exposes `Name`, `Kind`, `Format`, language and version metadata, plus `OpenRead()` / `OpenReadAsync()`. A full OCR set is a `PaddleOcrModelBundle` (DET, REC, dictionary, and optional CLS). The current language code is `zh`. Individual models can also be consumed by other inference implementations, for example `ChineseV6TinyModel.Detection.OpenReadAsync()`. `Model`, `PaddleOcrDetector`, `PaddleOcrClassifier`, `PaddleOcrRecognizer`, and `PaddleOcrAll` all accept Stream load entry points; after parsing they do not keep the full raw ONNX bytes.
 

@@ -1,3 +1,11 @@
+<#
+.SYNOPSIS
+构建并启动浏览器 WebAssembly 性能与方向验证工具。
+.PARAMETER Orientation
+改为运行四方向模型及完整 OCR 的数值、文本、坐标验证，并保存方向报告。
+.PARAMETER BrowserNoSandbox
+仅在受限环境中的本机可信测试启用，向测试浏览器传入 --no-sandbox；默认不启用。
+#>
 [CmdletBinding()]
 param(
     [int]$Workers = 4,
@@ -7,6 +15,8 @@ param(
     [switch]$Open,
     [switch]$NoBuild,
     [switch]$NoAot,
+    [switch]$Orientation,
+    [switch]$BrowserNoSandbox,
     # Runtime environment variables, e.g. -Env PPOCR_DET_THREADS=4,PPOCR_NHWC=0
     [string[]]$Env = @()
 )
@@ -29,6 +39,8 @@ if (-not $NoBuild) {
 
 $ServerScript = Join-Path $ProjectDir "server.mjs"
 $NodeArgs = @($ServerScript, "--workers", $Workers, "--model", $Model)
+if ($Orientation) { $NodeArgs += "--orientation" }
+if ($BrowserNoSandbox) { $NodeArgs += "--browser-no-sandbox" }
 if ($Count -gt 0) {
     $NodeArgs += @("--count", $Count)
 }

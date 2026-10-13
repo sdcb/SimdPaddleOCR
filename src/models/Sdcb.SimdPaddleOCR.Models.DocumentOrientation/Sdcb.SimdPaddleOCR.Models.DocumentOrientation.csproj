@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- 独立模型包只引用提供方契约，不引用核心库或其他 OCR 模型包。 -->
+    <ProjectReference Include="..\..\Sdcb.SimdPaddleOCR.ModelProvider\Sdcb.SimdPaddleOCR.ModelProvider.csproj" />
+    <!-- 内嵌经 onnxsim 简化和 Paddle 数值比对的四方向纸张模型。 -->
+    <EmbeddedResource Include="..\..\..\models\doc_ori.onnx" Link="doc_ori.onnx" />
+    <None Update="README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\..\..\models\orientation-manifest.json" Pack="true" PackagePath="orientation-manifest.json" />
+  </ItemGroup>
+</Project>

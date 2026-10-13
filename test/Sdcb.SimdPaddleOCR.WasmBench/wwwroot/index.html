@@ -319,6 +319,8 @@
                 "--count", count,
                 "--out", out
             ];
+            // orientation 查询参数选择四方向验证入口，复用浏览器 AOT 的运行环境。
+            if (params.has('orientation')) cliArgs.push('--orientation');
 
             log(`[BENCH] Launching with args: ${cliArgs.join(" ")}`, "log-dim");
 

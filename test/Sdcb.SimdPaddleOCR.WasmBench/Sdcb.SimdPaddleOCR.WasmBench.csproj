@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sdcb.SimdPaddleOCR\Sdcb.SimdPaddleOCR.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.DocumentOrientation\Sdcb.SimdPaddleOCR.Models.DocumentOrientation.csproj" />
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Small\Sdcb.SimdPaddleOCR.Models.ChineseV6Small.csproj" />
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Medium\Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.csproj" />
@@ -23,7 +24,9 @@
 
   <!-- Embed sample.jpg for instant zero-dependency smoke testing -->
   <ItemGroup>
-    <EmbeddedResource Include="..\..\examples\sample.jpg" Link="sample.jpg" />
+    <Compile Include="..\Shared\DocumentOrientationValidation.cs" Link="DocumentOrientationValidation.cs" />
+    <EmbeddedResource Include="..\..\examples\sample.jpg" LogicalName="orientation.sample.jpg" />
+    <EmbeddedResource Include="..\..\models\orientation-manifest.json" LogicalName="orientation.manifest.json" />
   </ItemGroup>
 
 </Project>

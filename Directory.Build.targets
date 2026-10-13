@@ -23,6 +23,9 @@
       <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.SimdPaddleOCR.Models.TextLineOrientation'">
         <ProjectVersion>$(SdcbSimdPaddleOCRModelsTextLineOrientationVersion)</ProjectVersion>
       </_ProjectReferencesWithVersions>
+      <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.SimdPaddleOCR.Models.DocumentOrientation'">
+        <ProjectVersion>$(SdcbSimdPaddleOCRModelsDocumentOrientationVersion)</ProjectVersion>
+      </_ProjectReferencesWithVersions>
       <_ProjectReferencesWithVersions Condition="'%(Filename)' == 'Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny'">
         <ProjectVersion>$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)</ProjectVersion>
       </_ProjectReferencesWithVersions>
