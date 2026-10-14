@@ -57,6 +57,9 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     // grow-only arena / staging set, so each costs only a command buffer
     private const int MaxExecs = 96;
     private VkSessionBuffers? _vkBuffers;
+    private const int MaxDeviceLosses = 3;
+    private int _deviceLosses;
+    private CpuOcrSession? _lostCpu;   // finished the call that hit the last device loss
 
     private readonly CompiledModel _compiled;
     private readonly bool _metal;
@@ -383,22 +386,35 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         _warm = Task.Run(() => Parallel.For(0, cold.Count, i => VkBackend.Default.GraphFor(model, cold[i], opts[i])));
     }
 
-    /// <summary>Permanent CPU fallback; the caller's input (already in InputData) carries over.</summary>
+    /// <summary>
+    /// CPU fallback; the caller's input (already in InputData) carries over. Permanent, except after a
+    /// Vulkan device loss: the backend re-creates its device, so only this call runs on the CPU
+    /// (up to <see cref="MaxDeviceLosses"/> times per session).
+    /// </summary>
     private CpuOcrSession Fallback(Exception ex)
     {
         if (_cpu is null)
         {
-            System.Diagnostics.Debug.WriteLine($"SimdPaddleOCR: {(_metal ? "Metal" : "Vulkan")} failed, falling back to CPU: {ex}");
+            Console.Error.WriteLine($"SimdPaddleOCR: {(_metal ? "Metal" : "Vulkan")} failed ({ex.GetType().Name}: {ex.Message}), falling back to CPU");
             var cpu = new CpuOcrSession(_compiled) { PlanForCtcProjection = PlanForCtcProjection, IntraOpThreads = _threads };
             if (_shape.Length != 0)
             {
                 cpu.Reshape(_shape);
                 _input.AsSpan(0, _volume).CopyTo(cpu.InputData);
             }
-            _cpu = cpu;
             foreach (var (_, e) in _execs)
                 try { e.Dispose(); } catch { /* device may be lost */ }
             _execs.Clear();
+            if (ex is VkDeviceLostException && ++_deviceLosses <= MaxDeviceLosses)
+            {
+                try { _vkBuffers?.Dispose(); } catch { /* lost device */ }
+                _vkBuffers = null;
+                _warm = null;
+                _lostCpu?.Dispose();
+                _lostCpu = cpu;
+                return cpu;
+            }
+            _cpu = cpu;
         }
         return _cpu;
     }
@@ -412,6 +428,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         _execs.Clear();
         try { _vkBuffers?.Dispose(); } catch { /* device may be lost */ }
         _cpu?.Dispose();
+        _lostCpu?.Dispose();
     }
 }
 #endif
