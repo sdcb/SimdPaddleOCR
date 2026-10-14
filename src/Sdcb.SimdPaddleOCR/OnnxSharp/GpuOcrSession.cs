@@ -55,7 +55,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
 
     // recent shape × variant sessions (REC widths cycle within an image); on Vulkan they share one
     // grow-only arena / staging set, so each costs only a command buffer
-    private const int MaxExecs = 32;
+    private const int MaxExecs = 96;
     private VkSessionBuffers? _vkBuffers;
 
     private readonly CompiledModel _compiled;
@@ -67,6 +67,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     private int _volume, _highWater, _threads;
     private CpuOcrSession? _cpu;
     private bool _disposed;
+    // device graph compiles for upcoming shapes, started at Reshape so they overlap the caller's preprocessing
+    private Task? _warm;
 
     internal GpuOcrSession(CompiledModel compiled, bool metal)
     {
@@ -121,6 +123,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         _volume = checked((int)volume);
         _highWater = Math.Max(_highWater, _volume);
         if (_input.Length < _volume) _input = new float[_volume];
+        Warm([_shape], PlanForCtcProjection && _compiled.Ctc is not null ? Kind.Ctc : Kind.Full);
     }
 
     public ReadOnlySpan<float> RunInternal(ReadOnlySpan<float> input)
@@ -158,7 +161,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
 
     // ---- IBatchedCtcSession: every line group (unit) of an image through the CTC graph ----
     private int[][] _units = [];
-    private float[] _unitInput = [];
+    private float[] _unitInput = [], _unitActs = [];
     private CtcHead? _ctcHead;
 
     public bool CanRunMany => _cpu is null && _compiled.Ctc is not null;
@@ -174,6 +177,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         }
         _units = [.. shapes.Select(x => x.ToArray())];
         if (_unitInput.Length < total) _unitInput = new float[checked((int)total)];
+        if (_units.Length != 0 && _compiled.ResolveHead(_units[0]) is not null) Warm(_units, Kind.Ctc);
         return _unitInput.AsSpan(0, (int)total);
     }
 
@@ -214,52 +218,92 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     {
         if (_cpu is not null || _ctcHead is null) return false;
         int n = _units.Length, inner = _ctcHead.Inner;
+        if (n == 0) return true;
         int[] offsets = new int[n];
         long[] inOff = new long[n + 1];
-        int totalActs = 0;
-        var outs = new List<int>(n);
-        for (int u = 0; u < n; u++)
-        {
-            long v = 1;
-            foreach (int d in _units[u]) v *= d;
-            inOff[u + 1] = inOff[u] + v;
-        }
-        float[] acts = [];
+        float[] acts;
         try
         {
-            // unit u+1 runs on the device while the caller's CPU head (MatMul + ArgMax) consumes unit u
-            IExec Submit(int u)
-            {
-                Reshape(_units[u]);
-                IExec e = Exec(Kind.Ctc);
-                _unitInput.AsSpan((int)inOff[u], (int)(inOff[u + 1] - inOff[u])).CopyTo(e.Input);
-                e.Submit();
-                return e;
-            }
-            IExec cur = Submit(0);
+            // exact activation layout up front: finished units are consumed while later ones still run
+            int total = 0;
             for (int u = 0; u < n; u++)
             {
-                cur.Wait();
-                ReadOnlySpan<float> o = cur.Output;
-                if (acts.Length < totalActs + o.Length) Array.Resize(ref acts, Math.Max(totalActs + o.Length, acts.Length * 2));
-                offsets[u] = totalActs;
-                o.CopyTo(acts.AsSpan(totalActs));
-                totalActs += o.Length;
-                if (o.Length % inner != 0) return false;
-                if (u + 1 < n) cur = Submit(u + 1);
-                if (!onReady(acts, offsets, u, 1))
-                {
-                    if (u + 1 < n) cur.Wait();
-                    return false;
-                }
+                long v = 1;
+                foreach (int d in _units[u]) v *= d;
+                inOff[u + 1] = inOff[u] + v;
+                Reshape(_units[u]);
+                long o = 1;
+                foreach (int d in Exec(Kind.Ctc).OutputShape) o *= d;
+                if (o % inner != 0) return false;
+                offsets[u] = total;
+                total = checked(total + (int)o);
             }
+            // reused across calls: the caller consumes the activations before this session runs again
+            if (_unitActs.Length < total) _unitActs = new float[total];
+            acts = _unitActs;
         }
         catch (Exception ex)
         {
             Fallback(ex);
             return false;
         }
-        return true;
+
+        // The caller's CPU head (MatMul + ArgMax) is slower per unit than the device: it runs on the
+        // thread pool and takes every unit finished so far in one call (larger calls parallelize
+        // better), while this thread keeps the device busy with the next units.
+        int done = 0;
+        bool stop = false;
+        object gate = new();
+        Task<bool> consumer = Task.Run(() =>
+        {
+            int next = 0;
+            while (next < n)
+            {
+                int ready;
+                lock (gate)
+                {
+                    while ((ready = done) == next && !stop) Monitor.Wait(gate);
+                }
+                if (ready == next) return false;
+                if (!onReady(acts, offsets, next, ready - next)) return false;
+                next = ready;
+            }
+            return true;
+        });
+        bool deviceOk = true;
+        try
+        {
+            for (int u = 0; u < n && !consumer.IsCompleted; u++)
+            {
+                Reshape(_units[u]);
+                IExec e = Exec(Kind.Ctc);
+                _unitInput.AsSpan((int)inOff[u], (int)(inOff[u + 1] - inOff[u])).CopyTo(e.Input);
+                e.Submit();
+                e.Wait();
+                e.Output.CopyTo(acts.AsSpan(offsets[u]));
+                lock (gate)
+                {
+                    done = u + 1;
+                    Monitor.Pulse(gate);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Fallback(ex);
+            deviceOk = false;
+        }
+        finally
+        {
+            lock (gate)
+            {
+                stop = true;
+                Monitor.Pulse(gate);
+            }
+        }
+        // consumer exceptions propagate (not a device fault)
+        bool ok = consumer.GetAwaiter().GetResult();
+        return deviceOk && ok;
     }
 
     public void NoteProfile(string operation, long started) =>
@@ -292,13 +336,12 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
                 _execs.Add(hit);
                 return hit.exec;
             }
-        string? output = kind switch
+        CompileOptions opt = OptionsFor(kind, _shape);
+        if (_warm is { } warm)
         {
-            Kind.Ctc => _compiled.ResolveHead(_shape)?.ActivationName,
-            Kind.Logits => LogitsName(),
-            _ => null,
-        };
-        CompileOptions opt = CompiledModel.Options with { OutputName = output };
+            _warm = null;
+            try { warm.Wait(); } catch { /* the synchronous compile below reports it */ }
+        }
         IExec exec = _metal
             ? new MtlExec(MetalBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt))
             : new VkExec(VkBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt,
@@ -313,6 +356,32 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     }
 
     private string? LogitsName() => _compiled.Logits?.Options.OutputName;
+
+    private CompileOptions OptionsFor(Kind kind, int[] shape) => CompiledModel.Options with
+    {
+        OutputName = kind switch
+        {
+            Kind.Ctc => _compiled.ResolveHead(shape)?.ActivationName,
+            Kind.Logits => LogitsName(),
+            _ => null,
+        },
+    };
+
+    /// <summary>Compiles the device graphs of shapes without a cached exec on the thread pool (Vulkan).</summary>
+    private void Warm(int[][] shapes, Kind kind)
+    {
+        if (_metal || _cpu is not null || _warm is { IsCompleted: false }) return;
+        var cold = new List<int[]>();
+        foreach (int[] sh in shapes)
+        {
+            string key = $"{kind}:{string.Join("x", sh)}";
+            if (!_execs.Exists(e => e.key == key) && !cold.Exists(c => c.AsSpan().SequenceEqual(sh))) cold.Add(sh);
+        }
+        if (cold.Count == 0) return;
+        var model = _compiled.Model.Onnx;
+        CompileOptions[] opts = [.. cold.Select(sh => OptionsFor(kind, sh))];
+        _warm = Task.Run(() => Parallel.For(0, cold.Count, i => VkBackend.Default.GraphFor(model, cold[i], opts[i])));
+    }
 
     /// <summary>Permanent CPU fallback; the caller's input (already in InputData) carries over.</summary>
     private CpuOcrSession Fallback(Exception ex)
