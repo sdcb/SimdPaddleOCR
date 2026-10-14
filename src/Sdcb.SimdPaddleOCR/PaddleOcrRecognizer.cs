@@ -515,7 +515,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
                 session.IntraOpThreads))
             {
                 if (matMulStarted != 0)
-                    session.NoteProfile(OperatorId.MatMul, matMulStarted, ops.MatMulNodeIndex);
+                    session.NoteProfile("MatMul", matMulStarted);
                 return CtcDecodeInput.Compact(indices, scores, rowCount);
             }
             PooledArrays.Return(indices);

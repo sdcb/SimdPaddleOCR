@@ -4,12 +4,22 @@
     `dotnet pack -p:Version=` must not flow into referenced projects; see Directory.Build.targets.
   -->
   <PropertyGroup>
-    <SdcbSimdPaddleOCRVersion Condition="'$(SdcbSimdPaddleOCRVersion)' == ''">2.0.0</SdcbSimdPaddleOCRVersion>
+    <SdcbSimdPaddleOCRVersion Condition="'$(SdcbSimdPaddleOCRVersion)' == ''">3.0.0</SdcbSimdPaddleOCRVersion>
     <SdcbSimdPaddleOCRModelProviderVersion Condition="'$(SdcbSimdPaddleOCRModelProviderVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelProviderVersion>
     <SdcbSimdPaddleOCRModelsTextLineOrientationVersion Condition="'$(SdcbSimdPaddleOCRModelsTextLineOrientationVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsTextLineOrientationVersion>
     <SdcbSimdPaddleOCRModelsChineseV6TinyVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6TinyVersion>
     <SdcbSimdPaddleOCRModelsChineseV6SmallVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6SmallVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6SmallVersion>
     <SdcbSimdPaddleOCRModelsChineseV6MediumVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6MediumVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6MediumVersion>
+  </PropertyGroup>
+
+  <!--
+    Inference engine. Default: the Sdcb.SimdOnnx package at an exact version (the engine grants this
+    assembly InternalsVisibleTo, so a mismatched build must not load). UseLocalSimdOnnx=true builds
+    against a sibling checkout instead (../Sdcb.SimdOnnx).
+  -->
+  <PropertyGroup>
+    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.1</SdcbSimdOnnxVersion>
+    <SimdOnnxProject Condition="'$(SimdOnnxProject)' == ''">$(MSBuildThisFileDirectory)..\Sdcb.SimdOnnx\src\Sdcb.SimdOnnx\Sdcb.SimdOnnx.csproj</SimdOnnxProject>
   </PropertyGroup>
 
   <PropertyGroup>

@@ -1,9 +1,8 @@
 namespace Sdcb.SimdPaddleOCR.OnnxSharp;
 
 /// <summary>
-/// The narrow session surface the OCR stages (DET/CLS/REC) consume. Both the
-/// CPU interpreter (<see cref="InferenceSession"/>) and GPU-backed sessions
-/// implement it, so the stages stay backend-agnostic.
+/// The narrow session surface the OCR stages (DET/CLS/REC) consume. CPU and
+/// GPU-backed sessions implement it, so the stages stay backend-agnostic.
 /// </summary>
 internal interface IOcrSession : IDisposable
 {
@@ -32,5 +31,5 @@ internal interface IOcrSession : IDisposable
     /// </summary>
     bool TryRunUntilCtcProjection(ReadOnlySpan<float> input, out CtcProjectionOperands operands);
     ReadOnlySpan<float> RunInternalSkipFinalSoftmax(ReadOnlySpan<float> input, out bool outputIsLogits);
-    void NoteProfile(OperatorId operation, long started, int nodeIndex);
+    void NoteProfile(string operation, long started);
 }

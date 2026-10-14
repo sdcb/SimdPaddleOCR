@@ -89,11 +89,11 @@ public sealed class PaddleOcrDetector : IDisposable
 
     private static bool IsTinyDetector(Model model)
     {
-        foreach (NodeRecord node in model.Nodes)
+        foreach (var node in model.Onnx.Graph.Nodes)
         {
-            if (node.Operator != OperatorId.Conv || node.Outputs.Length == 0) continue;
-            IReadOnlyList<int> shape = model.GetTensorShape(node.Outputs[0]);
-            return shape.Count >= 2 && shape[1] <= 16;
+            if (node.OpType != "Conv" || node.Inputs.Count < 2) continue;
+            return model.Onnx.Initializers.TryGetValue(node.Inputs[1], out var w)
+                && w.Dims.Count >= 1 && w.Dims[0] <= 16;
         }
         return false;
     }
