@@ -23,8 +23,11 @@ jobs:
       - uses: actions/checkout@v7
       - name: Unit tests (net10 library)
         run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - name: Unit tests (ns2.0 library)
-        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true
+        # ns2.0 mode needs the engine's netstandard2.0 build as a project (see the UnitTests csproj)
+        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true -p:UseLocalSimdOnnx=true "-p:SimdOnnxProject=${{ github.workspace }}/_simdonnx/src/Sdcb.SimdOnnx/Sdcb.SimdOnnx.csproj"
 
   generate:
     runs-on: windows-2025
