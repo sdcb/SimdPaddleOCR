@@ -70,8 +70,6 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     private int _volume, _highWater, _threads;
     private CpuOcrSession? _cpu;
     private bool _disposed;
-    // device graph compiles for upcoming shapes, started at Reshape so they overlap the caller's preprocessing
-    private Task? _warm;
 
     internal GpuOcrSession(CompiledModel compiled, bool metal)
     {
@@ -180,7 +178,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         }
         _units = [.. shapes.Select(x => x.ToArray())];
         if (_unitInput.Length < total) _unitInput = new float[checked((int)total)];
-        if (_units.Length != 0 && _compiled.ResolveHead(_units[0]) is not null) Warm(_units, Kind.Ctc);
+        if (_units.Length != 0 && _compiled.ResolveHead(_units[0]) is not null)
+            Warm(_units, Kind.Ctc);
         return _unitInput.AsSpan(0, (int)total);
     }
 
@@ -203,8 +202,9 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         {
             for (int u = 0; u < _units.Length; u++)
             {
-                Reshape(_units[u]);
-                // Vulkan: the compiled graph knows the shape (no per-shape session needed)
+                // Vulkan: the compiled graph knows the shape (no session, and no Reshape: that would
+                // warm the full-output graph the batched path never runs)
+                if (_metal) Reshape(_units[u]);
                 int[] o = _metal ? Exec(Kind.Ctc).OutputShape : CtcGraph(_units[u]).Plan.Values[CtcGraph(_units[u]).Plan.OutputValue].Shape;
                 if (o[^1] != h.Inner) return false;
                 rows[u] = o[^2];
@@ -321,17 +321,12 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     {
         int n = _units.Length, inner = _ctcHead!.Inner;
         if (n == 0) return true;
-        int[] offsets = new int[n];
+        int[] offsets = new int[n], actLen = new int[n];
         long[] inOff = new long[n + 1];
         float[] acts;
         VkUnitRunner runner;
         try
         {
-            if (_warm is { } warm)
-            {
-                _warm = null;
-                try { warm.Wait(); } catch { /* the compile below reports it */ }
-            }
             VkBackend be = VkBackend.Default;
             if (_runner is null || !ReferenceEquals(_runnerDev, be.Dev))
             {
@@ -355,6 +350,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
                 long o = 1;
                 foreach (int d in runner.OutputShape(u)) o *= d;
                 if (o % inner != 0) return false;
+                actLen[u] = (int)o;
                 offsets[u] = total;
                 total = checked(total + (int)o);
                 if (u + 1 == cut1 || u + 1 == cut2) runner.Cut();
@@ -398,7 +394,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             for (int w = 0; w < runner.Waves && !consumer.IsCompleted; w++)
             {
                 runner.Wait(w);
-                for (; u < n && runner.WaveOf(u) == w; u++) runner.Output(u).CopyTo(acts.AsSpan(offsets[u]));
+                for (; u < n && runner.WaveOf(u) == w; u++)
+                    runner.Output(u).Slice(0, actLen[u]).CopyTo(acts.AsSpan(offsets[u]));
                 lock (gate)
                 {
                     done = u;
@@ -458,11 +455,6 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
                 return hit.exec;
             }
         CompileOptions opt = OptionsFor(kind, _shape);
-        if (_warm is { } warm)
-        {
-            _warm = null;
-            try { warm.Wait(); } catch { /* the synchronous compile below reports it */ }
-        }
         IExec exec = _metal
             ? new MtlExec(MetalBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt))
             : new VkExec(VkBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt,
@@ -491,7 +483,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     /// <summary>Compiles the device graphs of shapes without a cached exec on the thread pool (Vulkan).</summary>
     private void Warm(int[][] shapes, Kind kind)
     {
-        if (_metal || _cpu is not null || _warm is { IsCompleted: false }) return;
+        if (_metal || _cpu is not null) return;
         var cold = new List<int[]>();
         foreach (int[] sh in shapes)
         {
@@ -501,7 +493,10 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         if (cold.Count == 0) return;
         var model = _compiled.Model.Onnx;
         CompileOptions[] opts = [.. cold.Select(sh => OptionsFor(kind, sh))];
-        _warm = Task.Run(() => Parallel.For(0, cold.Count, i => VkBackend.Default.GraphFor(model, cold[i], opts[i])));
+        // background builds at below-normal priority (they fill the device waits instead of competing
+        // with pre/post-processing); a later GraphFor of the same shape joins the build in flight
+        VkBackend be = VkBackend.Default;
+        for (int i = 0; i < cold.Count; i++) be.Prefetch(model, cold[i], opts[i]);
     }
 
     /// <summary>
@@ -529,7 +524,6 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             {
                 try { _vkBuffers?.Dispose(); } catch { /* lost device */ }
                 _vkBuffers = null;
-                _warm = null;
                 _lostCpu?.Dispose();
                 _lostCpu = cpu;
                 return cpu;
