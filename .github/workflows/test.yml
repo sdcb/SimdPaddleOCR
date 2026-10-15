@@ -107,7 +107,7 @@ jobs:
           if (-not (Select-String -Path metal-stderr.txt -Pattern '\[metal\] device:' -Quiet)) {
             throw 'Metal device never engaged — the smoke silently ran on CPU'
           }
-          if (Select-String -Path metal-stderr.txt -Pattern '\[metal\].*fallback' -Quiet) {
+          if (Select-String -Path metal-stderr.txt -Pattern '\[metal\].*fallback|Metal failed' -Quiet) {
             throw 'metal session fell back to CPU'
           }
           $cpu = Get-Content 'osx-arm64-smoke.json' | ConvertFrom-Json

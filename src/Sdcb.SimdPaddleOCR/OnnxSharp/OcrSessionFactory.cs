@@ -76,7 +76,14 @@ internal static class OcrSessionFactory
 
     private static readonly Lazy<MetalBackend?> s_mtl = new(() =>
     {
-        try { return OperatingSystem.IsMacOS() ? MetalBackend.Default : null; }
+        try
+        {
+            if (!OperatingSystem.IsMacOS()) return null;
+            MetalBackend b = MetalBackend.Default;
+            // one stderr breadcrumb per process so CI / users can tell the Metal path engaged
+            Console.Error.WriteLine($"[metal] device: {b.DeviceName}");
+            return b;
+        }
         catch { return null; }
     });
 
