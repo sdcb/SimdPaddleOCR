@@ -78,8 +78,7 @@ internal sealed unsafe class CpuOcrSession : IOcrSession
         int rows = a[^2], inner = a[^1];
         if (inner != head.Inner) return false;
         int batch = checked((int)(s.Output.Length / ((long)rows * inner)));
-        operands = new CtcProjectionOperands(s.Output, head.Weights, head.Bias ?? [], head.Packed,
-            batch, rows, inner, head.Columns, -1);
+        operands = new CtcProjectionOperands(s.Output, head.Projection, batch, rows, -1);
         return true;
     }
 

@@ -146,8 +146,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         int rows = a[^2], inner = a[^1];
         if (inner != head.Inner) return false;
         int batch = checked((int)(e.Output.Length / ((long)rows * inner)));
-        operands = new CtcProjectionOperands(e.Output, head.Weights, head.Bias ?? [], head.Packed,
-            batch, rows, inner, head.Columns, -1);
+        operands = new CtcProjectionOperands(e.Output, head.Projection, batch, rows, -1);
         return true;
     }
 
@@ -188,15 +187,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         rows = [];
         head = null!;
         if (_units.Length == 0 || _compiled.ResolveHead(_units[0]) is not { } h) return false;
-        head = _ctcHead ??= new CtcHead
-        {
-            Weights = System.Runtime.InteropServices.MemoryMarshal.AsBytes(h.Weights.AsSpan()).ToArray(),
-            Bias = h.Bias is null ? null : System.Runtime.InteropServices.MemoryMarshal.AsBytes(h.Bias.AsSpan()).ToArray(),
-            Packed = h.Packed,
-            Inner = h.Inner,
-            Columns = h.Columns,
-            MatMulIndex = -1,
-        };
+        // the model's projection itself (no per-session weight copy)
+        head = _ctcHead ??= new CtcHead { Projection = h.Projection, MatMulIndex = -1 };
         rows = new int[_units.Length];
         try
         {

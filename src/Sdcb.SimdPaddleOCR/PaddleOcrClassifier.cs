@@ -173,8 +173,8 @@ public sealed class PaddleOcrClassifier : IDisposable
         int inner = ops.Inner, cols = ops.Columns;
         if (cols < 2 || cols > 64 || inner <= 0) return false;
         ReadOnlySpan<float> act = ops.Activations;
-        ReadOnlySpan<float> w = ops.Weights;
-        ReadOnlySpan<float> bias = ops.Bias;
+        ReadOnlySpan<float> w = ops.Projection.Weights;
+        ReadOnlySpan<float> bias = ops.Projection.Bias ?? [];
         if (!bias.IsEmpty && bias.Length != cols) return false;
         if (w.Length < inner * cols) return false;
         int rows = Math.Min(ops.RowCount, count);

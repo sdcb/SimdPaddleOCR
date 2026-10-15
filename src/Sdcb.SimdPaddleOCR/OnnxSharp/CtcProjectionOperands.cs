@@ -1,3 +1,5 @@
+using Sdcb.SimdOnnx.Decoding;
+
 namespace Sdcb.SimdPaddleOCR.OnnxSharp;
 
 /// <summary>
@@ -6,29 +8,22 @@ namespace Sdcb.SimdPaddleOCR.OnnxSharp;
 /// </summary>
 internal readonly ref struct CtcProjectionOperands
 {
-    internal CtcProjectionOperands(ReadOnlySpan<float> activations, ReadOnlySpan<float> weights,
-        ReadOnlySpan<float> bias, float[]? packedWeights, int batch, int rows, int inner,
-        int columns, int matMulNodeIndex)
+    internal CtcProjectionOperands(ReadOnlySpan<float> activations, CtcProjection projection, int batch, int rows,
+        int matMulNodeIndex)
     {
         Activations = activations;
-        Weights = weights;
-        Bias = bias;
-        PackedWeights = packedWeights;
+        Projection = projection;
         Batch = batch;
         Rows = rows;
-        Inner = inner;
-        Columns = columns;
         MatMulNodeIndex = matMulNodeIndex;
     }
 
     internal ReadOnlySpan<float> Activations { get; }
-    internal ReadOnlySpan<float> Weights { get; }
-    internal ReadOnlySpan<float> Bias { get; }
-    internal float[]? PackedWeights { get; }
+    internal CtcProjection Projection { get; }
     internal int Batch { get; }
     internal int Rows { get; }
-    internal int Inner { get; }
-    internal int Columns { get; }
+    internal int Inner => Projection.Inner;
+    internal int Columns => Projection.Columns;
     internal int MatMulNodeIndex { get; }
     internal int RowCount => checked(Batch * Rows);
 }

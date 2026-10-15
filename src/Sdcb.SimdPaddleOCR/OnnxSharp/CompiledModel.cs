@@ -1,3 +1,4 @@
+using Sdcb.SimdOnnx.Decoding;
 using Sdcb.SimdOnnx.Engine;
 
 namespace Sdcb.SimdPaddleOCR.OnnxSharp;
@@ -86,20 +87,16 @@ internal sealed class OcrHead
     private OcrHead(string activationName, float[] weights, float[]? bias, int inner, int columns)
     {
         ActivationName = activationName;
-        Weights = weights;
-        Bias = bias;
-        Inner = inner;
-        Columns = columns;
-        Packed = PackForArgMax(weights, inner, columns);
+        Projection = new CtcProjection(weights, bias, inner, columns);
     }
 
     internal string ActivationName { get; }
-    internal float[] Weights { get; }
-    internal float[]? Bias { get; }
-    /// <summary>[columns/16][inner][16] tiles for the wide REC projection (null when not worth it).</summary>
-    internal float[]? Packed { get; }
-    internal int Inner { get; }
-    internal int Columns { get; }
+    /// <summary>The projection fused with the per-row argmax (packed once, shared by every session).</summary>
+    internal CtcProjection Projection { get; }
+    internal float[] Weights => Projection.Weights;
+    internal float[]? Bias => Projection.Bias;
+    internal int Inner => Projection.Inner;
+    internal int Columns => Projection.Columns;
 
     internal static OcrHead? TryCreate(ExecPlan plan, ExecNode softmax)
     {
@@ -132,16 +129,5 @@ internal sealed class OcrHead
             w = t;
         }
         return new OcrHead(a.Name, w, bias, inner, columns);
-    }
-
-    private static float[]? PackForArgMax(float[] w, int inner, int columns)
-    {
-        if (inner < 64 || columns < 1024) return null;
-        int tiles = columns / 16;
-        float[] packed = new float[checked(tiles * inner * 16)];
-        for (int tile = 0; tile < tiles; tile++)
-            for (int k = 0; k < inner; k++)
-                Array.Copy(w, k * columns + tile * 16, packed, (tile * inner + k) * 16, 16);
-        return packed;
     }
 }

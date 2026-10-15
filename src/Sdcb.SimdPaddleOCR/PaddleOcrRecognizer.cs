@@ -1,3 +1,4 @@
+using Sdcb.SimdOnnx.Decoding;
 using System.Text;
 using System.Buffers;
 using System.Diagnostics;
@@ -445,13 +446,9 @@ public sealed class PaddleOcrRecognizer : IDisposable
                     for (int u = first; u < first + count; u++)
                         if (offsets[u] != rowStart[u] * head.Inner)
                             throw new InvalidOperationException("REC activations are not contiguous.");
-                    ReadOnlySpan<float> weights = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Weights);
-                    ReadOnlySpan<float> bias = head.Bias is null ? []
-                        : System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Bias);
-                    if (!MatMul.TryArgMaxUnits(acts.AsSpan(r0 * head.Inner, (r1 - r0) * head.Inner), weights, bias,
-                            indices.AsSpan(r0, r1 - r0), scores.AsSpan(r0, r1 - r0),
+                    if (!head.Projection.ArgMaxUnits(acts.AsSpan(r0 * head.Inner, (r1 - r0) * head.Inner),
                             batches.AsSpan(first, count), rows.AsSpan(first, count),
-                            head.Inner, head.Columns, head.Packed, intraOpThreads))
+                            indices.AsSpan(r0, r1 - r0), scores.AsSpan(r0, r1 - r0), intraOpThreads))
                         return false;
                     for (int u = first; u < first + count; u++)
                     {
@@ -509,10 +506,9 @@ public sealed class PaddleOcrRecognizer : IDisposable
             int[] indices = PooledArrays.Rent<int>(rowCount);
             float[] scores = PooledArrays.Rent<float>(rowCount);
             long matMulStarted = session.IsProfilingEnabled ? Stopwatch.GetTimestamp() : 0;
-            if (MatMul.TryArgMax(ops.Activations, ops.Weights, ops.Bias,
-                indices.AsSpan(0, rowCount), scores.AsSpan(0, rowCount),
-                ops.Batch, ops.Rows, ops.Inner, ops.Columns, ops.PackedWeights,
-                session.IntraOpThreads))
+            if (ops.Projection.IsFused && ops.Activations.Length == rowCount * ops.Inner
+                && ops.Projection.ArgMax(ops.Activations, ops.Batch, ops.Rows,
+                indices.AsSpan(0, rowCount), scores.AsSpan(0, rowCount), session.IntraOpThreads))
             {
                 if (matMulStarted != 0)
                     session.NoteProfile("MatMul", matMulStarted);
@@ -582,7 +578,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
                     best = compactIndices[step];
                     bestValue = compactScores[step];
                 }
-                else best = ArgMax.Find(rowValues, out bestValue);
+                else best = CtcGreedyDecoder.ArgMax(rowValues, out bestValue);
                 if (best != 0 && (step == 0 || best != previous))
                 {
                     if (best == labels.Length + 1)
@@ -600,7 +596,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
                     float probability = compact
                         ? bestValue
                         : denseIsLogits
-                        ? SimdKernels.SoftmaxMaximumProbability(rowValues, bestValue)
+                        ? CtcGreedyDecoder.MaxProbability(rowValues, bestValue)
                         : bestValue;
                     scoreSum += probability;
                     if (runs is not null)
