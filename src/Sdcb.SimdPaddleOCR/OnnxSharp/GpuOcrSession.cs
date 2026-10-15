@@ -204,7 +204,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             for (int u = 0; u < _units.Length; u++)
             {
                 Reshape(_units[u]);
-                int[] o = Exec(Kind.Ctc).OutputShape;
+                // Vulkan: the compiled graph knows the shape (no per-shape session needed)
+                int[] o = _metal ? Exec(Kind.Ctc).OutputShape : CtcGraph(_units[u]).Plan.Values[CtcGraph(_units[u]).Plan.OutputValue].Shape;
                 if (o[^1] != h.Inner) return false;
                 rows[u] = o[^2];
             }
@@ -217,9 +218,16 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         return true;
     }
 
+    private VkGraphModel CtcGraph(int[] shape) =>
+        VkBackend.Default.GraphFor(_compiled.Model.Onnx, shape, OptionsFor(Kind.Ctc, shape));
+
+    // every unit of an image in one re-recorded, level-interleaved submission (in waves)
+    private VkUnitRunner? _runner;
+
     public bool TryRunManyUntilCtcProjection(CtcUnitsReady onReady)
     {
         if (_cpu is not null || _ctcHead is null) return false;
+        if (!_metal) return RunManyVulkan(onReady);
         int n = _units.Length, inner = _ctcHead.Inner;
         if (n == 0) return true;
         int[] offsets = new int[n];
@@ -308,6 +316,116 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         bool ok = consumer.GetAwaiter().GetResult();
         return deviceOk && ok;
     }
+
+    private bool RunManyVulkan(CtcUnitsReady onReady)
+    {
+        int n = _units.Length, inner = _ctcHead!.Inner;
+        if (n == 0) return true;
+        int[] offsets = new int[n];
+        long[] inOff = new long[n + 1];
+        float[] acts;
+        VkUnitRunner runner;
+        try
+        {
+            if (_warm is { } warm)
+            {
+                _warm = null;
+                try { warm.Wait(); } catch { /* the compile below reports it */ }
+            }
+            VkBackend be = VkBackend.Default;
+            if (_runner is null || !ReferenceEquals(_runnerDev, be.Dev))
+            {
+                _runner?.Dispose();
+                _runner = new VkUnitRunner(be.Dev);
+                _runnerDev = be.Dev;
+            }
+            runner = _runner;
+            runner.Clear();
+            // growing waves: the CPU head starts on the first units while the device runs the rest
+            int cut1 = n >= 6 ? (n + 3) / 4 : n, cut2 = n >= 6 ? (n + 1) / 2 : n;
+            int total = 0;
+            for (int u = 0; u < n; u++)
+            {
+                long v = 1;
+                foreach (int d in _units[u]) v *= d;
+                inOff[u + 1] = inOff[u] + v;
+                VkGraphModel g = be.AcquireGraph(_compiled.Model.Onnx, _units[u], OptionsFor(Kind.Ctc, _units[u]));
+                try { runner.Add(g); }
+                finally { g.Release(); }
+                long o = 1;
+                foreach (int d in runner.OutputShape(u)) o *= d;
+                if (o % inner != 0) return false;
+                offsets[u] = total;
+                total = checked(total + (int)o);
+                if (u + 1 == cut1 || u + 1 == cut2) runner.Cut();
+            }
+            for (int u = 0; u < n; u++)
+                _unitInput.AsSpan((int)inOff[u], (int)(inOff[u + 1] - inOff[u])).CopyTo(runner.Input(u));
+            // reused across calls: the caller consumes the activations before this session runs again
+            if (_unitActs.Length < total) _unitActs = new float[total];
+            acts = _unitActs;
+            runner.Submit();
+        }
+        catch (Exception ex)
+        {
+            Fallback(ex);
+            return false;
+        }
+
+        int done = 0;
+        bool stop = false;
+        object gate = new();
+        Task<bool> consumer = Task.Run(() =>
+        {
+            int next = 0;
+            while (next < n)
+            {
+                int ready;
+                lock (gate)
+                {
+                    while ((ready = done) == next && !stop) Monitor.Wait(gate);
+                }
+                if (ready == next) return false;
+                if (!onReady(acts, offsets, next, ready - next)) return false;
+                next = ready;
+            }
+            return true;
+        });
+        bool deviceOk = true;
+        try
+        {
+            int u = 0;
+            for (int w = 0; w < runner.Waves && !consumer.IsCompleted; w++)
+            {
+                runner.Wait(w);
+                for (; u < n && runner.WaveOf(u) == w; u++) runner.Output(u).CopyTo(acts.AsSpan(offsets[u]));
+                lock (gate)
+                {
+                    done = u;
+                    Monitor.Pulse(gate);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Fallback(ex);
+            deviceOk = false;
+        }
+        finally
+        {
+            lock (gate)
+            {
+                stop = true;
+                Monitor.Pulse(gate);
+            }
+        }
+        bool ok = consumer.GetAwaiter().GetResult();
+        if (!consumer.IsCompletedSuccessfully || !ok)
+            try { runner.WaitAll(); } catch { /* reported above */ }
+        return deviceOk && ok;
+    }
+
+    private VkDevice? _runnerDev;
 
     public void NoteProfile(string operation, long started) =>
         EngineProfile.AddOp(operation, System.Diagnostics.Stopwatch.GetTimestamp() - started);
@@ -405,6 +523,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             foreach (var (_, e) in _execs)
                 try { e.Dispose(); } catch { /* device may be lost */ }
             _execs.Clear();
+            try { _runner?.Dispose(); } catch { /* lost device */ }
+            _runner = null;
             if (ex is VkDeviceLostException && ++_deviceLosses <= MaxDeviceLosses)
             {
                 try { _vkBuffers?.Dispose(); } catch { /* lost device */ }
@@ -427,6 +547,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             try { e.Dispose(); } catch { /* device may be lost */ }
         _execs.Clear();
         try { _vkBuffers?.Dispose(); } catch { /* device may be lost */ }
+        try { _runner?.Dispose(); } catch { /* device may be lost */ }
         _cpu?.Dispose();
         _lostCpu?.Dispose();
     }
