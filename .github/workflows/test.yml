@@ -15,16 +15,22 @@ on:
       - .github/workflows/test.yml
   workflow_dispatch:
 
+env:
+  # until Sdcb.SimdOnnx ships on nuget.org the engine builds from source (sdcb/SimdOnnx main),
+  # next to this checkout; MSBuild reads both as properties
+  UseLocalSimdOnnx: 'true'
+  SimdOnnxProject: ${{ github.workspace }}/_simdonnx/src/Sdcb.SimdOnnx/Sdcb.SimdOnnx.csproj
+
 jobs:
   unittest:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Unit tests (net10 library)
-        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo
       - uses: actions/checkout@v7
         with: { repository: sdcb/SimdOnnx, path: _simdonnx }
+      - name: Unit tests (net10 library)
+        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo
       - name: Unit tests (ns2.0 library)
         # ns2.0 mode needs the engine's netstandard2.0 build as a project (see the UnitTests csproj)
         run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true -p:UseLocalSimdOnnx=true "-p:SimdOnnxProject=${{ github.workspace }}/_simdonnx/src/Sdcb.SimdOnnx/Sdcb.SimdOnnx.csproj"
@@ -34,6 +40,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/cache@v6
         id: dataset
         with:
@@ -65,6 +73,8 @@ jobs:
           - { name: osx-arm64,   os: macos-26,         rid: osx-arm64 }
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run platform smoke
@@ -123,6 +133,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run tiny/small/medium smoke
@@ -154,6 +166,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run Windows x64 ISA smoke
@@ -207,6 +221,8 @@ jobs:
       matrix: { replica: [1, 2, 3, 4, 5, 6] }
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run Windows x64 benchmark suite
@@ -291,6 +307,8 @@ jobs:
       matrix: { replica: [1, 2, 3, 4, 5, 6] }
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run Windows x64 engine comparison
@@ -347,6 +365,8 @@ jobs:
       matrix: { replica: [1, 2, 3, 4, 5, 6] }
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run ARM64 benchmark suite
@@ -435,6 +455,8 @@ jobs:
       matrix: { replica: [1, 2, 3] }
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         with: { name: ocr-dataset, path: dataset }
       - name: Run macOS ARM64 worker benchmark
@@ -519,6 +541,8 @@ jobs:
     permissions: { actions: write, contents: read }
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with: { repository: sdcb/SimdOnnx, path: _simdonnx }
       - uses: actions/download-artifact@v8
         continue-on-error: true
         with:
