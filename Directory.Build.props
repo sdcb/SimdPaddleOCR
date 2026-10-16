@@ -18,8 +18,11 @@
     against a sibling checkout instead (../Sdcb.SimdOnnx).
   -->
   <PropertyGroup>
-    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.3</SdcbSimdOnnxVersion>
+    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.4</SdcbSimdOnnxVersion>
     <SimdOnnxProject Condition="'$(SimdOnnxProject)' == ''">$(MSBuildThisFileDirectory)..\Sdcb.SimdOnnx\src\Sdcb.SimdOnnx\Sdcb.SimdOnnx.csproj</SimdOnnxProject>
+    <!-- a stable package pinned to an engine preview (NU5104): accepted while the engine is a preview on
+         the ProGet test feed; a nuget.org release of this package needs the engine released first -->
+    <NoWarn Condition="$(SdcbSimdOnnxVersion.Contains('-'))">$(NoWarn);NU5104</NoWarn>
   </PropertyGroup>
 
   <PropertyGroup>
