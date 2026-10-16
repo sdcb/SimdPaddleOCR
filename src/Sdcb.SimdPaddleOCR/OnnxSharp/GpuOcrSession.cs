@@ -63,7 +63,6 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
 
     private readonly CompiledModel _compiled;
     private readonly bool _metal;
-    private readonly ResizeWorkspace _resizeWorkspace = new();
     private readonly List<(string key, IExec exec)> _execs = [];
     private float[] _input = [];
     private int[] _shape = [];
@@ -92,7 +91,6 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     }
 
     public Span<float> InputData => _cpu is not null ? _cpu.InputData : _input.AsSpan(0, _volume);
-    public ResizeWorkspace ResizeWorkspace => _resizeWorkspace;
     public bool InputIsNhwc => _compiled.InputIsNhwc;
     public int IntraOpThreads
     {

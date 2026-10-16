@@ -13,7 +13,6 @@ internal sealed unsafe class CpuOcrSession : IOcrSession
     private enum Kind { Full, Ctc, Logits }
 
     private readonly CompiledModel _compiled;
-    private readonly ResizeWorkspace _resizeWorkspace = new();
     private readonly InferenceSession?[] _sessions = new InferenceSession?[3];
     private int[] _shape = [];
     private int _volume, _highWater, _threads;
@@ -45,7 +44,6 @@ internal sealed unsafe class CpuOcrSession : IOcrSession
     }
 
     public Span<float> InputData => _arena == 0 ? [] : new Span<float>((float*)_arena, _volume);
-    public ResizeWorkspace ResizeWorkspace => _resizeWorkspace;
     public bool InputIsNhwc => _compiled.InputIsNhwc;
     public int IntraOpThreads { get => _threads; set => _threads = MathCompat.Clamp(value, 1, 16); }
     public int HighWaterInputVolume => _highWater;

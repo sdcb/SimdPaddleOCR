@@ -73,7 +73,7 @@ public sealed class PaddleOcrClassifier : IDisposable
             Span<float> input = session.InputData;
             long started = profile ? PipelineProfiler.Now() : 0;
             int resizedWidth = PPOCRPreprocess.Cls(source, sourceWidth, sourceHeight, sourceStride,
-                input, session.ResizeWorkspace, session.InputIsNhwc, format);
+                input, session.InputIsNhwc, format);
             if (profile) PipelineProfiler.Add(PipelineProfiler.ClsPreprocess, started);
             started = profile ? PipelineProfiler.Now() : 0;
             if (session.TryRunUntilCtcProjection(input, out CtcProjectionOperands ops))
@@ -133,11 +133,11 @@ public sealed class PaddleOcrClassifier : IDisposable
                 {
                     nint inputAddress = (nint)inputPtr;
                     bool nhwc = session.InputIsNhwc;
-                    PPOCRPreprocess.ForLines(count, preprocessWorkers, session.ResizeWorkspace, (k, workspace) =>
+                    PPOCRPreprocess.ForLines(count, preprocessWorkers, k =>
                         PPOCRPreprocess.Cls(cropBuffer.AsSpan(offsets[k], bytes[k]), widths[k], heights[k],
                             ImagePixels.ResolveStride(widths[k], 0, ImagePixelFormat.Bgr24),
                             new Span<float>((float*)inputAddress + (long)k * sampleFloats, sampleFloats),
-                            workspace, nhwc, ImagePixelFormat.Bgr24));
+                            nhwc, ImagePixelFormat.Bgr24));
                 }
             }
             input[(count * sampleFloats)..].Clear();   // pad rows → zero logits → [0.5,0.5], discarded

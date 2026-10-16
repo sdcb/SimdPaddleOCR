@@ -141,7 +141,7 @@ public sealed class PaddleOcrDetector : IDisposable
                 long started = s_profileEnabled ? Stopwatch.GetTimestamp() : 0;
                 long pipelineStarted = pipelineProfile ? PipelineProfiler.Now() : 0;
                 PPOCRPreprocess.Det(source, sourceWidth, sourceHeight, sourceStride,
-                    size.Width, size.Height, inputSpan, session.ResizeWorkspace, _intraOpThreads,
+                    size.Width, size.Height, inputSpan, _intraOpThreads,
                     session.InputIsNhwc, format);
                 if (s_profileEnabled) AddProfile(0, started);
                 if (pipelineProfile) PipelineProfiler.Add(PipelineProfiler.DetPreprocess, pipelineStarted);

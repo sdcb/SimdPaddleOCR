@@ -182,7 +182,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
             // exclusively held for the duration of the call.
             long started = profile ? PipelineProfiler.Now() : 0;
             int resizedWidth = PPOCRPreprocess.Rec(source, sourceWidth, sourceHeight, sourceStride,
-                targetWidth, inputSpan, session.ResizeWorkspace, session.InputIsNhwc, format);
+                targetWidth, inputSpan, session.InputIsNhwc, format);
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecPreprocess, started);
             started = profile ? PipelineProfiler.Now() : 0;
             CtcDecodeInput decoded = RunCtcGraph(session, inputSpan);
@@ -306,8 +306,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
                 resizedWidths[k] = PPOCRPreprocess.Rec(
                     cropBuffer.AsSpan(offsets[line], cropBytes[line]), sourceWidth, sourceHeight,
                     checked(sourceWidth * 3), targetWidth,
-                    input.Slice(k * sampleLength, sampleLength), session.ResizeWorkspace,
-                    session.InputIsNhwc);
+                    input.Slice(k * sampleLength, sampleLength), session.InputIsNhwc);
             }
             if (profile) PipelineProfiler.Add(PipelineProfiler.RecPreprocess, started);
             started = profile ? PipelineProfiler.Now() : 0;
@@ -408,13 +407,13 @@ public sealed class PaddleOcrRecognizer : IDisposable
                 {
                     nint inputAddress = (nint)inputPtr;
                     bool nhwc = session.InputIsNhwc;
-                    PPOCRPreprocess.ForLines(total, preprocessWorkers, session.ResizeWorkspace, (j, workspace) =>
+                    PPOCRPreprocess.ForLines(total, preprocessWorkers, j =>
                     {
                         int line = lineOf[j], sw = widths[line], sh = heights[line], w = widthOf[j];
                         var dst = new Span<float>((float*)inputAddress + posOf[j], 3 * 48 * w);
                         resized[j] = PPOCRPreprocess.Rec(
                             cropBuffer.AsSpan(offsets[line], cropBytes[line]), sw, sh,
-                            checked(sw * 3), w, dst, workspace, nhwc);
+                            checked(sw * 3), w, dst, nhwc);
                     });
                 }
             }

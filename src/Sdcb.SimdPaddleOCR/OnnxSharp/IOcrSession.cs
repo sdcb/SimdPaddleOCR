@@ -10,7 +10,6 @@ internal interface IOcrSession : IDisposable
     TensorShape OutputShape { get; }
     /// <summary>Caller-visible input buffer; preprocess writes into it.</summary>
     Span<float> InputData { get; }
-    ResizeWorkspace ResizeWorkspace { get; }
     bool InputIsNhwc { get; }
     int IntraOpThreads { get; set; }
     /// <summary>Largest input volume this session has ever been reshaped to.</summary>
