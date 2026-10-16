@@ -464,6 +464,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
 
     private CompileOptions OptionsFor(Kind kind, int[] shape) => CompiledModel.Options with
     {
+        // vec4 maxpool / depthwise on every device, as the pre-engine OCR backend ran them
+        Vec4Eltwise = true,
         OutputName = kind switch
         {
             Kind.Ctc => _compiled.ResolveHead(shape)?.ActivationName,
