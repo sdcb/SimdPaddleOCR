@@ -18,7 +18,7 @@
     against a sibling checkout instead (../Sdcb.SimdOnnx).
   -->
   <PropertyGroup>
-    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.4</SdcbSimdOnnxVersion>
+    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.5</SdcbSimdOnnxVersion>
     <SimdOnnxProject Condition="'$(SimdOnnxProject)' == ''">$(MSBuildThisFileDirectory)..\Sdcb.SimdOnnx\src\Sdcb.SimdOnnx\Sdcb.SimdOnnx.csproj</SimdOnnxProject>
     <!-- a stable package pinned to an engine preview (NU5104): accepted while the engine is a preview on
          the ProGet test feed; a nuget.org release of this package needs the engine released first -->
