@@ -1,4 +1,5 @@
 using System.Numerics;
+using Sdcb.SimdOnnx.Decoding.Kernels;
 using System.Runtime.CompilerServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
