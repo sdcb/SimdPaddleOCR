@@ -26,11 +26,18 @@
     <!-- SetTargetFramework does not flow ns2.0 PackageReferences into the net10 host deps.json. -->
     <PackageReference Include="Microsoft.Bcl.Numerics" Version="10.0.11" />
   </ItemGroup>
-  <!-- ns2.0 mode needs the engine's ns2.0 build too (its polyfill types back the library's init members);
-       only supported against the local engine checkout. -->
+  <!-- ns2.0 mode needs the engine's ns2.0 build too (its polyfill types back the library's init members). -->
   <ItemGroup Condition="'$(UseNs20Library)' == 'true' and '$(UseLocalSimdOnnx)' == 'true'">
     <ProjectReference Include="$(SimdOnnxProject)" Aliases="simdonnx_ns20">
       <SetTargetFramework>TargetFramework=netstandard2.0</SetTargetFramework>
     </ProjectReference>
+  </ItemGroup>
+  <!-- package mode: NuGet would hand this net10 host the package's net10 assembly; take its
+       netstandard2.0 one instead, the build the ns2.0 library compiled against -->
+  <ItemGroup Condition="'$(UseNs20Library)' == 'true' and '$(UseLocalSimdOnnx)' != 'true'">
+    <PackageReference Include="Sdcb.SimdOnnx" Version="[$(SdcbSimdOnnxVersion)]" GeneratePathProperty="true" ExcludeAssets="compile;runtime" />
+    <Reference Include="Sdcb.SimdOnnx" Aliases="simdonnx_ns20">
+      <HintPath>$(PkgSdcb_SimdOnnx)\lib\netstandard2.0\Sdcb.SimdOnnx.dll</HintPath>
+    </Reference>
   </ItemGroup>
 </Project>
