@@ -326,6 +326,6 @@ WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` �
 
 ## 微信群
 
-![](https://io.starworks.cc:88/cv-public/2026/ocr-wxg-qr.png?1012)
+![](https://io.starworks.cc:88/cv-public/2026/ocr-wxg-qr.png?1027)
 
 如果微信群二维码过期了，请加入 QQ 群 [C#/.NET计算机视觉技术交流 579060605](https://qm.qq.com/q/bPw5jAK4qk)。

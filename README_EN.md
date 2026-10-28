@@ -314,6 +314,6 @@ runs unit tests and benches tiny / small / medium on Windows / Linux / macOS acr
 
 ## WeChat group
 
-![](https://io.starworks.cc:88/cv-public/2026/ocr-wxg-qr.png?1012)
+![](https://io.starworks.cc:88/cv-public/2026/ocr-wxg-qr.png?1027)
 
 If the WeChat QR code has expired, join the QQ group [C#/.NET Computer Vision 579060605](https://qm.qq.com/q/bPw5jAK4qk).
