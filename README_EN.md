@@ -3,7 +3,7 @@
 [中文](README.md) | **English**
 
 Pure C# PP-OCRv6 inference library: cross-platform hand-written kernels and GEMM, very high performance, low memory requirements, and very high accuracy.
-It ships a managed ONNX interpreter and does not depend on Paddle Inference, ONNX Runtime, or OpenCV native libraries.
+Inference runs on [Sdcb.SimdOnnx](https://github.com/sdcb/SimdOnnx), a pure C# engine shared with SimdGcdrNet; there is no dependency on Paddle Inference, ONNX Runtime, or OpenCV native libraries.
 GPU support: Vulkan and Metal (macOS), .NET 10 only — still pure C#, with no bundled native binaries.
 
 The core API accepts interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 are also first-class). It does not decode images, so ImageSharp, SkiaSharp, or OpenCvSharp are not required.
@@ -314,6 +314,6 @@ runs unit tests and benches tiny / small / medium on Windows / Linux / macOS acr
 
 ## WeChat group
 
-![](https://io.starworks.cc:88/cv-public/2026/ocr-wxg-qr.png?1012)
+![](https://io.starworks.cc:88/cv-public/2026/ocr-wxg-qr.png?1027)
 
 If the WeChat QR code has expired, join the QQ group [C#/.NET Computer Vision 579060605](https://qm.qq.com/q/bPw5jAK4qk).

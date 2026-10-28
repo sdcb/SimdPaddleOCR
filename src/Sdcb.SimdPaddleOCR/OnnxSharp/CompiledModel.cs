@@ -1,909 +1,133 @@
-using System.Buffers.Binary;
+using Sdcb.SimdOnnx.Decoding;
+using Sdcb.SimdOnnx.Engine;
 
 namespace Sdcb.SimdPaddleOCR.OnnxSharp;
 
 /// <summary>
-/// Compiled form of a <see cref="Model"/>, independent of any concrete input
-/// shape. Holds only immutable, shareable state: tensor shape templates
-/// (dynamic dimensions stay -1), constant tensor data, packed weights, the
-/// buffer-reuse plan, and per-tensor last-use info. Thread-safe after
-/// construction; share one instance across any number of
-/// <see cref="InferenceSession"/> requests and input shapes.
+/// A <see cref="Model"/> prepared for one OCR stage: per-shape CPU plans (compiled on demand, shared
+/// packed weights) plus, when the graph ends in a constant projection + last-axis Softmax, a
+/// head-truncated variant whose output is the projection's input (the recognizer and classifier
+/// run the head themselves: fused MatMul+ArgMax / a tiny softmax). Thread-safe; share freely.
 /// </summary>
-public sealed class CompiledModel
+internal sealed class CompiledModel : IDisposable
 {
-    private readonly Model _model;
-    private readonly TensorMeta[] _tensors;
-    private readonly int[] _lastUse;
-    private readonly int _inputIndex, _outputIndex;
-    private readonly int _intraOpThreads;
-    private readonly byte[] _fusedSkip;
-    private readonly int[] _inplaceSource;
-    private readonly int[] _phantomSink;
-    private readonly int[]? _defaultInputShape;
-    private readonly bool[] _nodeNhwc;
-    private bool _disposed;
+    internal static readonly CompileOptions Options = CompileOptions.DefaultNhwc
+        ? new CompileOptions(Nhwc: true, PhysicalIo: true, LogicalOutput: true)
+        : new CompileOptions(Nhwc: false);
+
+    private readonly object _gate = new();
+    private bool _headResolved;
+    private OcrHead? _head;
+    private CpuModel? _ctc, _logits;
 
     internal CompiledModel(Model model, int intraOpThreads)
     {
-        _model = model ?? throw new ArgumentNullException(nameof(model));
-        _intraOpThreads = MathCompat.Clamp(intraOpThreads, 1, 16);
-        if (model.GraphInputs.Count != 1 || model.GraphOutputs.Count != 1)
-            throw new NotSupportedException("Only one-input/one-output graphs are supported.");
-        ValidateSupportedGraph(model);
-        _inputIndex = checked((int)model.GraphInputs[0]);
-        _outputIndex = checked((int)model.GraphOutputs[0]);
-        _tensors = new TensorMeta[model.Tensors.Length];
-        _lastUse = new int[_tensors.Length];
-        _fusedSkip = new byte[model.Nodes.Length];
-        _inplaceSource = new int[_tensors.Length];
-        _phantomSink = new int[_tensors.Length];
-        ArrayCompat.Fill(_lastUse, -1);
-        ArrayCompat.Fill(_inplaceSource, -1);
-        ArrayCompat.Fill(_phantomSink, -1);
-        for (int ni = 0; ni < model.Nodes.Length; ni++)
-            foreach (uint input in model.Nodes[ni].Inputs)
-                _lastUse[checked((int)input)] = ni;
-        foreach (uint output in model.GraphOutputs)
-            _lastUse[checked((int)output)] = model.Nodes.Length;
-        for (int i = 0; i < _tensors.Length; i++)
-        {
-            TensorRecord t = model.Tensors[i];
-            int[] dims = t.Dimensions.Take(checked((int)t.Rank)).ToArray();
-            _tensors[i] = new TensorMeta((DType)t.DType, dims,
-                (t.Flags & Model.TensorConstant) != 0 ? model.GetTensorArray(i) : [],
-                (t.Flags & Model.TensorNhwc) != 0);
-        }
-        _nodeNhwc = new bool[model.Nodes.Length];
-        for (int ni = 0; ni < model.Nodes.Length; ni++)
-        {
-            NodeRecord node = model.Nodes[ni];
-            if (node.Operator == OperatorId.LayoutConvert) continue;
-            bool nhwc = false;
-            foreach (uint t in node.Inputs) nhwc |= t != uint.MaxValue && _tensors[t].IsNhwc;
-            foreach (uint t in node.Outputs) nhwc |= t != uint.MaxValue && _tensors[t].IsNhwc;
-            _nodeNhwc[ni] = nhwc;
-        }
-        // SIMD_OCR_NOFUSE=1 disables all fused-skip planning: the runtime then
-        // executes every node unfused — a debugging golden path.
-        if (Environment.GetEnvironmentVariable("SIMD_OCR_NOFUSE") != "1")
-            ExtendLastUseForFusedKernels();
+        Model = model ?? throw new ArgumentNullException(nameof(model));
+        IntraOpThreads = MathCompat.Clamp(intraOpThreads, 1, 16);
+        Full = new CpuModel(model.Onnx, Options);
     }
 
-    /// <summary>Creates a compiled model whose requests default to <paramref name="inputShape"/>.</summary>
+    /// <summary>Compiles <paramref name="inputShape"/> up front (sessions start bound to it).</summary>
     internal CompiledModel(Model model, ReadOnlySpan<int> inputShape, int intraOpThreads)
         : this(model, intraOpThreads)
     {
-        ValidateInputShape(inputShape);
-        _defaultInputShape = inputShape.ToArray();
+        DefaultInputShape = inputShape.ToArray();
+        ResolveHead(inputShape);
     }
 
-    private void ValidateInputShape(ReadOnlySpan<int> inputShape)
+    internal Model Model { get; }
+    internal int IntraOpThreads { get; }
+    internal int[]? DefaultInputShape { get; }
+    internal CpuModel Full { get; }
+    /// <summary>Graph input is written channels-last ([n,h,w,c]) by the preprocessors.</summary>
+    internal bool InputIsNhwc => Options.Nhwc && Options.PhysicalIo;
+
+    /// <summary>Plans ending at the projection input (null when the graph has no such head).</summary>
+    internal CpuModel? Ctc { get { lock (_gate) return _ctc; } }
+    /// <summary>Plans ending at the final Softmax's input (null when the graph does not end in one).</summary>
+    internal CpuModel? Logits { get { lock (_gate) return _logits; } }
+
+    /// <summary>The projection head; resolved once from a plan of <paramref name="probeShape"/>.</summary>
+    internal OcrHead? ResolveHead(ReadOnlySpan<int> probeShape)
     {
-        foreach (TensorRecord t in _model.Tensors)
+        lock (_gate)
         {
-            if ((t.Flags & Model.TensorInput) == 0) continue;
-            int rank = checked((int)t.Rank);
-            if (inputShape.Length != rank)
-                throw new ArgumentException("Input rank does not match model.", nameof(inputShape));
-            for (int d = 0; d < rank; d++)
+            if (_headResolved) return _head;
+            ExecPlan plan = GraphCompiler.Compile(Model.Onnx, probeShape, Options);
+            ExecNode? softmax = Producer(plan, plan.OutputValue);
+            if (softmax is { Op: ExecOp.Softmax })
             {
-                int dim = t.Dimensions[d];
-                if (dim != -1 && dim != inputShape[d])
-                    throw new ArgumentException("Input shape does not match model.", nameof(inputShape));
+                string logitsName = plan.Values[softmax.In[0]].Name;
+                if (logitsName.Length != 0)
+                    _logits = new CpuModel(Model.Onnx, Options with { OutputName = logitsName }, packs: Full.Packs);
+                _head = OcrHead.TryCreate(plan, softmax);
+                if (_head is not null)
+                    _ctc = new CpuModel(Model.Onnx, Options with { OutputName = _head.ActivationName }, packs: Full.Packs);
             }
+            _headResolved = true;
+            return _head;
         }
     }
 
-    public Model Model => _model;
-    internal int[]? DefaultInputShape => _defaultInputShape;
-    public int Packed1x1Count
+    internal static ExecNode? Producer(ExecPlan plan, int value)
     {
-        get
+        // zero-copy views (reshape/squeeze/fused tails) have no producer node of their own
+        for (int hops = 0; value >= 0 && hops < 64; hops++, value = plan.Values[value].AliasOf)
+            foreach (ExecNode n in plan.Nodes)
+                if (n.Out.Length == 1 && n.Out[0] == value) return n;
+        return null;
+    }
+
+    public void Dispose() { }
+}
+
+/// <summary>Constant projection + bias in front of the final Softmax: logits = A·W + b, W [inner, columns].</summary>
+internal sealed class OcrHead
+{
+    private OcrHead(string activationName, float[] weights, float[]? bias, int inner, int columns)
+    {
+        ActivationName = activationName;
+        Projection = new CtcProjection(weights, bias, inner, columns);
+    }
+
+    internal string ActivationName { get; }
+    /// <summary>The projection fused with the per-row argmax (packed once, shared by every session).</summary>
+    internal CtcProjection Projection { get; }
+    internal float[] Weights => Projection.Weights;
+    internal float[]? Bias => Projection.Bias;
+    internal int Inner => Projection.Inner;
+    internal int Columns => Projection.Columns;
+
+    internal static OcrHead? TryCreate(ExecPlan plan, ExecNode softmax)
+    {
+        ExecNode? p = CompiledModel.Producer(plan, softmax.In[0]);
+        float[]? bias = null;
+        if (p is { Op: ExecOp.Elementwise, P: EwP { Op: EwOp.Add, Act: ActivationKind.None } } && p.In.Length == 2)
         {
-            int count = 0;
-            foreach (NodeRecord node in _model.Nodes)
-                if (node.Operator == OperatorId.Conv && node.Inputs.Length >= 2 &&
-                    _model.GetPackedWeights(node, Model.PackConv1x1) != null)
-                    count++;
-            return count;
+            int c = plan.Values[p.In[0]].Floats is not null ? 0 : plan.Values[p.In[1]].Floats is not null ? 1 : -1;
+            if (c < 0) return null;
+            bias = plan.Values[p.In[c]].Floats;
+            p = CompiledModel.Producer(plan, p.In[1 - c]);
+            if (p is { P: GemmP { BiasValue: >= 0 } }) return null;
         }
-    }
-    internal int InputIndex => _inputIndex;
-    internal bool InputIsNhwc => _tensors[_inputIndex].IsNhwc;
-    internal int OutputIndex => _outputIndex;
-    internal int IntraOpThreads => _intraOpThreads;
-    internal int TensorCount => _tensors.Length;
-    internal int NodeCount => _model.Nodes.Length;
-
-    internal TensorMeta GetTensor(int index) => _tensors[index];
-    internal NodeRecord GetNode(int index) => _model.Nodes[index];
-    /// <summary>Node index of the last consumer, or -1 when unconsumed; graph outputs carry the node count.</summary>
-    internal int LastUse(int tensorIndex) => _lastUse[tensorIndex];
-
-    internal bool HasConsumerAfter(uint tensorIndex, int nodeIndex)
-        => _lastUse[checked((int)tensorIndex)] > nodeIndex;
-    internal bool IsGraphOutput(int tensorIndex) => _model.GraphOutputs.Contains((uint)tensorIndex);
-    internal int FusedSkip(int nodeIndex) => _fusedSkip[nodeIndex];
-    /// <summary>True when the node's activations are stored channels-last.</summary>
-    internal bool IsNhwcNode(int nodeIndex) => _nodeNhwc[nodeIndex];
-    internal bool IsNhwcTensor(uint tensorIndex) => _tensors[checked((int)tensorIndex)].IsNhwc;
-    internal int ElementwiseInPlaceSource(int outputTensor) => _inplaceSource[outputTensor];
-    /// <summary>
-    /// Sink tensor whose storage a fusion-internal intermediate aliases, or -1.
-    /// Phantoms are never materialized (the fused kernel writes the sink
-    /// directly), so the workspace planner gives them no slot of their own.
-    /// </summary>
-    internal int PhantomSink(int tensorIndex) => _phantomSink[tensorIndex];
-
-    // Same patterns InferenceSession fuses at runtime, decided once. Conv
-    // fusions still write a later buffer while reading the conv input, so
-    // that input's last-use is stretched. Elementwise GELU/HardSwish instead
-    // carve the source's exact slot for the sink so fusion is a true in-place
-    // write (C does this too) without first-fit's partial-overlap skip.
-    private void ExtendLastUseForFusedKernels()
-    {
-        NodeRecord[] nodes = _model.Nodes;
-        for (int i = 0; i < nodes.Length; i++)
+        if (p is not { Op: ExecOp.Gemm, P: GemmP g } || g.Act != ActivationKind.None) return null;
+        if (g.BiasValue >= 0)
         {
-            if (MatchLayerNorm(nodes, i))
-            {
-                StretchLastUse(nodes[i].Inputs[0], i + 8);
-                _fusedSkip[i] = 8;
-                MarkPhantoms(i, 8);
-                i += 8;
-                continue;
-            }
-            if (MatchGelu(nodes, i))
-            {
-                _inplaceSource[checked((int)nodes[i + 4].Outputs[0])] = checked((int)nodes[i].Inputs[0]);
-                _fusedSkip[i] = 4;
-                MarkPhantoms(i, 4);
-                i += 4;
-                continue;
-            }
-            // Conv + channel bias + GELU: the NHWC epilogue applies GELU on the
-            // biased accumulator, so the 7.9 MB activation is written once.
-            if (_nodeNhwc[i] && MatchConvBiasAdd(nodes, i) && MatchGelu(nodes, i + 2) &&
-                nodes[i + 2].Inputs[0] == nodes[i + 1].Outputs[0] &&
-                !HasConsumerAfter(nodes[i + 1].Outputs[0], i + 6))
-            {
-                StretchLastUse(nodes[i].Inputs[0], i + 6);
-                _fusedSkip[i] = 6;
-                MarkPhantoms(i, 6);
-                i += 6;
-                continue;
-            }
-            if (MatchConvRelu(nodes, i))
-            {
-                StretchLastUse(nodes[i].Inputs[0], i + 1);
-                _fusedSkip[i] = 1;
-                MarkPhantoms(i, 1);
-                i += 1;
-                continue;
-            }
-            if (MatchHardSwish(nodes, i))
-            {
-                _inplaceSource[checked((int)nodes[i + 1].Outputs[0])] = checked((int)nodes[i].Inputs[0]);
-                _fusedSkip[i] = 1;
-                MarkPhantoms(i, 1);
-                i += 1;
-                continue;
-            }
-            if (MatchConvHardSwish(nodes, i))
-            {
-                StretchLastUse(nodes[i].Inputs[0], i + 2);
-                _fusedSkip[i] = 2;
-                MarkPhantoms(i, 2);
-                i += 2;
-                continue;
-            }
-            if (MatchConvTransposeBiasActivation(nodes, i))
-            {
-                StretchLastUse(nodes[i].Inputs[0], i + 2);
-                _fusedSkip[i] = 2;
-                MarkPhantoms(i, 2);
-                i += 2;
-                continue;
-            }
-            if (MatchConvBiasResidualAdd(nodes, i))
-            {
-                StretchLastUse(nodes[i].Inputs[0], i + 2);
-                uint biasOut = nodes[i + 1].Outputs[0];
-                uint skip = nodes[i + 2].Inputs[0] == biasOut ? nodes[i + 2].Inputs[1] : nodes[i + 2].Inputs[0];
-                StretchLastUse(skip, i + 2);
-                _fusedSkip[i] = 2;
-                // NCHW may fall back to conv->biasAdd buffer then a separate
-                // residual Add (InferenceSession.TryExecuteConvBiasResidualAdd),
-                // so only the conv output is guaranteed unmaterialized there.
-                MarkPhantoms(i, _nodeNhwc[i] ? 2 : 1, sinkNode: i + 2);
-                i += 2;
-                continue;
-            }
-            if (MatchConvBiasAdd(nodes, i))
-            {
-                StretchLastUse(nodes[i].Inputs[0], i + 1);
-                _fusedSkip[i] = 1;
-                MarkPhantoms(i, 1);
-                i += 1;
-                continue;
-            }
+            if (bias is not null) return null;
+            bias = plan.Values[g.BiasValue].Floats;
+            if (bias is null) return null;
         }
-    }
-
-    // Outputs of nodes [first, first+count) are only ever written through the
-    // fused kernel's sink (node first+skip output); they alias the sink's
-    // storage instead of taking their own workspace slot.
-    private void MarkPhantoms(int first, int count, int sinkNode = -1)
-    {
-        if (sinkNode < 0) sinkNode = first + count;
-        NodeRecord[] nodes = _model.Nodes;
-        if (nodes[sinkNode].Outputs.Length == 0) return;
-        int sink = checked((int)nodes[sinkNode].Outputs[0]);
-        if (_tensors[sink].IsConstant) return;
-        for (int ni = first; ni < first + count; ni++)
+        CValue a = plan.Values[p.In[0]], b = plan.Values[p.In[1]];
+        if (b.Floats is not { } w || b.Shape.Length != 2 || a.Name.Length == 0 || a.Shape.Length < 2) return null;
+        int inner = g.TransB ? b.Shape[1] : b.Shape[0], columns = g.TransB ? b.Shape[0] : b.Shape[1];
+        if (a.Shape[^1] != inner || (bias is not null && bias.Length != columns)) return null;
+        if (g.TransB)
         {
-            foreach (uint output in nodes[ni].Outputs)
-            {
-                int index = checked((int)output);
-                if (index == sink || _tensors[index].IsConstant) continue;
-                // Never consumed outside the fused group (match conditions
-                // guarantee this; the check is defensive).
-                if (_lastUse[index] > sinkNode) continue;
-                _phantomSink[index] = sink;
-            }
+            float[] t = new float[w.Length];
+            for (int n = 0; n < columns; n++)
+                for (int k = 0; k < inner; k++) t[k * columns + n] = w[n * inner + k];
+            w = t;
         }
-    }
-
-    private bool MatchGelu(NodeRecord[] nodes, int i)
-    {
-        if (i + 4 >= nodes.Length) return false;
-        NodeRecord n0 = nodes[i], n1 = nodes[i + 1], n2 = nodes[i + 2], n3 = nodes[i + 3], n4 = nodes[i + 4];
-        if (n0.Operator != OperatorId.Div || n1.Operator != OperatorId.Erf ||
-            n2.Operator != OperatorId.Add || n3.Operator != OperatorId.Mul ||
-            n4.Operator != OperatorId.Mul || n0.Inputs.Length != 2 ||
-            n1.Inputs.Length != 1 || n2.Inputs.Length != 2 || n3.Inputs.Length != 2 ||
-            n4.Inputs.Length != 2 || n0.Outputs.Length == 0 || n1.Outputs.Length == 0 ||
-            n2.Outputs.Length == 0 || n3.Outputs.Length == 0 || n4.Outputs.Length == 0)
-            return false;
-        if (n1.Inputs[0] != n0.Outputs[0] ||
-            !Contains(n2.Inputs, n1.Outputs[0]) ||
-            !Contains(n3.Inputs, n0.Inputs[0]) ||
-            !Contains(n3.Inputs, n2.Outputs[0]) ||
-            !Contains(n4.Inputs, n3.Outputs[0]))
-            return false;
-        int n2Constant = n2.Inputs[0] == n1.Outputs[0] ? 1 : n2.Inputs[1] == n1.Outputs[0] ? 0 : -1;
-        int n4Constant = n4.Inputs[0] == n3.Outputs[0] ? 1 : n4.Inputs[1] == n3.Outputs[0] ? 0 : -1;
-        return n2Constant >= 0 && n4Constant >= 0 &&
-            IsConstantScalar(n0.Inputs[1], 1.4142135381698608f) &&
-            IsConstantScalar(n2.Inputs[n2Constant], 1f) &&
-            IsConstantScalar(n4.Inputs[n4Constant], 0.5f) &&
-            !HasConsumerAfter(n0.Outputs[0], i + 3) &&
-            !HasConsumerAfter(n1.Outputs[0], i + 2) &&
-            !HasConsumerAfter(n2.Outputs[0], i + 3) &&
-            !HasConsumerAfter(n3.Outputs[0], i + 4);
-    }
-
-    // ReduceMean(-1) -> Sub -> Pow(2) -> ReduceMean(-1) -> Add(eps) -> Sqrt ->
-    // Div -> Mul(gamma) -> Add(beta), i.e. LayerNorm over the trailing axis.
-    internal bool MatchLayerNorm(NodeRecord[] nodes, int i)
-    {
-        if (i + 8 >= nodes.Length) return false;
-        NodeRecord mean = nodes[i], sub = nodes[i + 1], pow = nodes[i + 2], var = nodes[i + 3], addEps = nodes[i + 4],
-            sqrt = nodes[i + 5], div = nodes[i + 6], mul = nodes[i + 7], addBeta = nodes[i + 8];
-        if (mean.Operator != OperatorId.ReduceMean || sub.Operator != OperatorId.Sub || pow.Operator != OperatorId.Pow ||
-            var.Operator != OperatorId.ReduceMean || addEps.Operator != OperatorId.Add || sqrt.Operator != OperatorId.Sqrt ||
-            div.Operator != OperatorId.Div || mul.Operator != OperatorId.Mul || addBeta.Operator != OperatorId.Add)
-            return false;
-        if (mean.Inputs.Length != 1 || sub.Inputs.Length != 2 || pow.Inputs.Length != 2 || var.Inputs.Length != 1 ||
-            addEps.Inputs.Length != 2 || sqrt.Inputs.Length != 1 || div.Inputs.Length != 2 || mul.Inputs.Length != 2 ||
-            addBeta.Inputs.Length != 2)
-            return false;
-        if (!IsTrailingAxisMean(mean) || !IsTrailingAxisMean(var)) return false;
-        uint x = mean.Inputs[0];
-        if (sub.Inputs[0] != x || sub.Inputs[1] != mean.Outputs[0]) return false;
-        if (pow.Inputs[0] != sub.Outputs[0] || !IsConstantScalar(pow.Inputs[1], 2f)) return false;
-        if (var.Inputs[0] != pow.Outputs[0]) return false;
-        if (!Contains(addEps.Inputs, var.Outputs[0]) || !IsScalarConstant(Other(addEps.Inputs, var.Outputs[0]))) return false;
-        if (sqrt.Inputs[0] != addEps.Outputs[0]) return false;
-        if (div.Inputs[0] != sub.Outputs[0] || div.Inputs[1] != sqrt.Outputs[0]) return false;
-        if (!Contains(mul.Inputs, div.Outputs[0]) || !IsVectorConstant(Other(mul.Inputs, div.Outputs[0]))) return false;
-        if (!Contains(addBeta.Inputs, mul.Outputs[0]) || !IsVectorConstant(Other(addBeta.Inputs, mul.Outputs[0]))) return false;
-        return !HasConsumerAfter(mean.Outputs[0], i + 1) && !HasConsumerAfter(sub.Outputs[0], i + 6) &&
-            !HasConsumerAfter(pow.Outputs[0], i + 3) && !HasConsumerAfter(var.Outputs[0], i + 4) &&
-            !HasConsumerAfter(addEps.Outputs[0], i + 5) && !HasConsumerAfter(sqrt.Outputs[0], i + 6) &&
-            !HasConsumerAfter(div.Outputs[0], i + 7) && !HasConsumerAfter(mul.Outputs[0], i + 8);
-    }
-
-    private bool IsTrailingAxisMean(NodeRecord node)
-    {
-        ReadOnlySpan<byte> p = _model.GetParameters(node);
-        if (p.Length < 16 || U16(p, 2) != 1 || U32(p, 4) == 0) return false;
-        int axis = I32(p, 12);
-        TensorRecord input = _model.Tensors[checked((int)node.Inputs[0])];
-        return axis == -1 || axis == (int)input.Rank - 1;
-    }
-
-    private static uint Other(uint[] inputs, uint value) => inputs[0] == value ? inputs[1] : inputs[0];
-
-    private bool IsScalarConstant(uint tensorIndex)
-    {
-        TensorRecord tensor = _model.Tensors[checked((int)tensorIndex)];
-        if ((tensor.Flags & Model.TensorConstant) == 0) return false;
-        long count = 1;
-        for (int d = 0; d < tensor.Rank; d++) count *= tensor.Dimensions[d];
-        return count == 1;
-    }
-
-    private bool IsVectorConstant(uint tensorIndex)
-    {
-        TensorRecord tensor = _model.Tensors[checked((int)tensorIndex)];
-        return (tensor.Flags & Model.TensorConstant) != 0 && tensor.Rank == 1 && tensor.Dimensions[0] > 1;
-    }
-
-    private bool MatchConvRelu(NodeRecord[] nodes, int i)
-    {
-        if (i + 1 >= nodes.Length) return false;
-        NodeRecord conv = nodes[i], relu = nodes[i + 1];
-        return conv.Operator == OperatorId.Conv && relu.Operator == OperatorId.Relu &&
-            conv.Inputs.Length > 0 && conv.Outputs.Length == 1 &&
-            relu.Inputs.Length == 1 && relu.Outputs.Length == 1 &&
-            relu.Inputs[0] == conv.Outputs[0] &&
-            !HasConsumerAfter(conv.Outputs[0], i + 1);
-    }
-
-    private bool MatchHardSwish(NodeRecord[] nodes, int i)
-    {
-        if (i + 1 >= nodes.Length) return false;
-        NodeRecord hardSigmoid = nodes[i], multiply = nodes[i + 1];
-        return hardSigmoid.Operator == OperatorId.HardSigmoid && multiply.Operator == OperatorId.Mul &&
-            hardSigmoid.Inputs.Length == 1 && hardSigmoid.Outputs.Length == 1 &&
-            multiply.Inputs.Length == 2 && multiply.Outputs.Length == 1 &&
-            Contains(multiply.Inputs, hardSigmoid.Outputs[0]) &&
-            Contains(multiply.Inputs, hardSigmoid.Inputs[0]) &&
-            !HasConsumerAfter(hardSigmoid.Outputs[0], i + 1);
-    }
-
-    private bool MatchConvHardSwish(NodeRecord[] nodes, int i)
-    {
-        if (i + 2 >= nodes.Length) return false;
-        NodeRecord conv = nodes[i], hardSigmoid = nodes[i + 1], multiply = nodes[i + 2];
-        return conv.Operator == OperatorId.Conv && hardSigmoid.Operator == OperatorId.HardSigmoid &&
-            multiply.Operator == OperatorId.Mul && conv.Inputs.Length > 0 &&
-            conv.Outputs.Length == 1 && hardSigmoid.Inputs.Length == 1 &&
-            hardSigmoid.Outputs.Length == 1 && multiply.Inputs.Length == 2 &&
-            multiply.Outputs.Length == 1 && hardSigmoid.Inputs[0] == conv.Outputs[0] &&
-            Contains(multiply.Inputs, hardSigmoid.Outputs[0]) &&
-            Contains(multiply.Inputs, conv.Outputs[0]) &&
-            !HasConsumerAfter(conv.Outputs[0], i + 2) &&
-            !HasConsumerAfter(hardSigmoid.Outputs[0], i + 2);
-    }
-
-    private bool MatchConvBiasAdd(NodeRecord[] nodes, int i)
-    {
-        if (i + 1 >= nodes.Length) return false;
-        NodeRecord conv = nodes[i], add = nodes[i + 1];
-        if (conv.Operator != OperatorId.Conv || add.Operator != OperatorId.Add ||
-            conv.Inputs.Length != 2 || conv.Outputs.Length != 1 ||
-            add.Inputs.Length != 2 || add.Outputs.Length != 1 ||
-            !Contains(add.Inputs, conv.Outputs[0]) ||
-            HasConsumerAfter(conv.Outputs[0], i + 1))
-            return false;
-        uint bias = add.Inputs[0] == conv.Outputs[0] ? add.Inputs[1] : add.Inputs[0];
-        return IsChannelBiasConstant(bias, conv.Inputs[1]);
-    }
-
-    private bool MatchConvBiasResidualAdd(NodeRecord[] nodes, int i)
-    {
-        if (i + 2 >= nodes.Length || !MatchConvBiasAdd(nodes, i)) return false;
-        NodeRecord biasAdd = nodes[i + 1], residualAdd = nodes[i + 2];
-        if (residualAdd.Operator != OperatorId.Add || residualAdd.Inputs.Length != 2 ||
-            residualAdd.Outputs.Length != 1 ||
-            !Contains(residualAdd.Inputs, biasAdd.Outputs[0]) ||
-            HasConsumerAfter(biasAdd.Outputs[0], i + 2))
-            return false;
-        uint skip = residualAdd.Inputs[0] == biasAdd.Outputs[0]
-            ? residualAdd.Inputs[1] : residualAdd.Inputs[0];
-        return skip != nodes[i].Outputs[0] && !IsChannelBiasConstant(skip, nodes[i].Inputs[1]);
-    }
-
-    private bool IsChannelBiasConstant(uint tensorIndex, uint weightIndex)
-    {
-        TensorRecord tensor = _model.Tensors[checked((int)tensorIndex)];
-        if ((tensor.Flags & Model.TensorConstant) == 0 || tensor.Rank != 4 ||
-            tensor.Dimensions[0] != 1 || tensor.Dimensions[2] != 1 || tensor.Dimensions[3] != 1)
-            return false;
-        TensorRecord weight = _model.Tensors[checked((int)weightIndex)];
-        return weight.Rank >= 1 && tensor.Dimensions[1] == weight.Dimensions[0];
-    }
-
-    private bool MatchConvTransposeBiasActivation(NodeRecord[] nodes, int i)
-    {
-        if (i + 2 >= nodes.Length) return false;
-        NodeRecord transpose = nodes[i], add = nodes[i + 1], act = nodes[i + 2];
-        return transpose.Operator == OperatorId.ConvTranspose && add.Operator == OperatorId.Add &&
-            act.Operator is OperatorId.Relu or OperatorId.Sigmoid &&
-            transpose.Inputs.Length > 0 && transpose.Outputs.Length == 1 &&
-            add.Inputs.Length == 2 && add.Outputs.Length == 1 &&
-            act.Inputs.Length == 1 && act.Outputs.Length == 1 &&
-            Contains(add.Inputs, transpose.Outputs[0]) &&
-            act.Inputs[0] == add.Outputs[0] &&
-            !HasConsumerAfter(transpose.Outputs[0], i + 1) &&
-            !HasConsumerAfter(add.Outputs[0], i + 2);
-    }
-
-    private bool IsConstantScalar(uint tensorIndex, float expected)
-    {
-        int index = checked((int)tensorIndex);
-        TensorRecord tensor = _model.Tensors[index];
-        if ((tensor.Flags & Model.TensorConstant) == 0) return false;
-        int rank = checked((int)tensor.Rank);
-        long count = 1;
-        for (int d = 0; d < rank; d++)
-            count *= tensor.Dimensions[d];
-        if (count != 1) return false;
-        ReadOnlySpan<byte> bytes = _model.GetTensorBytes(index);
-        return bytes.Length >= 4 && BitConverterCompat.Int32BitsToSingle(BinaryPrimitives.ReadInt32LittleEndian(bytes)) == expected;
-    }
-
-    private void StretchLastUse(uint tensorIndex, int nodeIndex)
-    {
-        int index = checked((int)tensorIndex);
-        if (_lastUse[index] < nodeIndex)
-            _lastUse[index] = nodeIndex;
-    }
-
-    private static bool Contains(uint[] inputs, uint value)
-    {
-        foreach (uint input in inputs)
-            if (input == value) return true;
-        return false;
-    }
-
-    // Packed weights are shared across all input shapes via the Model-level
-    // cache; only the lookup is delegated here.
-    internal bool TryGetPacked1x1(uint weightIndex, out float[]? packed)
-        => TryGetPacked(weightIndex, Model.PackConv1x1, out packed);
-    internal bool TryGetPacked3x3(uint weightIndex, out float[]? packed)
-        => TryGetPacked(weightIndex, Model.PackConv3x3, out packed);
-    internal bool TryGetPackedMatMul(uint weightIndex, out float[]? packed)
-        => TryGetPacked(weightIndex, Model.PackMatMul, out packed);
-
-    private bool TryGetPacked(uint weightIndex, int kind, out float[]? packed)
-    {
-        packed = null;
-        foreach (NodeRecord node in _model.Nodes)
-        {
-            if (node.Inputs.Length < 2 || node.Inputs[1] != weightIndex) continue;
-            packed = _model.GetPackedWeights(node, kind);
-            if (packed != null) return true;
-        }
-        return false;
-    }
-
-    /// <summary>Creates a new inference request with its own activation workspace.</summary>
-    public InferenceSession CreateRequest()
-    {
-        if (_disposed) throw new ObjectDisposedException(nameof(CompiledModel));
-        return new InferenceSession(this);
-    }
-
-    private static void ValidateSupportedGraph(Model model)
-    {
-        for (int i = 0; i < model.Nodes.Length; i++)
-        {
-            NodeRecord node = model.Nodes[i];
-            if (node.Operator != OperatorId.Unknown) continue;
-            string op = node.OpType.Length == 0 ? node.Operator.ToString() : node.OpType;
-            string domain = node.Domain.Length == 0 ? "ai.onnx" : node.Domain;
-            throw new NotSupportedException($"Unsupported ONNX operator '{op}' at node {i} ('{node.Name}'), domain='{domain}', opset={node.Opset}.");
-        }
-        for (int i = 0; i < model.Nodes.Length; i++)
-        {
-            NodeRecord node = model.Nodes[i];
-            int expected = node.Operator switch
-            {
-                OperatorId.Conv or OperatorId.ConvTranspose or OperatorId.AveragePool or OperatorId.MaxPool => 64,
-                OperatorId.BatchNormalization => 24,
-                OperatorId.HardSigmoid or OperatorId.Softmax or OperatorId.Concat => 16,
-                OperatorId.ReduceMean => 48,
-                OperatorId.Squeeze or OperatorId.Unsqueeze or OperatorId.Transpose => 40,
-                OperatorId.Resize => 32,
-                _ => 0
-            };
-            if (expected != 0 && model.GetParameters(node).Length != expected)
-            {
-                string op = node.OpType.Length == 0 ? node.Operator.ToString() : node.OpType;
-                throw new NotSupportedException($"Unsupported ONNX attribute layout for '{op}' at node {i} ('{node.Name}'), domain='ai.onnx', opset={node.Opset}.");
-            }
-        }
-    }
-
-    /// <summary>
-    /// Resolves every tensor's concrete shape for one input shape into a fresh
-    /// array; the shared templates keep their symbolic (-1) dimensions. Pure
-    /// with respect to this instance's state, so a session may call it on every
-    /// reshape. Reuses the exact operator shape logic (including the PaddleX
-    /// dynamic-export reshape heuristics) so per-width decisions are identical.
-    /// </summary>
-    internal int[][] ResolveShapesFor(ReadOnlySpan<int> inputShape)
-    {
-        ValidateInputShape(inputShape);
-        int[][] shapes = new int[_tensors.Length][];
-        for (int i = 0; i < shapes.Length; i++)
-        {
-            int[] dims = (int[])_tensors[i].Shape.Clone();
-            if ((_model.Tensors[i].Flags & Model.TensorInput) != 0)
-                for (int d = 0; d < dims.Length; d++)
-                    dims[d] = inputShape[d];
-            shapes[i] = dims;
-        }
-        for (int ni = 0; ni < _model.Nodes.Length; ni++)
-        {
-            NodeRecord node = _model.Nodes[ni];
-            ReadOnlySpan<byte> p = _model.GetParameters(node);
-            int[] a = shapes[node.Inputs[0]];
-            int[] shape = node.Operator switch
-            {
-                OperatorId.Add or OperatorId.Mul or OperatorId.Div or OperatorId.Sub or OperatorId.Pow => BroadcastShape(a, shapes[node.Inputs[1]], ni, node.Operator),
-                OperatorId.Erf or OperatorId.HardSigmoid or OperatorId.Relu or OperatorId.Sigmoid or OperatorId.Sqrt or OperatorId.Softmax or OperatorId.BatchNormalization => [.. a],
-                OperatorId.Conv => a.Length == 4
-                    ? ConvShape(a, shapes[node.Inputs[1]], p)
-                    : throw new InvalidDataException($"Conv '{node.Name}' at node {ni} requires rank-4, got [{string.Join(",", a)}]."),
-                OperatorId.ConvTranspose => ConvTransposeShape(a, shapes[node.Inputs[1]], p),
-                OperatorId.ReduceMean => ReduceShape(a, p),
-                OperatorId.AveragePool or OperatorId.MaxPool => PoolShape(a, p),
-                OperatorId.Squeeze => SqueezeShape(a, p),
-                OperatorId.Unsqueeze => UnsqueezeShape(a, p),
-                OperatorId.Transpose => TransposeShape(a, p),
-                OperatorId.Reshape => node.Inputs.Length > 1
-                    ? ReshapeShape(a, _tensors[node.Inputs[1]], _tensors[node.Outputs[0]].Shape)
-                    : ReshapeShape(a, _tensors[node.Outputs[0]].Shape),
-                OperatorId.Concat => ConcatShape([.. node.Inputs.Select(i => shapes[i])], p),
-                OperatorId.MatMul => MatMulShape(a, shapes[node.Inputs[1]]),
-                OperatorId.Resize => ResizeShape(a, p),
-                OperatorId.Slice => SliceShape(a, node, ni),
-                _ => [.. a]
-            };
-            shapes[node.Outputs[0]] = shape;
-        }
-        return shapes;
-    }
-
-    private int[] SliceShape(int[] inputShape, NodeRecord node, int nodeIndex)
-    {
-        (int[] starts, int[] steps) = ResolveSliceBounds(inputShape, node, out long[] ends);
-        int[] output = inputShape.ToArray();
-        for (int axis = 0; axis < output.Length; axis++)
-        {
-            long end = ends[axis];
-            int step = steps[axis], start = starts[axis], dimension = inputShape[axis];
-            output[axis] = SliceLength(start, end, step, dimension);
-        }
-        return output;
-    }
-
-    internal (int[] Starts, int[] Steps) ResolveSliceBounds(int[] inputShape, NodeRecord node, out long[] endsByAxis)
-    {
-        if (node.Inputs.Length < 3)
-            throw new InvalidDataException("ONNX Slice requires starts and ends inputs.");
-        long[] startsValues = _tensors[node.Inputs[1]].GetIntegerValues();
-        long[] endsValues = _tensors[node.Inputs[2]].GetIntegerValues();
-        if (startsValues.Length != endsValues.Length || startsValues.Length == 0 || startsValues.Length > inputShape.Length)
-            throw new InvalidDataException("ONNX Slice starts/ends are invalid.");
-        long[] axesValues = node.Inputs.Length > 3
-            ? _tensors[node.Inputs[3]].GetIntegerValues()
-            : Enumerable.Range(0, startsValues.Length).Select(static x => (long)x).ToArray();
-        long[] stepsValues = node.Inputs.Length > 4
-            ? _tensors[node.Inputs[4]].GetIntegerValues()
-            : Enumerable.Repeat(1L, startsValues.Length).ToArray();
-        if (axesValues.Length != startsValues.Length || stepsValues.Length != startsValues.Length)
-            throw new InvalidDataException("ONNX Slice axes/steps length does not match starts.");
-
-        int[] starts = new int[inputShape.Length];
-        int[] steps = new int[inputShape.Length];
-        endsByAxis = new long[inputShape.Length];
-        for (int axis = 0; axis < inputShape.Length; axis++)
-        {
-            starts[axis] = 0;
-            steps[axis] = 1;
-            endsByAxis[axis] = inputShape[axis];
-        }
-        for (int i = 0; i < startsValues.Length; i++)
-        {
-            long rawAxis = axesValues[i];
-            if (rawAxis < 0) rawAxis += inputShape.Length;
-            if ((ulong)rawAxis >= (ulong)inputShape.Length)
-                throw new InvalidDataException("ONNX Slice axis is invalid.");
-            int axis = checked((int)rawAxis);
-            if (steps[axis] != 1 || endsByAxis[axis] != inputShape[axis])
-                throw new InvalidDataException("ONNX Slice contains duplicate axes.");
-            long rawStep = stepsValues[i];
-            if (rawStep == 0 || rawStep < int.MinValue || rawStep > int.MaxValue)
-                throw new InvalidDataException("ONNX Slice step is invalid.");
-            int step = checked((int)rawStep), dimension = inputShape[axis];
-            (int start, long end) = NormalizeSlice(startsValues[i], endsValues[i], step, dimension);
-            starts[axis] = start;
-            steps[axis] = step;
-            endsByAxis[axis] = end;
-        }
-        return (starts, steps);
-    }
-
-    private static (int Start, long End) NormalizeSlice(long start, long end, int step, int dimension)
-    {
-        if (dimension < 0) throw new InvalidDataException("ONNX Slice input has a dynamic dimension.");
-        if (step > 0)
-        {
-            long normalizedStart = start < 0 ? start + dimension : start;
-            long normalizedEnd = end < 0 ? end + dimension : end;
-            normalizedStart = MathCompat.Clamp(normalizedStart, 0, dimension);
-            normalizedEnd = MathCompat.Clamp(normalizedEnd, 0, dimension);
-            return (checked((int)normalizedStart), normalizedEnd);
-        }
-        long negativeStart = start == long.MaxValue ? dimension - 1 : start;
-        long negativeEnd = end == long.MinValue ? -1 : end;
-        if (negativeStart < 0) negativeStart += dimension;
-        if (negativeEnd < 0 && negativeEnd != -1) negativeEnd += dimension;
-        negativeStart = MathCompat.Clamp(negativeStart, -1, dimension - 1);
-        negativeEnd = MathCompat.Clamp(negativeEnd, -1, dimension - 1);
-        return (checked((int)negativeStart), negativeEnd);
-    }
-
-    private static int SliceLength(int start, long end, int step, int dimension)
-    {
-        if (step > 0)
-            return start < end ? checked((int)((end - start + step - 1) / step)) : 0;
-        long distance = (long)start - end, stride = -(long)step;
-        return distance > 0 ? checked((int)((distance + stride - 1) / stride)) : 0;
-    }
-
-    private static int[] BroadcastShape(int[] a, int[] b, int node, OperatorId op) { int r = Math.Max(a.Length, b.Length); int[] o = new int[r]; for (int i = 0; i < r; i++) { int x = i >= r - a.Length ? a[i - r + a.Length] : 1, y = i >= r - b.Length ? b[i - r + b.Length] : 1; if (x != y && x != 1 && y != 1) throw new InvalidDataException($"Broadcast shape mismatch at node {node} ({op}): [{string.Join(",", a)}] + [{string.Join(",", b)}]"); o[i] = Math.Max(x, y); } return o; }
-    private static int[] ConvShape(int[] i, int[] w, ReadOnlySpan<byte> p) => [i[0], w[0], (i[2] + I32(p, 32) + I32(p, 40) - ((I32(p, 8) - 1) * I32(p, 24) + 1)) / I32(p, 16) + 1, (i[3] + I32(p, 36) + I32(p, 44) - ((I32(p, 12) - 1) * I32(p, 28) + 1)) / I32(p, 20) + 1];
-    private static int[] ConvTransposeShape(int[] i, int[] w, ReadOnlySpan<byte> p) => [i[0], checked((int)(w[1] * U32(p, 4))), (i[2] - 1) * I32(p, 16) - I32(p, 32) - I32(p, 40) + (I32(p, 8) - 1) * I32(p, 24) + 1, (i[3] - 1) * I32(p, 20) - I32(p, 36) - I32(p, 44) + (I32(p, 12) - 1) * I32(p, 28) + 1];
-    private static int[] PoolShape(int[] i, ReadOnlySpan<byte> p) => [i[0], i[1], (i[2] + I32(p, 24) + I32(p, 32) - I32(p, 8)) / I32(p, 16) + 1, (i[3] + I32(p, 28) + I32(p, 36) - I32(p, 12)) / I32(p, 20) + 1];
-    private static int[] ReduceShape(int[] i, ReadOnlySpan<byte> p) { int count = U16(p, 2); bool keep = U32(p, 4) != 0; bool all = count == 0 && U32(p, 8) == 0; bool[] red = new bool[i.Length]; if (all) ArrayCompat.Fill(red, true); else for (int k = 0; k < count; k++) { int a = I32(p, 12 + k * 4); if (a < 0) a += i.Length; if ((uint)a < (uint)i.Length) red[a] = true; } List<int> o = []; for (int k = 0; k < i.Length; k++) if (red[k]) { if (keep) o.Add(1); } else o.Add(i[k]); return [.. o]; }
-    private static int[] SqueezeShape(int[] i, ReadOnlySpan<byte> p) { int count = U16(p, 2); if (count == 0) return [.. i.Where(d => d != 1)]; bool[] rm = new bool[i.Length]; for (int k = 0; k < count; k++) { int a = I32(p, 4 + k * 4); if (a < 0) a += i.Length; if ((uint)a < (uint)i.Length) rm[a] = true; } return [.. i.Where((d, k) => !rm[k])]; }
-    private static int[] UnsqueezeShape(int[] i, ReadOnlySpan<byte> p) { int n = U16(p, 2); List<int> a = i.ToList(); for (int k = 0; k < n; k++) a.Insert(MathCompat.Clamp(I32(p, 4 + k * 4), 0, a.Count), 1); return [.. a]; }
-    private static int[] TransposeShape(int[] i, ReadOnlySpan<byte> p) { int n = U16(p, 2); int[] a = new int[n]; for (int k = 0; k < n; k++) a[k] = i[I32(p, 4 + k * 4)]; return a; }
-    private static int[] ReshapeShape(int[] input, int[] existing)
-    {
-        if (existing.All(static d => d > 0)) return [.. existing];
-        if (input.Any(static d => d <= 0)) return [.. input];
-        long inputElements = input.Aggregate(1L, static (a, b) => checked(a * b));
-
-        // PaddleX's PP-LCNet orientation model flattens [N,C,1,1] through a
-        // dynamic Shape -> Slice -> Concat expression equivalent to [N,-1].
-        // After metadata-only nodes are removed, value_info exposes this as
-        // a rank-one symbolic template. Keep the batch dimension instead of
-        // collapsing all four axes into [C].
-        if (existing.Length == 1 && existing[0] <= 0 && input.Length >= 2 &&
-            input[0] > 0 && input.Skip(2).All(static d => d == 1))
-        {
-            long flattened = 1;
-            for (int i = 1; i < input.Length; i++) flattened = checked(flattened * input[i]);
-            if (flattened <= int.MaxValue) return [input[0], (int)flattened];
-        }
-
-        // PaddleX PP-OCRv6 small/medium REC exports one attention tensor via
-        // a dynamic Shape/Slice/Concat expression equivalent to
-        // [0, 1, width, channels].  The metadata chain is intentionally
-        // removed from the execution plan, so value_info only leaves the
-        // under-constrained template [-1, -1, -1, channels].  Preserve the
-        // singleton axis in its original position; the generic partitioning
-        // below would otherwise choose [batch, width, 1, channels], which
-        // changes the subsequent [0, 3, 1, 2] transpose and broadcasts the
-        // attention residual to width x width.
-        if (input.Length == 3 && existing.Length == 4 && existing[^1] == input[^1] &&
-            existing.Take(3).All(static d => d <= 0) &&
-            inputElements == (long)input[0] * input[1] * input[2])
-            return [input[0], 1, input[1], input[2]];
-
-        // PaddleX's dynamic exports often remove the Shape/Slice/Concat
-        // metadata chain while leaving symbolic dimensions in value_info. The
-        // resulting shape can still be recovered without executing integer
-        // tensors: partition contiguous input dimensions into output
-        // dimensions, allowing singleton dimensions to be inserted. This
-        // covers flatten [N,C,1,W] -> [N,C,W], attention [N,L,8,15] ->
-        // [N,L,120], and the final [N,L,120] -> [N,1,L,120] reshape used by
-        // PP-OCRv6 small/medium.
-        int[] inferred = new int[existing.Length];
-        if (TryInferReshape(input, existing, 0, 0, inferred, inputElements))
-            return inferred;
-
-        int unknown = existing.Count(static d => d <= 0);
-        if (unknown == 1)
-        {
-            long known = 1;
-            foreach (int d in existing) if (d > 0) known = checked(known * d);
-            if (known > 0 && inputElements % known == 0)
-            {
-                int[] result = [.. existing];
-                int missing = checked((int)(inputElements / known));
-                for (int k = 0; k < result.Length; k++) if (result[k] <= 0) result[k] = missing;
-                return result;
-            }
-        }
-        return [.. input];
-    }
-
-    private static bool TryInferReshape(int[] input, int[] template, int outputAxis,
-        int inputAxis, int[] result, long inputElements)
-    {
-        if (outputAxis == template.Length)
-            return inputAxis == input.Length;
-        int remainingOutput = template.Length - outputAxis;
-        if (inputAxis == input.Length)
-        {
-            // Remaining output axes may only be explicit/symbolic singleton
-            // dimensions; consuming no input dimensions represents insertion
-            // of a singleton axis.
-            for (int i = outputAxis; i < template.Length; i++)
-                if (template[i] > 1) return false;
-            for (int i = outputAxis; i < template.Length; i++) result[i] = 1;
-            return true;
-        }
-
-        int maxConsume = input.Length - inputAxis;
-        // Prefer preserving individual axes. If that cannot satisfy the
-        // remaining known dimensions, the recursion naturally backtracks to a
-        // flattening group (for example 8*15=120).
-        for (int consume = 1; consume <= maxConsume; consume++)
-        {
-            long value = 1;
-            for (int i = 0; i < consume; i++) value = checked(value * input[inputAxis + i]);
-            int expected = template[outputAxis];
-            if (expected > 0 && value != expected) continue;
-            if (value > int.MaxValue) continue;
-            result[outputAxis] = (int)value;
-            if (TryInferReshape(input, template, outputAxis + 1, inputAxis + consume,
-                result, inputElements)) return true;
-        }
-
-        // A symbolic output dimension can represent an inserted singleton.
-        // Do this after consuming real input axes so [N,L,120] maps to
-        // [N,1,L,120] rather than an ambiguous alternative.
-        if (template[outputAxis] <= 1)
-        {
-            result[outputAxis] = template[outputAxis] > 0 ? template[outputAxis] : 1;
-            if (TryInferReshape(input, template, outputAxis + 1, inputAxis,
-                result, inputElements)) return true;
-        }
-        return false;
-    }
-
-    private static int[] ReshapeShape(int[] input, TensorMeta shapeTensor, int[] existing)
-    {
-        if (!shapeTensor.IsConstant || shapeTensor.DType is not (DType.I64 or DType.I32))
-            return ReshapeShape(input, existing);
-        long[] requested = shapeTensor.GetIntegerValues();
-        if (requested.Length == 0 || requested.Length > 8) return ReshapeShape(input, existing);
-        long inputElements = input.Aggregate(1L, static (a, b) => checked(a * b));
-        int[] result = new int[requested.Length];
-        int unknown = -1;
-        long known = 1;
-        for (int i = 0; i < requested.Length; i++)
-        {
-            long value = requested[i];
-            if (value == 0)
-            {
-                if (i >= input.Length) return ReshapeShape(input, existing);
-                value = input[i];
-            }
-            if (value == -1)
-            {
-                if (unknown >= 0) return ReshapeShape(input, existing);
-                unknown = i;
-                result[i] = -1;
-                continue;
-            }
-            if (value <= 0 || value > int.MaxValue) return ReshapeShape(input, existing);
-            result[i] = (int)value;
-            known = checked(known * value);
-        }
-        if (unknown >= 0)
-        {
-            if (known <= 0 || inputElements % known != 0) return ReshapeShape(input, existing);
-            long inferred = inputElements / known;
-            if (inferred <= 0 || inferred > int.MaxValue) return ReshapeShape(input, existing);
-            result[unknown] = (int)inferred;
-        }
-        else if (known != inputElements)
-        {
-            return ReshapeShape(input, existing);
-        }
-        return result;
-    }
-    private static int[] ConcatShape(int[][] i, ReadOnlySpan<byte> p) { int a = I32(p, 4); if (a < 0) a += i[0].Length; int[] o = i[0].ToArray(); o[a] = i.Sum(x => x[a]); return o; }
-    private static int[] MatMulShape(int[] a, int[] b)
-    {
-        if (a.Length == 0 || b.Length == 0)
-            throw new InvalidDataException($"Invalid MatMul ranks: [{string.Join(",", a)}] x [{string.Join(",", b)}]");
-        int aAdjustedRank = Math.Max(2, a.Length), bAdjustedRank = Math.Max(2, b.Length);
-        int batchRank = Math.Max(aAdjustedRank, bAdjustedRank) - 2;
-        List<int> output = new(batchRank + 2);
-        for (int axis = 0; axis < batchRank; axis++)
-        {
-            int aAxis = axis - (batchRank - (aAdjustedRank - 2));
-            int bAxis = axis - (batchRank - (bAdjustedRank - 2));
-            int av = aAxis >= 0 ? a[aAxis] : 1;
-            int bv = bAxis >= 0 ? b[bAxis] : 1;
-            if (av != bv && av != 1 && bv != 1)
-                throw new InvalidDataException($"MatMul batch dimensions do not broadcast: [{string.Join(",", a)}] x [{string.Join(",", b)}]");
-            output.Add(Math.Max(av, bv));
-        }
-        int k = a[^1], bK = b.Length == 1 ? b[0] : b[^2];
-        if (k != bK) throw new InvalidDataException($"MatMul inner dimensions do not match: {k} != {bK}.");
-        if (a.Length != 1) output.Add(a[^2]);
-        if (b.Length != 1) output.Add(b[^1]);
-        return [.. output];
-    }
-    private static int[] ResizeShape(int[] i, ReadOnlySpan<byte> p) { int[] o = i.ToArray(); for (int k = 0; k < o.Length; k++) o[k] = Math.Max(1, (int)(o[k] * F32(p, 4 + k * 4))); return o; }
-    private static ushort U16(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadUInt16LittleEndian(p[o..]);
-    private static uint U32(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadUInt32LittleEndian(p[o..]);
-    private static int I32(ReadOnlySpan<byte> p, int o) => BinaryPrimitives.ReadInt32LittleEndian(p[o..]);
-    private static float F32(ReadOnlySpan<byte> p, int o) => BitConverterCompat.Int32BitsToSingle(I32(p, o));
-
-    public void Dispose()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        foreach (TensorMeta t in _tensors) t.Dispose();
-    }
-
-    /// <summary>
-    /// Immutable compile-time view of one tensor: dtype, shape template
-    /// (dynamic dimensions stay -1), and (for constants) the weight data.
-    /// Concrete shapes and activation storage live in the per-request
-    /// <see cref="InferenceSession"/>, never here.
-    /// </summary>
-    internal sealed class TensorMeta
-    {
-        public DType DType;
-        public int[] Shape;
-        /// <summary>
-        /// Constant bytes shared with <see cref="Model"/> (empty for activations).
-        /// Kernels read F32 constants through a float reinterpretation of this
-        /// array; nothing ever writes to it. The previous copy into a float[]
-        /// per CompiledModel doubled every weight (small ~30 MB, medium ~130 MB).
-        /// </summary>
-        public byte[] Constant;
-        public bool IsConstant;
-        /// <summary>Storage is channels-last (logical <see cref="Shape"/> stays NCHW).</summary>
-        public bool IsNhwc;
-        public TensorMeta(DType d, int[] s, byte[] c, bool nhwc = false)
-        {
-            DType = d;
-            Shape = s;
-            IsConstant = c.Length != 0;
-            IsNhwc = nhwc;
-            Constant = c;
-        }
-        public void Dispose()
-        {
-            Constant = [];
-        }
-        public long[] GetIntegerValues()
-        {
-            if (!IsConstant) return [];
-            byte[] constant = Constant;
-            if (DType == DType.I64)
-            {
-                if ((constant.Length & 7) != 0) return [];
-                long[] result = new long[constant.Length / 8];
-                for (int i = 0; i < result.Length; i++)
-                    result[i] = BinaryPrimitives.ReadInt64LittleEndian(constant.AsSpan(i * 8, 8));
-                return result;
-            }
-            if (DType == DType.I32)
-            {
-                if ((constant.Length & 3) != 0) return [];
-                long[] result = new long[constant.Length / 4];
-                for (int i = 0; i < result.Length; i++)
-                    result[i] = BinaryPrimitives.ReadInt32LittleEndian(constant.AsSpan(i * 4, 4));
-                return result;
-            }
-            return [];
-        }
+        return new OcrHead(a.Name, w, bias, inner, columns);
     }
 }

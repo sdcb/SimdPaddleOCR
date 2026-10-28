@@ -101,7 +101,6 @@ public static class Program
         Console.WriteLine($"[WASM] Model loaded in {sw.ElapsedMilliseconds} ms. Effective LineWorkers: {ocr.EffectiveLineWorkerCount}");
 
         PipelineProfiler.Enable(true);
-        InferenceSession.EnableProfiling(true);
 
         using HttpClient httpClient = new HttpClient();
         if (!string.IsNullOrEmpty(baseUrl))
@@ -152,8 +151,6 @@ public static class Program
 
         List<BenchmarkRow> rows = new List<BenchmarkRow>();
         var prevStages = PipelineProfiler.Snapshot();
-        var prevOp = InferenceSession.ProfileSnapshot();
-        var prevConv = InferenceSession.ConvClassProfileSnapshot();
 
         for (int i = 0; i < files.Length; i++)
         {
@@ -194,8 +191,6 @@ public static class Program
             sw.Stop();
 
             var curStages = PipelineProfiler.Snapshot();
-            var curOp = InferenceSession.ProfileSnapshot();
-            var curConv = InferenceSession.ConvClassProfileSnapshot();
 
             var stageMs = new Dictionary<string, double>();
             var stageCalls = new Dictionary<string, long>();
@@ -206,28 +201,9 @@ public static class Program
             }
 
             var ops = new Dictionary<string, BenchmarkMetric>();
-            string[] opNames = Enum.GetNames<OperatorId>();
-            for (int op = 1; op < opNames.Length; op++)
-            {
-                double ms = (curOp[op].Ticks - prevOp[op].Ticks) * 1000.0 / Stopwatch.Frequency;
-                long calls = curOp[op].Calls - prevOp[op].Calls;
-                if (calls > 0)
-                    ops[opNames[op]] = new BenchmarkMetric { Ms = ms, Calls = calls };
-            }
-
             var conv = new Dictionary<string, BenchmarkMetric>();
-            string[] convNames = ["Conv1x1", "Conv3x3", "Depthwise3x3", "Stride2Conv3x3", "OtherConv"];
-            for (int c = 0; c < 5; c++)
-            {
-                double ms = (curConv[c].Ticks - prevConv[c].Ticks) * 1000.0 / Stopwatch.Frequency;
-                long calls = curConv[c].Calls - prevConv[c].Calls;
-                if (calls > 0)
-                    conv[convNames[c]] = new BenchmarkMetric { Ms = ms, Calls = calls };
-            }
 
             prevStages = curStages;
-            prevOp = curOp;
-            prevConv = curConv;
 
             BenchmarkRow row = new BenchmarkRow
             {
