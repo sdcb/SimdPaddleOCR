@@ -117,5 +117,10 @@ public class CtcDecodeTests
             denseIsLogits: false);
 
     private static float Softmax(ReadOnlySpan<float> row, float maximum)
-        => SimdKernels.SoftmaxMaximumProbability(row, maximum);
+    {
+        // reference: softmax at the row maximum, 1 / sum exp(x - max)
+        float sum = 0;
+        foreach (float v in row) sum += MathF.Exp(v - maximum);
+        return 1f / sum;
+    }
 }

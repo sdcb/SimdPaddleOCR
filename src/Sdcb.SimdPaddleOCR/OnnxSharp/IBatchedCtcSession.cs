@@ -39,10 +39,8 @@ internal delegate bool CtcUnitsReady(float[] activations, int[] offsets, int fir
 internal sealed class CtcHead
 {
     // Init-only: the shape-plan cache shares one head across calls and consumers must not mutate it.
-    public byte[] Weights { get; init; } = [];
-    public byte[]? Bias { get; init; }
-    public float[]? Packed { get; init; }
-    public int Inner { get; init; }
-    public int Columns { get; init; }
+    public required Sdcb.SimdOnnx.Decoding.CtcProjection Projection { get; init; }
+    public int Inner => Projection.Inner;
+    public int Columns => Projection.Columns;
     public int MatMulIndex { get; init; }
 }

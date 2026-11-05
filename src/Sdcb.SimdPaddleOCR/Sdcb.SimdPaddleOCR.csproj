@@ -18,13 +18,13 @@
     <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
     <None Include="linqpad-samples\*.linq" Pack="true" PackagePath="linqpad-samples" />
   </ItemGroup>
-  <!-- ns2.0 不包含 GPU 后端，不嵌入 SPIR-V / Metal shader。 -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
-    <EmbeddedResource Include="Backends\Vulkan\Shaders\*.spv" />
-    <None Remove="Backends\Vulkan\Shaders\*.spv" />
-    <EmbeddedResource Include="Backends\Metal\Shaders\*.metal" />
-    <None Remove="Backends\Metal\Shaders\*.metal" />
+  <ItemGroup Condition="'$(UseLocalSimdOnnx)' == 'true'">
+    <ProjectReference Include="$(SimdOnnxProject)" />
   </ItemGroup>
+  <ItemGroup Condition="'$(UseLocalSimdOnnx)' != 'true'">
+    <PackageReference Include="Sdcb.SimdOnnx" Version="[$(SdcbSimdOnnxVersion)]" />
+  </ItemGroup>
+  <!-- ns2.0: CPU only (the engine's Vector<T> / scalar tiers). -->
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <Compile Remove="Backends/**/*.cs" />
     <PackageReference Include="Microsoft.Bcl.Numerics" Version="10.0.11" />

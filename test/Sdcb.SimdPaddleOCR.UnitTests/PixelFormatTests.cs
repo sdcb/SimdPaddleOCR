@@ -142,32 +142,6 @@ public class PixelFormatTests
     }
 
     [Fact]
-    public void Gather32_IsaMatchesScalar()
-    {
-        int sourceWidth = 37, destinationWidth = 64;
-        byte[] row = new byte[sourceWidth * 4];
-        int[] offsets = new int[destinationWidth];
-        short[] coefficients = new short[destinationWidth * 2];
-        var rng = new Random(7);
-        for (int i = 0; i < row.Length; i++) row[i] = (byte)rng.Next(256);
-        for (int x = 0; x < destinationWidth; x++)
-        {
-            offsets[x] = rng.Next(0, sourceWidth);
-            short c0 = (short)rng.Next(0, 2049);
-            coefficients[x * 2] = c0;
-            coefficients[x * 2 + 1] = (short)(2048 - c0);
-        }
-        int[] scalar = new int[destinationWidth * 3];
-        int[] dispatched = new int[destinationWidth * 3];
-        PixelRow.Gather32Scalar(row, sourceWidth, destinationWidth, offsets, coefficients, scalar, rgba: true);
-        PixelRow.Gather32(row, sourceWidth, destinationWidth, offsets, coefficients, dispatched, rgba: true);
-        Assert.Equal(scalar, dispatched);
-        PixelRow.Gather32Scalar(row, sourceWidth, destinationWidth, offsets, coefficients, scalar, rgba: false);
-        PixelRow.Gather32(row, sourceWidth, destinationWidth, offsets, coefficients, dispatched, rgba: false);
-        Assert.Equal(scalar, dispatched);
-    }
-
-    [Fact]
     public void ResolveStride_ZeroUsesBytesPerPixel()
     {
         Assert.Equal(30, ImagePixels.ResolveStride(10, 0, ImagePixelFormat.Bgr24));

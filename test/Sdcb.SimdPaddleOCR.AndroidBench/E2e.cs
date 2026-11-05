@@ -54,7 +54,7 @@ static class E2e
             });
         PipelineProfiler.Enable(true);
         var prev = PipelineProfiler.Snapshot();
-        bool gpu = Backends.Vulkan.GpuBackend.UsesGpu(backend);
+        bool gpu = OnnxSharp.OcrSessionFactory.IsGpuBackend(backend);
         double wsLoaded = WorkingSetMb();
         Console.WriteLine($"loaded model={model} backend={backendName} usesGpu={gpu} workers={ocr.EffectiveLineWorkerCount}/{workers} ws={wsLoaded:F1}MB");
 

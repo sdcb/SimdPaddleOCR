@@ -662,7 +662,7 @@ public sealed class PaddleOcrAll : IDisposable
             return Math.Min(env, 16);
         // The channels-last kernels are FMA-bound, so SMT siblings add
         // throughput (det 16 vs 8 threads measured ~8-25% faster on Zen 3).
-        if (OnnxSharp.LayoutPlanner.IsEnabled) return Math.Min(16, Environment.ProcessorCount);
+        if (OnnxSharp.CompiledModel.Options.Nhwc) return Math.Min(16, Environment.ProcessorCount);
         return Math.Min(8, Environment.ProcessorCount);
     }
 

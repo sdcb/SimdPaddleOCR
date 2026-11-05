@@ -35,7 +35,6 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Sdcb.SimdPaddleOCR.Tests\BenchSummary.cs" Link="BenchSummary.cs" />
-    <EmbeddedResource Include="..\Sdcb.SimdPaddleOCR.GpuBench\Shaders\sgsize.spv" Link="sgsize.spv" LogicalName="sgsize.spv" />
     <EmbeddedResource Include="Shaders\peak.spv" LogicalName="peak.spv" />
     <EmbeddedResource Include="Shaders\peak16.spv" LogicalName="peak16.spv" />
   </ItemGroup>
