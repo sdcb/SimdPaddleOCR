@@ -423,22 +423,19 @@ public sealed class PaddleOcrRecognizer : IDisposable
                 return false;
             if (head.Columns != ClassCount)
                 throw new InvalidDataException("Recognizer output shape is incompatible with dictionary.");
-            int[] batches = new int[units.Count];
             int[] rowStart = new int[units.Count + 1], lineStart = new int[units.Count + 1];
             for (int u = 0; u < units.Count; u++)
             {
-                batches[u] = units[u].Length;
                 rowStart[u + 1] = rowStart[u] + units[u].Length * rows[u];
                 lineStart[u + 1] = lineStart[u] + units[u].Length;
             }
             int totalRows = rowStart[units.Count];
             int[] indices = PooledArrays.Rent<int>(totalRows);
-            float[] scores = PooledArrays.Rent<float>(totalRows);
+            float[]? scores = null;
             try
             {
-                // Batches of units arrive while later ones still run on the
-                // GPU; each batch's activations are back to back, so one
-                // ArgMax call covers it (same per-row kernel as a per-unit call).
+                scores = PooledArrays.Rent<float>(totalRows);
+                // Consecutive units share a projection while later units run on the GPU.
                 bool Ready(float[] acts, int[] offsets, int first, int count)
                 {
                     int r0 = rowStart[first], r1 = rowStart[first + count];
@@ -448,10 +445,9 @@ public sealed class PaddleOcrRecognizer : IDisposable
                     ReadOnlySpan<float> weights = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Weights);
                     ReadOnlySpan<float> bias = head.Bias is null ? []
                         : System.Runtime.InteropServices.MemoryMarshal.Cast<byte, float>(head.Bias);
-                    if (!MatMul.TryArgMaxUnits(acts.AsSpan(r0 * head.Inner, (r1 - r0) * head.Inner), weights, bias,
+                    if (!MatMul.TryCtcProjection(acts.AsSpan(r0 * head.Inner, (r1 - r0) * head.Inner), weights, bias,
                             indices.AsSpan(r0, r1 - r0), scores.AsSpan(r0, r1 - r0),
-                            batches.AsSpan(first, count), rows.AsSpan(first, count),
-                            head.Inner, head.Columns, head.Packed, intraOpThreads))
+                            r1 - r0, head.Inner, head.Columns, head.Packed, intraOpThreads))
                         return false;
                     for (int u = first; u < first + count; u++)
                     {
@@ -465,7 +461,7 @@ public sealed class PaddleOcrRecognizer : IDisposable
                     }
                     return true;
                 }
-                // false: GPU fell back or ArgMax declined — the caller's
+                // false: GPU fell back or projection declined — the caller's
                 // per-unit path rewrites every result
                 bool ok = batched.TryRunManyUntilCtcProjection(Ready);
                 if (profile) PipelineProfiler.Add(PipelineProfiler.RecGraph, started);
@@ -506,20 +502,29 @@ public sealed class PaddleOcrRecognizer : IDisposable
         if (session.TryRunUntilCtcProjection(input, out CtcProjectionOperands ops))
         {
             int rowCount = ops.RowCount;
-            int[] indices = PooledArrays.Rent<int>(rowCount);
-            float[] scores = PooledArrays.Rent<float>(rowCount);
-            long matMulStarted = session.IsProfilingEnabled ? Stopwatch.GetTimestamp() : 0;
-            if (MatMul.TryArgMax(ops.Activations, ops.Weights, ops.Bias,
-                indices.AsSpan(0, rowCount), scores.AsSpan(0, rowCount),
-                ops.Batch, ops.Rows, ops.Inner, ops.Columns, ops.PackedWeights,
-                session.IntraOpThreads))
+            int[]? indices = PooledArrays.Rent<int>(rowCount);
+            float[]? scores = null;
+            try
             {
-                if (matMulStarted != 0)
-                    session.NoteProfile(OperatorId.MatMul, matMulStarted, ops.MatMulNodeIndex);
-                return CtcDecodeInput.Compact(indices, scores, rowCount);
+                scores = PooledArrays.Rent<float>(rowCount);
+                long matMulStarted = session.IsProfilingEnabled ? Stopwatch.GetTimestamp() : 0;
+                if (MatMul.TryCtcProjection(ops.Activations, ops.Weights, ops.Bias,
+                    indices.AsSpan(0, rowCount), scores.AsSpan(0, rowCount), rowCount,
+                    ops.Inner, ops.Columns, ops.PackedWeights, session.IntraOpThreads))
+                {
+                    if (matMulStarted != 0)
+                        session.NoteProfile(OperatorId.MatMul, matMulStarted, ops.MatMulNodeIndex);
+                    var decoded = CtcDecodeInput.Compact(indices, scores, rowCount);
+                    indices = null;
+                    scores = null;
+                    return decoded;
+                }
             }
-            PooledArrays.Return(indices);
-            PooledArrays.Return(scores);
+            finally
+            {
+                PooledArrays.Return(indices);
+                PooledArrays.Return(scores);
+            }
         }
 
         ReadOnlySpan<float> dense = session.RunInternalSkipFinalSoftmax(input, out bool logits);
