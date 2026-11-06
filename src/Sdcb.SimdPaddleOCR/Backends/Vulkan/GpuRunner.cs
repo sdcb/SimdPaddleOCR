@@ -5,7 +5,16 @@ namespace Sdcb.SimdPaddleOCR.Backends.Vulkan;
 
 /// <summary>One storage-buffer binding: a fixed (shared, immutable) buffer or
 /// a <see cref="GpuGraphModel"/> role sentinel resolved per session.</summary>
-internal readonly record struct GpuBind(VkBuffer Buf, ulong ByteOffset);
+internal readonly record struct GpuBind(VkBuffer Buf, ulong ByteOffset)
+{
+    internal ulong ResolveOffset(ulong baseOffset, ulong bufferSize)
+    {
+        ulong offset = checked(baseOffset + ByteOffset);
+        if (offset >= bufferSize)
+            throw new InvalidOperationException($"Vulkan buffer offset {offset} exceeds or equals buffer size {bufferSize}.");
+        return offset;
+    }
+}
 
 internal sealed class GpuRec
 {
@@ -436,11 +445,11 @@ internal sealed unsafe class GpuDetGraph : IOcrGraphRunner
         {
             VkBuffer role = r.Binds[b].Buf;
             VkBuffer buf = Resolve(role);
-            ulong off = r.Binds[b].ByteOffset
-                + (ReferenceEquals(role, GpuGraphModel.RoleIn) ? inBase
-                   : ReferenceEquals(role, GpuGraphModel.RoleOut) ? outBase
-                   : ReferenceEquals(role, GpuGraphModel.RoleArena) ? arenaBase
-                   : ReferenceEquals(role, GpuGraphModel.RolePart) ? partBase : 0);
+            ulong baseOffset = ReferenceEquals(role, GpuGraphModel.RoleIn) ? inBase
+                : ReferenceEquals(role, GpuGraphModel.RoleOut) ? outBase
+                : ReferenceEquals(role, GpuGraphModel.RoleArena) ? arenaBase
+                : ReferenceEquals(role, GpuGraphModel.RolePart) ? partBase : 0;
+            ulong off = r.Binds[b].ResolveOffset(baseOffset, buf.Size);
             infos[b] = new Vk.VkDescriptorBufferInfo
             {
                 Buffer = buf.Buffer, Offset = off, Range = buf.Size - off,
