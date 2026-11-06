@@ -704,7 +704,7 @@ internal sealed class GpuGraphModel
                 continue;
             uint a = nd.Inputs[0], b = nd.Inputs[1];
             if (a == uint.MaxValue || b == uint.MaxValue
-                || isConst[(int)a] || isConst[(int)b]) continue;
+                || isConst[Phys((int)a)] || isConst[Phys((int)b)]) continue;
             // se = input whose numel equals the other's channel count
             // (per-image: nb*C for a batch — se tensors are [n,C,1,1])
             long na = numel[(int)a], nelb = numel[(int)b];
@@ -753,7 +753,7 @@ internal sealed class GpuGraphModel
                     {
                         uint oth = cn.Inputs[0] == t ? cn.Inputs[1]
                                  : cn.Inputs[1] == t ? cn.Inputs[0] : uint.MaxValue;
-                        if (oth != uint.MaxValue && !isConst[(int)oth]
+                        if (oth != uint.MaxValue && !isConst[Phys((int)oth)]
                             && numel[(int)oth] == numel[(int)xT]
                             && numel[(int)xT] % 4 == 0)
                         { pendAdd.Add((c, oth)); continue; }
@@ -865,7 +865,7 @@ internal sealed class GpuGraphModel
         {
             var bb = new GpuBind[binds.Length];
             for (int b = 0; b < binds.Length; b++)
-                bb[b] = new GpuBind(binds[b].buf, (ulong)(binds[b].elemOff * binds[b].elemSize));
+                bb[b] = new GpuBind(binds[b].buf, checked((ulong)(binds[b].elemOff * binds[b].elemSize)));
             GpuRec r = new() { Pipe = pipe, Binds = bb, Pc = Pcu(pc), Gx = gx, Gy = gy, Tag = tag };
             recs.Add(r);
             return r;
@@ -903,7 +903,9 @@ internal sealed class GpuGraphModel
         {
             long nel = numel[t];
             uint mode = nel == n ? 0u : nel == chan ? 1u : 2u;
-            return isConst[t] ? (ConstF16(t), 0, mode) : (arena, off[Phys(t)], mode);
+            // Broadcasting uses the view's shape; storage belongs to its alias root.
+            int root = Phys(t);
+            return isConst[root] ? (ConstF16(root), 0, mode) : (arena, off[root], mode);
         }
 
         // ---- addps absorb: the addps rec disappears; its sole consumer reads
@@ -1115,7 +1117,7 @@ internal sealed class GpuGraphModel
                     uint hasBias = 0, scalarBias = 0, flags16 = 0;
                     bool dualRaw = false;
                     if (node.Inputs.Length > 2 && node.Inputs[2] != uint.MaxValue)
-                    { biasBuf = ConstF16(checked((int)node.Inputs[2])); hasBias = 1; }
+                    { biasBuf = ConstF16(Phys(checked((int)node.Inputs[2]))); hasBias = 1; }
                     if (skip == 1 && nodes[ni + 1].Operator == OperatorId.Relu)
                         act = 1;
                     else if (skip == 1 && nodes[ni + 1].Operator == OperatorId.Add)
@@ -1124,7 +1126,7 @@ internal sealed class GpuGraphModel
                         NodeRecord add = nodes[ni + 1];
                         int bt = add.Inputs[0] == node.Outputs[0]
                             ? checked((int)add.Inputs[1]) : checked((int)add.Inputs[0]);
-                        biasBuf = ConstF16(bt); hasBias = 1;
+                        biasBuf = ConstF16(Phys(bt)); hasBias = 1;
                         if (numel[bt] == 1) scalarBias = 8u;
                     }
                     else if (skip == 2 && nodes[ni + 1].Operator == OperatorId.HardSigmoid
@@ -1157,7 +1159,7 @@ internal sealed class GpuGraphModel
                         int bt = add.Inputs[0] == node.Outputs[0]
                             ? checked((int)add.Inputs[1])
                             : checked((int)add.Inputs[0]);
-                        biasBuf = ConstF16(bt); hasBias = 1;
+                        biasBuf = ConstF16(Phys(bt)); hasBias = 1;
                         if (numel[bt] == 1) scalarBias = 8u;
                         act = 2;
                         int preG = Phys(checked((int)nodes[ni + 1].Outputs[0]));
@@ -1178,10 +1180,10 @@ internal sealed class GpuGraphModel
                         int bt = add.Inputs[0] == node.Outputs[0]
                             ? checked((int)add.Inputs[1])
                             : checked((int)add.Inputs[0]);
-                        if (!isConst[bt])
+                        if (!isConst[Phys(bt)])
                             throw new NotSupportedException(
                                 $"conv+add+add mid-add non-const at node {ni + 1}");
-                        biasBuf = ConstF16(bt); hasBias = 1;
+                        biasBuf = ConstF16(Phys(bt)); hasBias = 1;
                         if (numel[bt] == 1) scalarBias = 8u;
                         NodeRecord res = nodes[ni + 2];
                         int mid = Phys(checked((int)add.Outputs[0]));
@@ -1189,7 +1191,7 @@ internal sealed class GpuGraphModel
                             ? res.Inputs[1]
                             : Phys(checked((int)res.Inputs[1])) == mid
                                 ? res.Inputs[0] : uint.MaxValue;
-                        if (oth == uint.MaxValue || isConst[(int)oth]
+                        if (oth == uint.MaxValue || isConst[Phys((int)oth)]
                             || numel[(int)oth] != numel[mid])
                             throw new NotSupportedException(
                                 $"conv+add+add residual form at node {ni + 2}");
@@ -1222,7 +1224,7 @@ internal sealed class GpuGraphModel
                             int ib = Phys(checked((int)ad.Inputs[1]));
                             uint other = ia == prev ? ad.Inputs[1]
                                        : ib == prev ? ad.Inputs[0] : uint.MaxValue;
-                            if (other != uint.MaxValue && !isConst[(int)other]
+                            if (other != uint.MaxValue && !isConst[Phys((int)other)]
                                 && numel[(int)other] == numel[prev]
                                 && refCount[prev] == 1)
                             { resT = other; ge = j; j++; }
@@ -1987,7 +1989,7 @@ internal sealed class GpuGraphModel
                         NodeRecord add = nodes[ni + 1];
                         int bt = add.Inputs[0] == node.Outputs[0]
                             ? checked((int)add.Inputs[1]) : checked((int)add.Inputs[0]);
-                        biasBuf = ConstF16(bt);
+                        biasBuf = ConstF16(Phys(bt));
                         flags2 = 1u | (numel[bt] == 1 ? 8u : 0u);
                         OperatorId actOp = nodes[ni + 2].Operator;
                         act = actOp == OperatorId.Relu ? 1 : actOp == OperatorId.Sigmoid ? 4 : 0;
