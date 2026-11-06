@@ -621,8 +621,8 @@ public sealed partial class InferenceSession : IOcrSession
     /// <summary>
     /// Runs the graph through the node before the final CTC projection
     /// (MatMul, optional Add bias, Softmax). Does not write vocab logits —
-    /// the caller (Recognizer) owns ArgMax scratch and calls
-    /// <see cref="Sdcb.SimdPaddleOCR.Kernels.MatMul.TryArgMax"/>. Returns false when the
+    /// the recognizer projects into compact labels and probabilities via
+    /// <see cref="Sdcb.SimdPaddleOCR.Kernels.MatMul.TryCtcProjection"/>. Returns false when the
     /// tail pattern is unsupported; use <see cref="RunInternalSkipFinalSoftmax"/> then.
     /// </summary>
     internal bool TryRunUntilCtcProjection(ReadOnlySpan<float> input, out CtcProjectionOperands operands)

@@ -478,9 +478,9 @@ internal static partial class SimdKernels
         }
         else
         {
-            float scalarSum = 0;
+            double scalarSum = 0;
             for (; i < logits.Length; i++) scalarSum += MathF.Exp(logits[i] - maximum);
-            return 1f / scalarSum;
+            return (float)(1.0 / scalarSum);
         }
     }
 
