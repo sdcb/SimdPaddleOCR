@@ -20,7 +20,7 @@ public class MainActivity : Activity
     {
         base.OnCreate(savedInstanceState);
         Window?.AddFlags(WindowManagerFlags.KeepScreenOn);
-        string args = Intent?.GetStringExtra("args") ?? "--caps";
+        string args = Intent?.GetStringExtra("args") ?? "--e2e";
         string env = Intent?.GetStringExtra("env") ?? "";
         string run = Intent?.GetStringExtra("run") ?? "run";
         string root = GetExternalFilesDir(null)!.AbsolutePath;

@@ -2,10 +2,10 @@
 # wait for <run>.done -> pull files/out/* into bench-out/android/. On a crash or a
 # process that dies without writing .done, logcat is saved next to the log.
 #
-#   .\run.ps1 -Build -Install -Push -Bench "--caps"
+#   .\run.ps1 -Build -Install -Push -Bench "--e2e --model tiny --backend cpu"
 #   .\run.ps1 -Bench "--e2e --model tiny --backend vulkan --out e2e-tiny-vk.json" -Env "SIMD_OCR_GPU_TIME=1"
 param(
-    [string]$Bench = "--caps",
+    [string]$Bench = "--e2e",
     [string]$Env = "",
     [string]$Run = "",
     [switch]$Build,

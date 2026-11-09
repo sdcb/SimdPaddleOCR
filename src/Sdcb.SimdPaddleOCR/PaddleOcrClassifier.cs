@@ -73,7 +73,7 @@ public sealed class PaddleOcrClassifier : IDisposable
             Span<float> input = session.InputData;
             long started = profile ? PipelineProfiler.Now() : 0;
             int resizedWidth = PPOCRPreprocess.Cls(source, sourceWidth, sourceHeight, sourceStride,
-                input, session.ResizeWorkspace, session.InputIsNhwc, format);
+                input, session.InputIsNhwc, format);
             if (profile) PipelineProfiler.Add(PipelineProfiler.ClsPreprocess, started);
             started = profile ? PipelineProfiler.Now() : 0;
             if (session.TryRunUntilCtcProjection(input, out CtcProjectionOperands ops))
@@ -133,11 +133,11 @@ public sealed class PaddleOcrClassifier : IDisposable
                 {
                     nint inputAddress = (nint)inputPtr;
                     bool nhwc = session.InputIsNhwc;
-                    PPOCRPreprocess.ForLines(count, preprocessWorkers, session.ResizeWorkspace, (k, workspace) =>
+                    PPOCRPreprocess.ForLines(count, preprocessWorkers, k =>
                         PPOCRPreprocess.Cls(cropBuffer.AsSpan(offsets[k], bytes[k]), widths[k], heights[k],
                             ImagePixels.ResolveStride(widths[k], 0, ImagePixelFormat.Bgr24),
                             new Span<float>((float*)inputAddress + (long)k * sampleFloats, sampleFloats),
-                            workspace, nhwc, ImagePixelFormat.Bgr24));
+                            nhwc, ImagePixelFormat.Bgr24));
                 }
             }
             input[(count * sampleFloats)..].Clear();   // pad rows → zero logits → [0.5,0.5], discarded
@@ -173,8 +173,8 @@ public sealed class PaddleOcrClassifier : IDisposable
         int inner = ops.Inner, cols = ops.Columns;
         if (cols < 2 || cols > 64 || inner <= 0) return false;
         ReadOnlySpan<float> act = ops.Activations;
-        ReadOnlySpan<float> w = ops.Weights;
-        ReadOnlySpan<float> bias = ops.Bias;
+        ReadOnlySpan<float> w = ops.Projection.Weights;
+        ReadOnlySpan<float> bias = ops.Projection.Bias ?? [];
         if (!bias.IsEmpty && bias.Length != cols) return false;
         if (w.Length < inner * cols) return false;
         int rows = Math.Min(ops.RowCount, count);
