@@ -82,4 +82,4 @@ save → 中心 → rotate → 字色居中写 text → restore
 
 - 渐变底会变成一条单色，这是有意的。
 - 识别比原句长很多时字号会变小。不要自动换行。
-- ImageSharp 示例用独立 `Configuration.PreferContiguousImageBuffers` 尽量零拷贝；拿不到连续缓冲再 `CopyPixelDataTo`。桌面 `LockBits` / `Mat` 不受影响。
+- Web 示例用 SimdCodecs 直接解码成紧密排列的 BGR24，无需拷贝。桌面 `LockBits` / `Mat` 不受影响。

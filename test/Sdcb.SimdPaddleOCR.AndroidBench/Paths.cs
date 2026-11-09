@@ -22,19 +22,11 @@ static class Paths
         _ => throw new ArgumentException("backend must be cpu, vulkan or auto"),
     };
 
-    /// <summary>Decodes like the desktop Tests harness (ImageSharp, BGR24).</summary>
+    /// <summary>Decodes like the desktop Tests harness (SimdCodecs, packed BGR24).</summary>
     internal static (byte[] Bgr, int W, int H) LoadBgr(string path)
     {
-        using var image = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.Rgb24>(path);
-        byte[] px = new byte[checked(image.Width * image.Height * 3)];
-        for (int y = 0; y < image.Height; y++)
-            for (int x = 0; x < image.Width; x++)
-            {
-                var p = image[x, y];
-                int o = (y * image.Width + x) * 3;
-                px[o] = p.B; px[o + 1] = p.G; px[o + 2] = p.R;
-            }
-        return (px, image.Width, image.Height);
+        using var image = Sdcb.SimdCodecs.ImageCodecs.Decode(File.ReadAllBytes(path), Sdcb.SimdCodecs.Abstractions.PixelFormat.Bgr24);
+        return (image.Pixels[..(image.Stride * image.Height)].ToArray(), image.Width, image.Height);
     }
 
     internal static string[] DatasetFiles() => Directory.GetFiles(Dataset, "img-*.jpg")

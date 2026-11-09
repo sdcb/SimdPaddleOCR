@@ -8,11 +8,10 @@ using System.Runtime.Intrinsics.X86;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using Sdcb.SimdCodecs;
+using Sdcb.SimdCodecs.Abstractions;
 using Sdcb.SimdPaddleOCR;
 using Sdcb.SimdPaddleOCR.Tests;
-using ImageSharpImage = SixLabors.ImageSharp.Image;
 
 if (args.Length == 0 || args[0] is "-h" or "--help")
 {
@@ -95,17 +94,9 @@ if (count is { } limit)
 var decoded = new (string Name, byte[] Pixels, int W, int H)[files.Length];
 for (int i = 0; i < files.Length; i++)
 {
-    using Image<Rgb24> image = ImageSharpImage.Load<Rgb24>(files[i]);
-    byte[] pixels = new byte[checked(image.Width * image.Height * 3)];
-    for (int y = 0; y < image.Height; y++)
-        for (int x = 0; x < image.Width; x++)
-        {
-            Rgb24 p = image[x, y];
-            int o = (y * image.Width + x) * 3;
-            pixels[o] = p.B;
-            pixels[o + 1] = p.G;
-            pixels[o + 2] = p.R;
-        }
+    // Packed BGR24 (Stride = Width * 3); EXIF orientation is left as stored.
+    using PixelBuffer image = ImageCodecs.Decode(File.ReadAllBytes(files[i]), PixelFormat.Bgr24);
+    byte[] pixels = image.Pixels[..(image.Stride * image.Height)].ToArray();
     decoded[i] = (Path.GetFileName(files[i]), pixels, image.Width, image.Height);
 }
 

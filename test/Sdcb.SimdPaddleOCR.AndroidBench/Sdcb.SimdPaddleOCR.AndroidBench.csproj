@@ -31,7 +31,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Sdcb.SimdPaddleOCR\Sdcb.SimdPaddleOCR.csproj" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.11" />
+    <PackageReference Include="Sdcb.SimdCodecs" Version="2.0.0-preview.20261109.2" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\Sdcb.SimdPaddleOCR.Tests\BenchSummary.cs" Link="BenchSummary.cs" />
