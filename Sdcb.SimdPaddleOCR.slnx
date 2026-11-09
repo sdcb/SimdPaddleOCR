@@ -23,7 +23,7 @@
     <File Path="build/02-publish-proget-nuget.linq" />
   </Folder>
   <Folder Name="/examples/">
-    <Project Path="examples/ImageSharp.AspNetCore/ImageSharp.AspNetCore.csproj" />
+    <Project Path="examples/SimdCodecs.AspNetCore/SimdCodecs.AspNetCore.csproj" />
     <Project Path="examples/SkiaSharp.Avalonia/SkiaSharp.Avalonia.csproj" />
     <Project Path="examples/OpenCvSharp5.Wpf/OpenCvSharp5.Wpf.csproj" />
     <Project Path="examples/SystemDrawing.WinForms/SystemDrawing.WinForms.csproj" />

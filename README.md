@@ -6,7 +6,7 @@
 推理引擎为纯 C# 的 [Sdcb.SimdOnnx](https://github.com/sdcb/SimdOnnx)（与 SimdGcdrNet 共用），不依赖 Paddle Inference、ONNX Runtime 或 OpenCV 原生库。
 GPU 支持 Vulkan 与 Metal（macOS），仅 .NET 10；同样纯 C#、不内嵌任何原生二进制。
 
-核心 API 接收交错像素内存（默认 BGR24，也可直接传 RGB24 / BGRA32 / RGBA32），不负责图片解码，因此不会强制引入 ImageSharp、SkiaSharp 或 OpenCvSharp。
+核心 API 接收交错像素内存（默认 BGR24，也可直接传 RGB24 / BGRA32 / RGBA32），不负责图片解码，因此不会强制引入 SimdCodecs、ImageSharp、SkiaSharp 或 OpenCvSharp。
 
 ## 快速开始
 
@@ -15,12 +15,38 @@ GPU 支持 Vulkan 与 Metal（macOS），仅 .NET 10；同样纯 C#、不内嵌�
 ```powershell
 dotnet add package Sdcb.SimdPaddleOCR
 dotnet add package Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny
-dotnet add package SixLabors.ImageSharp --version 3.1.11
+dotnet add package Sdcb.SimdCodecs --prerelease
 ```
 
 模型从程序集嵌入资源直接加载，不会解压或写入临时文件。`stride = 0` 表示紧密排列（`width *` 每像素字节数）。默认 `ImagePixelFormat.Bgr24`；其它布局在 resize / crop 里就地 swizzle，不会先转成一张中间 BGR 图。
 
-### ImageSharp 3（推荐）
+### SimdCodecs（推荐）
+
+纯托管图片解码（JPEG / PNG / WebP / BMP / GIF / TIFF 等），无原生依赖。需要 `Sdcb.SimdCodecs` 2.0 及以上（目前为预览版）。
+
+```csharp
+using Sdcb.SimdCodecs;
+using Sdcb.SimdCodecs.Abstractions;
+using Sdcb.SimdPaddleOCR;
+using Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny;
+
+using PaddleOcrAll ocr = await PaddleOcrAll.LoadAsync(ChineseV6TinyModels.Default);
+byte[] data = await File.ReadAllBytesAsync("sample.jpg");
+// Bgr24 is the OCR default layout; ApplyOrientation makes phone photos (EXIF Orientation) upright.
+using PixelBuffer image = ImageCodecs.Decode(data, PixelFormat.Bgr24, new DecodeOptions { ApplyOrientation = true });
+PaddleOcrResult result = ocr.Run(image.Pixels, image.Width, image.Height, image.Stride);
+Console.WriteLine(result.Text);
+```
+
+`ImageCodecs.Decode` 一次调用直接解码成紧密排列的 BGR24（`PixelBuffer.Stride` 即行字节数），无需额外转换或拷贝。`ApplyOrientation = true` 会按 EXIF 方向旋转像素，手机照片无需再手动处理。文件不是可解码格式时抛 `NotSupportedException`，文件损坏时抛带具体原因的 `InvalidDataException`。整段 `Run` 期间不要释放 `PixelBuffer`。
+
+### ImageSharp 3
+
+使用 ImageSharp 时另需安装：
+
+```powershell
+dotnet add package SixLabors.ImageSharp --version 3.1.11
+```
 
 ```csharp
 using System.Runtime.InteropServices;
@@ -204,13 +230,13 @@ foreach (PaddleOcrLine line in result.Lines)
 
 四个示例共用 `examples/sample.jpg`，图片由示例负责解码为交错像素（BGR / RGB / BGRA / RGBA 均可）：
 
-- `examples/ImageSharp.AspNetCore`：ASP.NET Core + ImageSharp 3，可上传体验与 `POST /api/ocr` JSON API。
+- `examples/SimdCodecs.AspNetCore`：ASP.NET Core + SimdCodecs（纯托管解码，一次调用解码成 BGR24 并应用 EXIF 方向），可上传体验与 `POST /api/ocr` JSON API。
 - `examples/SkiaSharp.Avalonia`：Avalonia 桌面示例，SkiaSharp 解码。
 - `examples/OpenCvSharp5.Wpf`：WPF 示例，OpenCvSharp5 解码。
 - `examples/SystemDrawing.WinForms`：.NET 10 Windows / .NET Framework 4.8 双目标 WinForms 示例，使用 `Bitmap`/`LockBits`；运行 `net48` 前请安装 .NET Framework 4.8 Developer Pack，项目平台选择 x64。
 
 ```powershell
-dotnet run --project examples/ImageSharp.AspNetCore
+dotnet run --project examples/SimdCodecs.AspNetCore
 dotnet run --project examples/OpenCvSharp5.Wpf -- path/to/image.jpg
 dotnet run --project examples/SkiaSharp.Avalonia -- path/to/image.jpg
 dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
@@ -244,7 +270,7 @@ x64 发布 Native AOT 时，可执行项目里**必须**设置：
 
 ### ImageSharp 报「图片像素不是连续内存」或 `DangerousTryGetSinglePixelMemory` 失败？
 
-ImageSharp 默认分配器会把像素拆成 4MB 块，大图上拿不到一整块连续缓冲。按上面「ImageSharp 3」示例：`Clone` 一份 `Configuration` 后打开 `PreferContiguousImageBuffers`，仍不连续再 `CopyPixelDataTo`。不要改 `Configuration.Default`，否则 PNG/JPEG 解码器会丢。完整写法见 `examples/ImageSharp.AspNetCore/Program.cs`。
+ImageSharp 默认分配器会把像素拆成 4MB 块，大图上拿不到一整块连续缓冲。按上面「ImageSharp 3」示例：`Clone` 一份 `Configuration` 后打开 `PreferContiguousImageBuffers`，仍不连续再 `CopyPixelDataTo`。不要改 `Configuration.Default`，否则 PNG/JPEG 解码器会丢。
 
 ### 为什么 GPU 没被用上？
 

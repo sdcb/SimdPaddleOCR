@@ -6,7 +6,7 @@ Pure C# PP-OCRv6 inference library: cross-platform hand-written kernels and GEMM
 Inference runs on [Sdcb.SimdOnnx](https://github.com/sdcb/SimdOnnx), a pure C# engine shared with SimdGcdrNet; there is no dependency on Paddle Inference, ONNX Runtime, or OpenCV native libraries.
 GPU support: Vulkan and Metal (macOS), .NET 10 only — still pure C#, with no bundled native binaries.
 
-The core API accepts interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 are also first-class). It does not decode images, so ImageSharp, SkiaSharp, or OpenCvSharp are not required.
+The core API accepts interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 are also first-class). It does not decode images, so SimdCodecs, ImageSharp, SkiaSharp, or OpenCvSharp are not required.
 
 ## Quick start
 
@@ -15,12 +15,38 @@ Install the core package and the tiny models (tiny transitively references CLS a
 ```powershell
 dotnet add package Sdcb.SimdPaddleOCR
 dotnet add package Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny
-dotnet add package SixLabors.ImageSharp --version 3.1.11
+dotnet add package Sdcb.SimdCodecs --prerelease
 ```
 
 Models load from embedded assembly resources. They are not extracted or written to temp files. `stride = 0` means tightly packed (`width *` bytes-per-pixel). The default is `ImagePixelFormat.Bgr24`; other layouts are swizzled in-place during resize / crop and are not converted into an intermediate BGR image.
 
-### ImageSharp 3 (recommended)
+### SimdCodecs (recommended)
+
+Pure managed image decoding (JPEG / PNG / WebP / BMP / GIF / TIFF and more), no native dependencies. Needs `Sdcb.SimdCodecs` 2.0 or later (currently a preview).
+
+```csharp
+using Sdcb.SimdCodecs;
+using Sdcb.SimdCodecs.Abstractions;
+using Sdcb.SimdPaddleOCR;
+using Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny;
+
+using PaddleOcrAll ocr = await PaddleOcrAll.LoadAsync(ChineseV6TinyModels.Default);
+byte[] data = await File.ReadAllBytesAsync("sample.jpg");
+// Bgr24 is the OCR default layout; ApplyOrientation makes phone photos (EXIF Orientation) upright.
+using PixelBuffer image = ImageCodecs.Decode(data, PixelFormat.Bgr24, new DecodeOptions { ApplyOrientation = true });
+PaddleOcrResult result = ocr.Run(image.Pixels, image.Width, image.Height, image.Stride);
+Console.WriteLine(result.Text);
+```
+
+`ImageCodecs.Decode` decodes straight to tightly packed BGR24 in one call (`PixelBuffer.Stride` is the row size in bytes), with no extra conversion or copy. `ApplyOrientation = true` rotates the pixels by the EXIF orientation, so phone photos need no manual handling. It throws `NotSupportedException` when the format cannot be decoded and `InvalidDataException`, with the codec's specific reason, when the file is corrupt. Do not dispose the `PixelBuffer` until `Run` returns.
+
+### ImageSharp 3
+
+When using ImageSharp, also install:
+
+```powershell
+dotnet add package SixLabors.ImageSharp --version 3.1.11
+```
 
 ```csharp
 using System.Runtime.InteropServices;
@@ -204,13 +230,13 @@ Character boxes are estimated from CTC alignment (gaps are split at the midpoint
 
 All four samples share `examples/sample.jpg`. Each sample decodes the image into interleaved pixels (BGR / RGB / BGRA / RGBA are all accepted):
 
-- `examples/ImageSharp.AspNetCore`: ASP.NET Core + ImageSharp 3, upload UI and `POST /api/ocr` JSON API.
+- `examples/SimdCodecs.AspNetCore`: ASP.NET Core + SimdCodecs (pure managed decode to BGR24 in one call, EXIF orientation applied), upload UI and `POST /api/ocr` JSON API.
 - `examples/SkiaSharp.Avalonia`: Avalonia desktop sample, SkiaSharp decode.
 - `examples/OpenCvSharp5.Wpf`: WPF sample, OpenCvSharp5 decode.
 - `examples/SystemDrawing.WinForms`: dual-target WinForms sample for .NET 10 Windows / .NET Framework 4.8, using `Bitmap`/`LockBits`; install the .NET Framework 4.8 Developer Pack before running `net48`, and set the project platform to x64.
 
 ```powershell
-dotnet run --project examples/ImageSharp.AspNetCore
+dotnet run --project examples/SimdCodecs.AspNetCore
 dotnet run --project examples/OpenCvSharp5.Wpf -- path/to/image.jpg
 dotnet run --project examples/SkiaSharp.Avalonia -- path/to/image.jpg
 dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
@@ -244,7 +270,7 @@ Without it, ILC targets the SSE2 / 128-bit `Vector<T>` baseline, `Avx2.IsSupport
 
 ### ImageSharp throws "pixels are not a single contiguous buffer" or `DangerousTryGetSinglePixelMemory` fails?
 
-ImageSharp's default allocator splits pixels into 4MB chunks, so large images do not get one packed buffer. Follow the ImageSharp 3 sample above: clone `Configuration`, set `PreferContiguousImageBuffers`, and fall back to `CopyPixelDataTo`. Do not mutate `Configuration.Default` or PNG/JPEG decoders disappear. The full pattern is in `examples/ImageSharp.AspNetCore/Program.cs`.
+ImageSharp's default allocator splits pixels into 4MB chunks, so large images do not get one packed buffer. Follow the ImageSharp 3 sample above: clone `Configuration`, set `PreferContiguousImageBuffers`, and fall back to `CopyPixelDataTo`. Do not mutate `Configuration.Default` or PNG/JPEG decoders disappear.
 
 ### Why isn't the GPU being used?
 

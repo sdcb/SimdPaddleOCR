@@ -6,7 +6,6 @@
 
 本仓库的示例/测试/基准项目目前引用 `SixLabors.ImageSharp` 3.1.11（核心库 `Sdcb.SimdPaddleOCR` 本身**不**依赖 ImageSharp）：
 
-- `examples/ImageSharp.AspNetCore`
 - `test/Sdcb.SimdPaddleOCR.Tests`
 - `test/Sdcb.SimdPaddleOCR.GpuBench`
 - `test/Sdcb.SimdPaddleOCR.WasmBench`
