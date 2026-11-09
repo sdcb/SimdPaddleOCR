@@ -1,5 +1,4 @@
 using System.Numerics;
-using Sdcb.SimdOnnx.Decoding.Kernels;
 using System.Runtime.CompilerServices;
 #if !NETSTANDARD2_0
 using System.Runtime.Intrinsics;
@@ -98,12 +97,12 @@ internal static class Threshold
             {
                 for (; i <= pixels - width; i += width)
                 {
-                    Vector<float> value = SimdOps.VectorLoad(predictionPtr + i);
-                    invalid |= SimdOps.VectorNonFiniteMask(value);
+                    Vector<float> value = *(Vector<float>*)(predictionPtr + i);
+                    invalid |= NonFiniteMask(value);
                     StoreBitmapBits(bitmap, i, Vector.AsVectorInt32(Vector.GreaterThan(value, vThreshold)), width);
                 }
             }
-            if (SimdOps.VectorAnyNonZero(invalid))
+            if (!Vector.EqualsAll(invalid, Vector<int>.Zero))
                 throw new InvalidDataException("Detector output contains a non-finite value.");
         }
         for (; i < pixels; i++)
@@ -113,6 +112,16 @@ internal static class Threshold
                 throw new InvalidDataException("Detector output contains a non-finite value.");
             bitmap[i] = value > threshold ? (byte)1 : (byte)0;
         }
+    }
+
+    // all-ones lanes where value is NaN or +-Inf
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Vector<int> NonFiniteMask(Vector<float> value)
+    {
+        Vector<int> finite = Vector.AsVectorInt32(Vector.Equals(value, value));
+        Vector<int> infinity = Vector.AsVectorInt32(
+            Vector.GreaterThanOrEqual(Vector.Abs(value), new Vector<float>(float.PositiveInfinity)));
+        return (finite ^ new Vector<int>(-1)) | infinity;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
