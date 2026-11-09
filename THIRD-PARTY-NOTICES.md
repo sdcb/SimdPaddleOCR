@@ -33,6 +33,6 @@ respective owners; this project is not endorsed by or affiliated with them.
 
 The example projects use third-party NuGet packages. They retain their own
 licenses and notices, including Avalonia (MIT), SkiaSharp (MIT), OpenCvSharp5
-(Apache-2.0), and Six Labors ImageSharp (Six Labors Split License). Consult
+(Apache-2.0), and Sdcb.SimdCodecs (MIT). Consult
 the corresponding package distributions before redistributing an example
 application.

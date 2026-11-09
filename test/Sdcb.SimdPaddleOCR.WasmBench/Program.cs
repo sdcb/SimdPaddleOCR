@@ -17,8 +17,8 @@ using Sdcb.SimdPaddleOCR.Models.ChineseV6Medium;
 using Sdcb.SimdPaddleOCR.Models.ChineseV6Small;
 using Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny;
 using Sdcb.SimdPaddleOCR.OnnxSharp;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using Sdcb.SimdCodecs;
+using Sdcb.SimdCodecs.Abstractions;
 
 namespace Sdcb.SimdPaddleOCR.WasmBench;
 
@@ -170,24 +170,13 @@ public static class Program
                 imageBytes = await httpClient.GetByteArrayAsync("/dataset/" + file);
             }
 
-            using Image<Rgb24> image = Image.Load<Rgb24>(imageBytes);
-            byte[] pixels = new byte[checked(image.Width * image.Height * 3)];
-            for (int y = 0; y < image.Height; y++)
-            {
-                for (int x = 0; x < image.Width; x++)
-                {
-                    Rgb24 p = image[x, y];
-                    int o = (y * image.Width + x) * 3;
-                    pixels[o] = p.B;
-                    pixels[o + 1] = p.G;
-                    pixels[o + 2] = p.R;
-                }
-            }
+            // Packed BGR24 (Stride = Width * 3); EXIF orientation is left as stored.
+            using PixelBuffer image = ImageCodecs.Decode(imageBytes, PixelFormat.Bgr24);
 
             bool isWarmup = i < warmupCount && files.Length > 1;
 
             sw.Restart();
-            PaddleOcrResult result = ocr.Run(pixels, image.Width, image.Height, image.Width * 3);
+            PaddleOcrResult result = ocr.Run(image.Pixels, image.Width, image.Height, image.Stride);
             sw.Stop();
 
             var curStages = PipelineProfiler.Snapshot();

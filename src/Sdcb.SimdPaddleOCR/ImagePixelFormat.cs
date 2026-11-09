@@ -12,13 +12,13 @@ public enum ImagePixelFormat
     Bgr24 = 0,
     /// <summary>
     /// 3 bytes, R,G,B. Horizontal gather stays scalar (only 32-bit layouts use SIMD).
-    /// Still cheaper than converting to BGR first. ImageSharp / Skia callers should
-    /// pass <see cref="Rgba32"/> or <see cref="Bgra32"/>.
+    /// Still cheaper than converting to BGR first. Decoders that can emit a 32-bit
+    /// layout should pass <see cref="Rgba32"/> or <see cref="Bgra32"/>.
     /// </summary>
     Rgb24 = 1,
     /// <summary>4 bytes, B,G,R,A. Alpha ignored. Skia / GDI+ 32bpp.</summary>
     Bgra32 = 2,
-    /// <summary>4 bytes, R,G,B,A. Alpha ignored. ImageSharp <c>Rgba32</c>.</summary>
+    /// <summary>4 bytes, R,G,B,A. Alpha ignored. Byte order of most RGBA8 decoders.</summary>
     Rgba32 = 3,
 }
 

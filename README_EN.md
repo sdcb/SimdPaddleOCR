@@ -6,7 +6,7 @@ Pure C# PP-OCRv6 inference library: cross-platform hand-written kernels and GEMM
 Inference runs on [Sdcb.SimdOnnx](https://github.com/sdcb/SimdOnnx), a pure C# engine shared with SimdGcdrNet; there is no dependency on Paddle Inference, ONNX Runtime, or OpenCV native libraries.
 GPU support: Vulkan and Metal (macOS), .NET 10 only — still pure C#, with no bundled native binaries.
 
-The core API accepts interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 are also first-class). It does not decode images, so SimdCodecs, ImageSharp, SkiaSharp, or OpenCvSharp are not required.
+The core API accepts interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 are also first-class). It does not decode images, so SimdCodecs, SkiaSharp, or OpenCvSharp are not required.
 
 ## Quick start
 
@@ -39,48 +39,6 @@ Console.WriteLine(result.Text);
 ```
 
 `ImageCodecs.Decode` decodes straight to tightly packed BGR24 in one call (`PixelBuffer.Stride` is the row size in bytes), with no extra conversion or copy. `ApplyOrientation = true` rotates the pixels by the EXIF orientation, so phone photos need no manual handling. It throws `NotSupportedException` when the format cannot be decoded and `InvalidDataException`, with the codec's specific reason, when the file is corrupt. Do not dispose the `PixelBuffer` until `Run` returns.
-
-### ImageSharp 3
-
-When using ImageSharp, also install:
-
-```powershell
-dotnet add package SixLabors.ImageSharp --version 3.1.11
-```
-
-```csharp
-using System.Runtime.InteropServices;
-using Sdcb.SimdPaddleOCR;
-using Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats;
-using SixLabors.ImageSharp.PixelFormats;
-
-using PaddleOcrAll ocr = await PaddleOcrAll.LoadAsync(ChineseV6TinyModels.Default);
-using Image<Rgba32> image = await Image.LoadAsync<Rgba32>(CreateDecoderOptions(), "sample.jpg");
-Rgba32[]? packedCopy = null;
-if (!image.DangerousTryGetSinglePixelMemory(out Memory<Rgba32> memory))
-{
-    packedCopy = new Rgba32[checked(image.Width * image.Height)];
-    image.CopyPixelDataTo(packedCopy);
-    memory = packedCopy;
-}
-
-PaddleOcrResult result = ocr.Run(MemoryMarshal.AsBytes(memory.Span), image.Width, image.Height,
-    format: ImagePixelFormat.Rgba32);
-Console.WriteLine(result.Text);
-
-// Clone Default so PNG/JPEG decoders stay registered. Do not set this on Configuration.Default.
-// Default allocator splits pixels into 4MB chunks; large images then fail DangerousTryGetSinglePixelMemory.
-static DecoderOptions CreateDecoderOptions()
-{
-    Configuration configuration = Configuration.Default.Clone();
-    configuration.PreferContiguousImageBuffers = true;
-    return new DecoderOptions { Configuration = configuration };
-}
-```
-
-ImageSharp's default allocator splits pixels into 4MB chunks, so `DangerousTryGetSinglePixelMemory` fails on large images. Clone a `Configuration`, set `PreferContiguousImageBuffers` for a zero-copy buffer when possible, and fall back to `CopyPixelDataTo`. Do not mutate `Configuration.Default`.
 
 The next three samples wrap a lock / native pointer as `ReadOnlySpan<byte>` before `Run`. Do not Unlock / Dispose the source until `Run` returns.
 
@@ -244,7 +202,7 @@ dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
 
 Open the web sample in a browser to upload; the API is `POST /api/ocr` (`multipart/form-data` fields `file`, `model`), docs at `/scalar`.
 
-`Sdcb.SimdPaddleOCR` also ships 4 LINQPad scripts (`imagesharp` / `skiasharp` / `opencvsharp5` / `bitmap`): download a sample image, run the tiny model, print text. `bitmap` runs on both LINQPad 5 / .NET Framework 4.8 and .NET 10. The package is tagged `linqpad-samples`, so the free edition can use them.
+`Sdcb.SimdPaddleOCR` also ships 4 LINQPad scripts (`simdcodecs` / `skiasharp` / `opencvsharp5` / `bitmap`): download a sample image, run the tiny model, print text. `bitmap` runs on both LINQPad 5 / .NET Framework 4.8 and .NET 10. The package is tagged `linqpad-samples`, so the free edition can use them.
 
 ## FAQ
 
@@ -267,10 +225,6 @@ When publishing Native AOT on x64, the executable project **must** set:
 ```
 
 Without it, ILC targets the SSE2 / 128-bit `Vector<T>` baseline, `Avx2.IsSupported` is folded to `false`, the AVX2 kernels are stripped, and inference is much slower. Do not set this on CPUs without AVX2. ARM64 AOT already includes NEON / `AdvSimd` in the baseline, so you usually do not need `IlcInstructionSet`.
-
-### ImageSharp throws "pixels are not a single contiguous buffer" or `DangerousTryGetSinglePixelMemory` fails?
-
-ImageSharp's default allocator splits pixels into 4MB chunks, so large images do not get one packed buffer. Follow the ImageSharp 3 sample above: clone `Configuration`, set `PreferContiguousImageBuffers`, and fall back to `CopyPixelDataTo`. Do not mutate `Configuration.Default` or PNG/JPEG decoders disappear.
 
 ### Why isn't the GPU being used?
 
@@ -307,8 +261,7 @@ Model assets and third-party code are not relicensed by this project:
 
 - PP-OCRv6 DET/REC, TextLineOrientation CLS, and dictionaries come from the PaddleOCR ecosystem and are marked
   Apache-2.0 in their source materials; keep origin and license notices when publishing model packages.
-- Sample dependencies follow their upstream licenses; in particular ImageSharp 3.x uses the Six Labors Split License,
-  not a plain MIT license.
+- Sample dependencies follow their upstream licenses.
 
 Full third-party attribution is in
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). PaddleOCR, PP-OCR, and related names belong to their
