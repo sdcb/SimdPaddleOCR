@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace ImageSharp.AspNetCore;
+namespace SimdCodecs.AspNetCore;
 
 public sealed record OcrElapsedMs(double Decode, double Ocr, double Total);
 
