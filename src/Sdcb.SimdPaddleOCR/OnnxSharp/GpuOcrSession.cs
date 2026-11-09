@@ -85,6 +85,18 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         get
         {
             if (_cpu is not null) return _cpu.OutputShape;
+            // A CTC / logits run already compiled this shape, and its output differs from the
+            // full graph's only in the last dimension. Building a Full exec just to read the
+            // shape compiled the vocab MatMul and gave each session another arena and output
+            // staging buffer (medium Vulkan, 4 workers: +40 MB peak working set).
+            if (Cached(Kind.Full) is { } full) return new(full.OutputShape);
+            if (_compiled.ResolveHead(_shape) is { } head)
+                foreach (Kind k in (ReadOnlySpan<Kind>)[Kind.Ctc, Kind.Logits])
+                    if (Cached(k) is { } e)
+                    {
+                        int[] a = e.OutputShape;
+                        return new([.. a.AsSpan()[..^1], head.Columns]);
+                    }
             try { return new(Exec(Kind.Full).OutputShape); }
             catch (Exception ex) { return Fallback(ex).OutputShape; }
         }
@@ -426,6 +438,15 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         e.Run();
         if (EngineProfile.Enabled) EngineProfile.AddOp(_metal ? "MetalRun" : "VulkanRun", System.Diagnostics.Stopwatch.GetTimestamp() - t0);
         return e;
+    }
+
+    /// <summary>The live exec of <paramref name="kind"/> at the current shape, without compiling one.</summary>
+    private IExec? Cached(Kind kind)
+    {
+        string key = $"{kind}:{string.Join("x", _shape)}";
+        foreach (var (k, e) in _execs)
+            if (k == key && e.Current) return e;
+        return null;
     }
 
     private IExec Exec(Kind kind)
