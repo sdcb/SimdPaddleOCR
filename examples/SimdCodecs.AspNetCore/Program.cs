@@ -1,14 +1,12 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
-using ImageSharp.AspNetCore;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Scalar.AspNetCore;
+using Sdcb.SimdCodecs;
+using Sdcb.SimdCodecs.Abstractions;
 using Sdcb.SimdPaddleOCR;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats;
-using SixLabors.ImageSharp.PixelFormats;
+using SimdCodecs.AspNetCore;
 
 const long maxUploadBytes = 20 * 1024 * 1024;
 
@@ -70,27 +68,27 @@ static async Task<IResult> RecognizeAsync(
     Stopwatch stage = Stopwatch.StartNew();
     try
     {
-        await using Stream stream = file.OpenReadStream();
-        using Image<Rgba32> image = await Image.LoadAsync<Rgba32>(OcrImageDecode.Options, stream, cancellationToken);
-        if ((long)image.Width * image.Height > OcrEngine.MaxImagePixels)
+        // The facade decodes from memory: read the upload (at most 20 MB) into one array.
+        byte[] data = new byte[file.Length];
+        await using (Stream stream = file.OpenReadStream())
+            await stream.ReadExactlyAsync(data, cancellationToken);
+
+        // The header gives the size, so an oversized image is refused before any pixel is allocated.
+        // A header that cannot be read is left to Decode below, which says why.
+        if (ImageCodecs.TryReadInfo(data, out ImageInfo info) && (long)info.Width * info.Height > OcrEngine.MaxImagePixels)
             return Results.BadRequest(new OcrError("图片像素超过上限（4000 万）。"));
 
-        Rgba32[]? packedCopy = null;
-        if (!image.DangerousTryGetSinglePixelMemory(out Memory<Rgba32> memory))
-        {
-            packedCopy = new Rgba32[checked(image.Width * image.Height)];
-            image.CopyPixelDataTo(packedCopy);
-            memory = packedCopy;
-        }
+        // One call: packed BGR (the OCR default), EXIF orientation applied so phone photos arrive upright.
+        using PixelBuffer image = ImageCodecs.Decode(data, PixelFormat.Bgr24,
+            new DecodeOptions { ApplyOrientation = true }, cancellationToken);
 
         double decodeMs = stage.Elapsed.TotalMilliseconds;
 
         stage.Restart();
         PaddleOcrAll ocr = await engine.GetAsync(model);
-        ReadOnlySpan<byte> pixels = MemoryMarshal.AsBytes(memory.Span);
         PaddleOcrResult result = upload.Characters
-            ? ocr.Run(pixels, image.Width, image.Height, returnCtcAlignment: true, format: ImagePixelFormat.Rgba32)
-            : ocr.Run(pixels, image.Width, image.Height, format: ImagePixelFormat.Rgba32);
+            ? ocr.Run(image.Pixels, image.Width, image.Height, returnCtcAlignment: true, image.Stride, ImagePixelFormat.Bgr24)
+            : ocr.Run(image.Pixels, image.Width, image.Height, image.Stride, ImagePixelFormat.Bgr24);
         double ocrMs = stage.Elapsed.TotalMilliseconds;
         total.Stop();
 
@@ -105,17 +103,10 @@ static async Task<IResult> RecognizeAsync(
                 Math.Round(total.Elapsed.TotalMilliseconds, 1)),
             [.. result.Lines.Select(line => ToLineDto(line, upload.Characters))]));
     }
-    catch (UnknownImageFormatException)
+    catch (Exception ex) when (ex is NotSupportedException or InvalidDataException)
     {
-        return Results.BadRequest(new OcrError("无法解析图片，请上传 JPEG、PNG、WebP、BMP 或 GIF。"));
-    }
-    catch (InvalidImageContentException ex)
-    {
-        return Results.BadRequest(new OcrError($"图片内容无效：{ex.Message}"));
-    }
-    catch (InvalidOperationException ex) when (ex.Message.Contains("MaxImagePixels", StringComparison.Ordinal))
-    {
-        return Results.BadRequest(new OcrError("图片像素超过上限（4000 万）。"));
+        // The codec's own reason: the detected format that cannot be decoded, or what is wrong with the file.
+        return Results.BadRequest(new OcrError(ex.Message));
     }
     catch (Exception ex)
     {
@@ -180,18 +171,4 @@ internal sealed class OcrUpload
 
     [Description("为 true 时每一行返回单字框。不传则响应中不含 characters。")]
     public bool Characters { get; init; }
-}
-
-// Clone Default so PNG/JPEG decoders stay registered. Do not set this on Configuration.Default.
-file static class OcrImageDecode
-{
-    public static readonly DecoderOptions Options = CreateOptions();
-
-    static DecoderOptions CreateOptions()
-    {
-        Configuration configuration = Configuration.Default.Clone();
-        // Default allocator splits pixels into 4MB chunks; large images then fail DangerousTryGetSinglePixelMemory. OCR needs one packed RGBA buffer.
-        configuration.PreferContiguousImageBuffers = true;
-        return new DecoderOptions { Configuration = configuration };
-    }
 }

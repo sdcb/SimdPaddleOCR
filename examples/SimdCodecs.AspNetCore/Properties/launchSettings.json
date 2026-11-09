@@ -1,6 +1,6 @@
 {
   "profiles": {
-    "ImageSharp.AspNetCore": {
+    "SimdCodecs.AspNetCore": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,

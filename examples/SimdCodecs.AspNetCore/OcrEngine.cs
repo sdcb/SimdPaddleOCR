@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using Sdcb.SimdPaddleOCR;
 
-namespace ImageSharp.AspNetCore;
+namespace SimdCodecs.AspNetCore;
 
 public sealed class OcrEngine : IDisposable
 {
