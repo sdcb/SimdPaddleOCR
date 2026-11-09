@@ -1,7 +1,7 @@
 <Query Kind="Program">
   <NuGetReference>Sdcb.SimdPaddleOCR</NuGetReference>
   <NuGetReference>Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny</NuGetReference>
-  <NuGetReference Version="2.0.0-preview.20261109.2" Prerelease="true">Sdcb.SimdCodecs</NuGetReference>
+  <NuGetReference Version="2.0.0" Prerelease="true">Sdcb.SimdCodecs</NuGetReference>
   <Namespace>Sdcb.SimdCodecs</Namespace>
   <Namespace>Sdcb.SimdCodecs.Abstractions</Namespace>
   <Namespace>Sdcb.SimdPaddleOCR</Namespace>
