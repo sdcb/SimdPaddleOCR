@@ -43,7 +43,7 @@ public sealed class PaddleOcrDetector : IDisposable
             if (_options.MaxPooledSessions < 0) throw new ArgumentOutOfRangeException(nameof(options));
             _intraOpThreads = MathCompat.Clamp(intraOpThreads, 1, 16);
             // One shape-agnostic compiled model; pooled sessions are reshaped per image.
-            _compiled = new CompiledModel(_model, _intraOpThreads);
+            _compiled = new CompiledModel(_model, _intraOpThreads, releaseInput: true);
             if (_options.LimitSideLength is < 32 or > 4096) throw new ArgumentOutOfRangeException(nameof(options));
             _postprocessPixels = checked(_options.LimitSideLength * _options.LimitSideLength);
             if (_options.MaxCandidates is <= 0 or > 10_000) throw new ArgumentOutOfRangeException(nameof(options));
