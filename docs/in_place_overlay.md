@@ -2,7 +2,7 @@
 
 目标不是翻译，是：**盖掉原字，按检测框的方向和高度把识别结果写回去**，字色尽量跟原字。不描检测多边形。算法不要 sunk 进 `Sdcb.SimdPaddleOCR` 核心。
 
-网页参考是 [`overlay.js`](../examples/ImageSharp.AspNetCore/wwwroot/overlay.js)。三个桌面示例已落地，各项目一份原生 `OcrOverlay.cs`，不要再抄旧的绿框红字。
+网页参考是 [`overlay.js`](../examples/SimdCodecs.AspNetCore/wwwroot/overlay.js)。三个桌面示例已落地，各项目一份原生 `OcrOverlay.cs`，不要再抄旧的绿框红字。
 
 ```javascript
 OcrOverlay.draw(ctx, image, lines, { showOriginal: false });
@@ -22,11 +22,11 @@ OcrOverlay.draw(ctx, image, lines, { showOriginal: false });
 
 | 文件 | 画布 |
 | --- | --- |
-| [`overlay.js`](../examples/ImageSharp.AspNetCore/wwwroot/overlay.js) | Canvas 2D |
+| [`overlay.js`](../examples/SimdCodecs.AspNetCore/wwwroot/overlay.js) | Canvas 2D |
 | [`SystemDrawing.WinForms/OcrOverlay.cs`](../examples/SystemDrawing.WinForms/OcrOverlay.cs) | GDI+ `FillPolygon` / `DrawString` |
 | [`SkiaSharp.Avalonia/OcrOverlay.cs`](../examples/SkiaSharp.Avalonia/OcrOverlay.cs) | Skia `DrawPath` / `DrawText` |
 | [`OpenCvSharp5.Wpf/OcrOverlay.cs`](../examples/OpenCvSharp5.Wpf/OcrOverlay.cs) | GDI+（OpenCV 只负责读图和推理） |
-| [`app.js`](../examples/ImageSharp.AspNetCore/wwwroot/app.js) | 上传 / API / `#showOriginal` |
+| [`app.js`](../examples/SimdCodecs.AspNetCore/wwwroot/app.js) | 上传 / API / `#showOriginal` |
 
 页面只调用 overlay，桌面窗口只缓存原图 + 贴字图并切预览。
 
