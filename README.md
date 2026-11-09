@@ -304,7 +304,7 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 CPU 路径在 2.0 也普遍再快 **4–15%**（CTC ArgMax 并行化、动态 intra-op 线程预算、DET 后处理重写；ARM64 另有手写 AdvSIMD MatMul）。
 WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 tiny 中位 **113 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 2.5 倍。
 
-> 切换到共享引擎 Sdcb.SimdOnnx 后（同机交错 A/B）：CPU 全部持平或更快（small 快 19–30%），精度不变；Vulkan 目前慢于 2.0 的专用融合 shader（tiny +40%、small +20%、medium +5%），详见 [SimdOnnx docs/perf.md](https://github.com/sdcb/SimdOnnx/blob/main/docs/perf.md)。
+> 切换到共享引擎 Sdcb.SimdOnnx（0.1.0-preview.7）后，在 Ryzen 7 5800X + RTX 3080 Ti 上与 2.0 原引擎同机交错 A/B：CPU 全部持平或更快（small 快 15–24%，medium 快 1–14%，tiny 快 4%）；Vulkan 也全部持平或更快（tiny 快 12–17%，small 快 3–9%，medium 持平）；精度持平。峰值内存：Vulkan 更低（medium 1009 → 925 MB），CPU 高 2–7%。详见 [SimdOnnx docs/perf.md](https://github.com/sdcb/SimdOnnx/blob/main/docs/perf.md)。
 
 每台设备的完整跑分、精度表和复现命令见 [`docs/perf.md`](docs/perf.md) 与 `docs/` 下各机型报告（`vulkan-*.md`、`metal-m4.md`、`wasm.md`）。
 
