@@ -13,12 +13,12 @@
   </PropertyGroup>
 
   <!--
-    Inference engine. Default: the Sdcb.SimdOnnx package at an exact version (the engine grants this
-    assembly InternalsVisibleTo, so a mismatched build must not load). UseLocalSimdOnnx=true builds
+    Inference engine. Default: the Sdcb.SimdOnnx package at an exact version (the library uses the engine's public
+    API only; its test / bench assemblies still use internals). UseLocalSimdOnnx=true builds
     against a sibling checkout instead (../Sdcb.SimdOnnx).
   -->
   <PropertyGroup>
-    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.7</SdcbSimdOnnxVersion>
+    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.8</SdcbSimdOnnxVersion>
     <SimdOnnxProject Condition="'$(SimdOnnxProject)' == ''">$(MSBuildThisFileDirectory)..\Sdcb.SimdOnnx\src\Sdcb.SimdOnnx\Sdcb.SimdOnnx.csproj</SimdOnnxProject>
     <!-- a stable package pinned to an engine preview (NU5104): accepted while the engine is a preview on
          the ProGet test feed; a nuget.org release of this package needs the engine released first -->

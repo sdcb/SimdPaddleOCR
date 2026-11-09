@@ -48,6 +48,8 @@ internal sealed class CompiledModel : IDisposable
     internal CpuModel? Ctc { get { lock (_gate) return _ctc; } }
     /// <summary>Plans ending at the final Softmax's input (null when the graph does not end in one).</summary>
     internal CpuModel? Logits { get { lock (_gate) return _logits; } }
+    /// <summary>Name of the final Softmax's input (null when the graph does not end in one).</summary>
+    internal string? LogitsName { get { lock (_gate) return _logits?.Options.OutputName; } }
 
     /// <summary>The projection head; resolved once from a plan of <paramref name="probeShape"/>.</summary>
     internal OcrHead? ResolveHead(ReadOnlySpan<int> probeShape)
@@ -55,29 +57,18 @@ internal sealed class CompiledModel : IDisposable
         lock (_gate)
         {
             if (_headResolved) return _head;
-            ExecPlan plan = GraphCompiler.Compile(Model.Onnx, probeShape, Options);
-            ExecNode? softmax = Producer(plan, plan.OutputValue);
-            if (softmax is { Op: ExecOp.Softmax })
+            if (ModelHeads.FindSoftmaxHead(Model.Onnx, probeShape, Options) is { } tail)
             {
-                string logitsName = plan.Values[softmax.In[0]].Name;
-                if (logitsName.Length != 0)
-                    _logits = new CpuModel(Model.Onnx, Options with { OutputName = logitsName }, packs: Full.Packs);
-                _head = OcrHead.TryCreate(plan, softmax);
-                if (_head is not null)
-                    _ctc = new CpuModel(Model.Onnx, Options with { OutputName = _head.ActivationName }, packs: Full.Packs);
+                if (tail.LogitsName.Length != 0) _logits = Full.WithOutput(tail.LogitsName);
+                if (tail.Projection is { } p)
+                {
+                    _head = new OcrHead(p);
+                    _ctc = Full.WithOutput(p.ActivationName);
+                }
             }
             _headResolved = true;
             return _head;
         }
-    }
-
-    internal static ExecNode? Producer(ExecPlan plan, int value)
-    {
-        // zero-copy views (reshape/squeeze/fused tails) have no producer node of their own
-        for (int hops = 0; value >= 0 && hops < 64; hops++, value = plan.Values[value].AliasOf)
-            foreach (ExecNode n in plan.Nodes)
-                if (n.Out.Length == 1 && n.Out[0] == value) return n;
-        return null;
     }
 
     public void Dispose() { }
@@ -86,10 +77,10 @@ internal sealed class CompiledModel : IDisposable
 /// <summary>Constant projection + bias in front of the final Softmax: logits = A·W + b, W [inner, columns].</summary>
 internal sealed class OcrHead
 {
-    private OcrHead(string activationName, float[] weights, float[]? bias, int inner, int columns)
+    internal OcrHead(LinearProjection p)
     {
-        ActivationName = activationName;
-        Projection = new CtcProjection(weights, bias, inner, columns);
+        ActivationName = p.ActivationName;
+        Projection = new CtcProjection(p.Weights, p.Bias, p.Inner, p.Columns);
     }
 
     internal string ActivationName { get; }
@@ -99,37 +90,4 @@ internal sealed class OcrHead
     internal float[]? Bias => Projection.Bias;
     internal int Inner => Projection.Inner;
     internal int Columns => Projection.Columns;
-
-    internal static OcrHead? TryCreate(ExecPlan plan, ExecNode softmax)
-    {
-        ExecNode? p = CompiledModel.Producer(plan, softmax.In[0]);
-        float[]? bias = null;
-        if (p is { Op: ExecOp.Elementwise, P: EwP { Op: EwOp.Add, Act: ActivationKind.None } } && p.In.Length == 2)
-        {
-            int c = plan.Values[p.In[0]].Floats is not null ? 0 : plan.Values[p.In[1]].Floats is not null ? 1 : -1;
-            if (c < 0) return null;
-            bias = plan.Values[p.In[c]].Floats;
-            p = CompiledModel.Producer(plan, p.In[1 - c]);
-            if (p is { P: GemmP { BiasValue: >= 0 } }) return null;
-        }
-        if (p is not { Op: ExecOp.Gemm, P: GemmP g } || g.Act != ActivationKind.None) return null;
-        if (g.BiasValue >= 0)
-        {
-            if (bias is not null) return null;
-            bias = plan.Values[g.BiasValue].Floats;
-            if (bias is null) return null;
-        }
-        CValue a = plan.Values[p.In[0]], b = plan.Values[p.In[1]];
-        if (b.Floats is not { } w || b.Shape.Length != 2 || a.Name.Length == 0 || a.Shape.Length < 2) return null;
-        int inner = g.TransB ? b.Shape[1] : b.Shape[0], columns = g.TransB ? b.Shape[0] : b.Shape[1];
-        if (a.Shape[^1] != inner || (bias is not null && bias.Length != columns)) return null;
-        if (g.TransB)
-        {
-            float[] t = new float[w.Length];
-            for (int n = 0; n < columns; n++)
-                for (int k = 0; k < inner; k++) t[k * columns + n] = w[n * inner + k];
-            w = t;
-        }
-        return new OcrHead(a.Name, w, bias, inner, columns);
-    }
 }

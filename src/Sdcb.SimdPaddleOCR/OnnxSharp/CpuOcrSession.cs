@@ -4,25 +4,25 @@ using Sdcb.SimdOnnx.Engine;
 namespace Sdcb.SimdPaddleOCR.OnnxSharp;
 
 /// <summary>
-/// CPU <see cref="IOcrSession"/> over Sdcb.SimdOnnx plans. One grow-only native arena per session;
-/// the graph input sits at offset 0 of every plan, so the full, head-truncated and logits plans of
-/// the current shape all read the same caller-written input. Not thread-safe.
+/// CPU <see cref="IOcrSession"/> over a Sdcb.SimdOnnx <see cref="CpuSession"/>: one grow-only arena
+/// per session, and the full, head-truncated and logits variants of the current shape all read the
+/// same caller-written input. Not thread-safe.
 /// </summary>
-internal sealed unsafe class CpuOcrSession : IOcrSession
+internal sealed class CpuOcrSession : IOcrSession
 {
     private enum Kind { Full, Ctc, Logits }
 
     private readonly CompiledModel _compiled;
-    private readonly InferenceSession?[] _sessions = new InferenceSession?[3];
+    private readonly CpuSession _session;
+    private readonly int[]?[] _outShapes = new int[]?[3];   // output shape of each variant bound for the current shape
     private int[] _shape = [];
-    private int _volume, _highWater, _threads;
-    private nint _arena;
-    private long _arenaBytes;
+    private int _highWater, _threads;
     private bool _disposed;
 
     internal CpuOcrSession(CompiledModel compiled)
     {
         _compiled = compiled;
+        _session = new CpuSession(compiled.Full);
         _threads = compiled.IntraOpThreads;
         if (compiled.DefaultInputShape is { } shape) Reshape(shape);
     }
@@ -33,50 +33,49 @@ internal sealed unsafe class CpuOcrSession : IOcrSession
     {
         get
         {
-            if (_sessions[(int)Kind.Full] is { } full) return new(full.OutputShape);
-            if (_sessions[(int)Kind.Ctc] is { } ctc && _compiled.ResolveHead(_shape) is { } head)
+            // from a plan this shape already compiled: building the full plan only to read its shape
+            // would cost a compile (and arena) the CTC path never uses
+            if (_outShapes[(int)Kind.Full] is { } full) return new(full);
+            if (_outShapes[(int)Kind.Ctc] is { } a && _compiled.ResolveHead(_shape) is { } head)
             {
-                int[] a = ctc.OutputShape;
                 return new([.. a.AsSpan()[..^1], head.Columns]);
             }
-            return new(Session(Kind.Full).OutputShape);
+            return new(Bind(Kind.Full));
         }
     }
 
-    public Span<float> InputData => _arena == 0 ? [] : new Span<float>((float*)_arena, _volume);
+    public Span<float> InputData => _session.Input;
     public bool InputIsNhwc => _compiled.InputIsNhwc;
     public int IntraOpThreads { get => _threads; set => _threads = MathCompat.Clamp(value, 1, 16); }
     public int HighWaterInputVolume => _highWater;
     public bool PlanForCtcProjection { get; set; }
     public bool GpuAlive => true;
-    public bool IsProfilingEnabled => EngineProfile.Enabled;
+    public bool IsProfilingEnabled => EngineProfiler.Enabled;
 
     public void Reshape(ReadOnlySpan<int> inputShape)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(CpuOcrSession));
-        if (inputShape.SequenceEqual(_shape) && _arena != 0) return;
+        if (inputShape.SequenceEqual(_shape) && _session.Input.Length != 0) return;
         _shape = inputShape.ToArray();
-        long volume = 1;
-        foreach (int d in _shape) volume = checked(volume * d);
-        _volume = checked((int)volume);
-        _highWater = Math.Max(_highWater, _volume);
-        Array.Clear(_sessions, 0, _sessions.Length);
-        bool ctc = PlanForCtcProjection && _compiled.ResolveHead(_shape) is not null;
-        Session(ctc ? Kind.Ctc : Kind.Full);
+        Kind kind = PlanForCtcProjection && _compiled.ResolveHead(_shape) is not null ? Kind.Ctc : Kind.Full;
+        _session.Reshape(_shape, Variant(kind));   // compiles that plan and sizes the arena once
+        _highWater = Math.Max(_highWater, _session.Input.Length);
+        Array.Clear(_outShapes, 0, _outShapes.Length);
+        Bind(kind);
     }
 
-    public ReadOnlySpan<float> RunInternal(ReadOnlySpan<float> input) => Run(Kind.Full, input).Output;
+    public ReadOnlySpan<float> RunInternal(ReadOnlySpan<float> input) => Run(Kind.Full, input);
 
     public bool TryRunUntilCtcProjection(ReadOnlySpan<float> input, out CtcProjectionOperands operands)
     {
         operands = default;
         if (_compiled.ResolveHead(_shape) is not { } head) return false;
-        InferenceSession s = Run(Kind.Ctc, input);
-        int[] a = s.OutputShape;
+        ReadOnlySpan<float> output = Run(Kind.Ctc, input);
+        int[] a = _outShapes[(int)Kind.Ctc]!;
         int rows = a[^2], inner = a[^1];
         if (inner != head.Inner) return false;
-        int batch = checked((int)(s.Output.Length / ((long)rows * inner)));
-        operands = new CtcProjectionOperands(s.Output, head.Projection, batch, rows, -1);
+        int batch = checked((int)(output.Length / ((long)rows * inner)));
+        operands = new CtcProjectionOperands(output, head.Projection, batch, rows, -1);
         return true;
     }
 
@@ -84,68 +83,40 @@ internal sealed unsafe class CpuOcrSession : IOcrSession
     {
         _compiled.ResolveHead(_shape);
         outputIsLogits = _compiled.Logits is not null;
-        return Run(outputIsLogits ? Kind.Logits : Kind.Full, input).Output;
+        return Run(outputIsLogits ? Kind.Logits : Kind.Full, input);
     }
 
     public void NoteProfile(string operation, long started) =>
-        EngineProfile.AddOp(operation, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+        EngineProfiler.Record(operation, System.Diagnostics.Stopwatch.GetTimestamp() - started);
 
-    private InferenceSession Run(Kind kind, ReadOnlySpan<float> input)
+    private ReadOnlySpan<float> Run(Kind kind, ReadOnlySpan<float> input)
     {
         if (_disposed) throw new ObjectDisposedException(nameof(CpuOcrSession));
-        if (input.Length != _volume) throw new ArgumentException("Input buffer size mismatch.", nameof(input));
-        bool aliased = _arena != 0 && System.Runtime.CompilerServices.Unsafe.AreSame(
-            ref MemoryMarshal.GetReference(input), ref *(float*)_arena);
-        InferenceSession s = Session(kind);
-        if (!aliased) input.CopyTo(InputData);
-        s.Threads = _threads;
-        s.Run();
-        return s;
+        if (input.Length != _session.Input.Length) throw new ArgumentException("Input buffer size mismatch.", nameof(input));
+        // decided before binding: binding may grow the arena (moving the input, which it preserves),
+        // after which a caller span over the old InputData points at freed memory
+        bool aliased = System.Runtime.CompilerServices.Unsafe.AreSame(
+            ref MemoryMarshal.GetReference(input), ref MemoryMarshal.GetReference(_session.Input));
+        if (!aliased) input.CopyTo(_session.Input);
+        Bind(kind);
+        _session.Threads = _threads;
+        return _session.Run(Variant(kind));
     }
 
-    private InferenceSession Session(Kind kind)
-    {
-        if (_sessions[(int)kind] is { } existing) return existing;
-        CpuModel model = kind switch
-        {
-            Kind.Ctc => _compiled.Ctc,
-            Kind.Logits => _compiled.Logits,
-            _ => _compiled.Full,
-        } ?? throw new InvalidOperationException($"{kind} plan is unavailable for this model.");
-        ExecPlan plan = model.Plan(_shape);
-        if (plan.BufOffset[plan.Values[plan.InputValue].Buf] != 0)
-            throw new InvalidOperationException("Plan input is not at arena offset 0.");
-        long need = Math.Max(Math.Max((long)plan.ArenaFloats, _volume) * sizeof(float), 64);
-        if (need > _arenaBytes) Grow(need);
-        return _sessions[(int)kind] = new InferenceSession(plan, _arena);
-    }
+    private int[] Bind(Kind kind) =>
+        _outShapes[(int)kind] ??= _session.OutputShape(Variant(kind));
 
-    // keeps the (possibly already written) input; sessions bound to the old arena are dropped
-    private void Grow(long bytes)
+    private CpuModel Variant(Kind kind) => kind switch
     {
-        nint next = (nint)NativeMemory.AllocZeroed((nuint)bytes);
-        if (_arena != 0)
-        {
-            Buffer.MemoryCopy((void*)_arena, (void*)next, bytes, Math.Min(_arenaBytes, (long)_volume * sizeof(float)));
-            NativeMemory.Free((void*)_arena);
-            GC.RemoveMemoryPressure(_arenaBytes);
-        }
-        _arena = next;
-        _arenaBytes = bytes;
-        GC.AddMemoryPressure(bytes);
-        Array.Clear(_sessions, 0, _sessions.Length);
-    }
+        Kind.Ctc => _compiled.Ctc,
+        Kind.Logits => _compiled.Logits,
+        _ => _compiled.Full,
+    } ?? throw new InvalidOperationException($"{kind} plan is unavailable for this model.");
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        Array.Clear(_sessions, 0, _sessions.Length);
-        if (_arena != 0)
-        {
-            NativeMemory.Free((void*)_arena);
-            GC.RemoveMemoryPressure(_arenaBytes);
-            _arena = 0;
-        }
+        _session.Dispose();
     }
 }

@@ -66,10 +66,7 @@ internal static class OcrSessionFactory
     {
         try
         {
-            if (OperatingSystem.IsBrowser() || OperatingSystem.IsWasi()) return null;
-            VkBackend b = VkBackend.Default;
-            _ = b.Dev.DeviceName;
-            return b;
+            return VkBackend.TryGetDefault(out VkBackend? b) ? b : null;
         }
         catch { return null; }
     });
@@ -94,7 +91,7 @@ internal static class OcrSessionFactory
     {
         if (!IsVulkanSelected(backend) || s_vk.Value is not { } vk) return false;
         bool explicitChoice = backend == OcrBackend.Vulkan || backend == OcrBackend.Auto && EnvIs("vulkan");
-        return vk.Dev.CoopMat16 || vk.Dev.SubgroupMin >= 64 || explicitChoice;
+        return vk.Device.CooperativeMatrixFp16 || vk.Device.SubgroupSizeMin >= 64 || explicitChoice;
     }
 
     private static bool MetalUsable(OcrBackend backend) => IsMetalSelected(backend) && s_mtl.Value is not null;

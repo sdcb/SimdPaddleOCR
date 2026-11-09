@@ -34,7 +34,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         public Span<float> Input => s.Input;
         public ReadOnlySpan<float> Output => s.Output;
         public int[] OutputShape => s.OutputShape;
-        public bool Current => s.BuffersCurrent;
+        public bool Current => !s.IsStale;
         public void Run() => s.Run();
         public void Submit() => s.Submit();
         public void Wait() => s.Wait();
@@ -56,7 +56,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     // recent shape × variant sessions (REC widths cycle within an image); on Vulkan they share one
     // grow-only arena / staging set, so each costs only a command buffer
     private const int MaxExecs = 96;
-    private VkSessionBuffers? _vkBuffers;
+    private VkBufferPool? _vkBuffers;
     private const int MaxDeviceLosses = 3;
     private int _deviceLosses;
     private CpuOcrSession? _lostCpu;   // finished the call that hit the last device loss
@@ -116,7 +116,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     public int HighWaterInputVolume => _highWater;
     public bool PlanForCtcProjection { get; set; }
     public bool GpuAlive => _cpu is null;
-    public bool IsProfilingEnabled => EngineProfile.Enabled;
+    public bool IsProfilingEnabled => EngineProfiler.Enabled;
 
     public void Reshape(ReadOnlySpan<int> inputShape)
     {
@@ -207,7 +207,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
                 // Vulkan: the compiled graph knows the shape (no session, and no Reshape: that would
                 // warm the full-output graph the batched path never runs)
                 if (_metal) Reshape(_units[u]);
-                int[] o = _metal ? Exec(Kind.Ctc).OutputShape : CtcGraph(_units[u]).Plan.Values[CtcGraph(_units[u]).Plan.OutputValue].Shape;
+                int[] o = _metal ? Exec(Kind.Ctc).OutputShape : CtcOutputShape(_units[u]);
                 if (o[^1] != h.Inner) return false;
                 rows[u] = o[^2];
             }
@@ -220,11 +220,11 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         return true;
     }
 
-    private VkGraphModel CtcGraph(int[] shape) =>
-        VkBackend.Default.GraphFor(_compiled.Model.Onnx, shape, OptionsFor(Kind.Ctc, shape));
+    private int[] CtcOutputShape(int[] shape) =>
+        VkBackend.Default.OutputShape(_compiled.Model.Onnx, shape, OptionsFor(Kind.Ctc, shape));
 
     // every unit of an image in one re-recorded, level-interleaved submission (in waves)
-    private VkUnitRunner? _runner;
+    private VkBatch? _runner;
 
     public bool TryRunManyUntilCtcProjection(CtcUnitsReady onReady)
     {
@@ -326,15 +326,15 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         int[] offsets = new int[n], actLen = new int[n];
         long[] inOff = new long[n + 1];
         float[] acts;
-        VkUnitRunner runner;
+        VkBatch runner;
         try
         {
             VkBackend be = VkBackend.Default;
-            if (_runner is null || !ReferenceEquals(_runnerDev, be.Dev))
+            // a batch made before a device loss is dead: the backend then hands out a new device
+            if (_runner is null || !ReferenceEquals(_runner.Backend, be))
             {
                 _runner?.Dispose();
-                _runner = new VkUnitRunner(be.Dev);
-                _runnerDev = be.Dev;
+                _runner = be.CreateBatch();
             }
             runner = _runner;
             runner.Clear();
@@ -346,16 +346,14 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
                 long v = 1;
                 foreach (int d in _units[u]) v *= d;
                 inOff[u + 1] = inOff[u] + v;
-                VkGraphModel g = be.AcquireGraph(_compiled.Model.Onnx, _units[u], OptionsFor(Kind.Ctc, _units[u]));
-                try { runner.Add(g); }
-                finally { g.Release(); }
+                runner.Add(_compiled.Model.Onnx, _units[u], OptionsFor(Kind.Ctc, _units[u]));
                 long o = 1;
                 foreach (int d in runner.OutputShape(u)) o *= d;
                 if (o % inner != 0) return false;
                 actLen[u] = (int)o;
                 offsets[u] = total;
                 total = checked(total + (int)o);
-                if (u + 1 == cut1 || u + 1 == cut2) runner.Cut();
+                if (u + 1 == cut1 || u + 1 == cut2) runner.EndWave();
             }
             for (int u = 0; u < n; u++)
                 _unitInput.AsSpan((int)inOff[u], (int)(inOff[u + 1] - inOff[u])).CopyTo(runner.Input(u));
@@ -424,19 +422,17 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         return deviceOk && ok;
     }
 
-    private VkDevice? _runnerDev;
-
     public void NoteProfile(string operation, long started) =>
-        EngineProfile.AddOp(operation, System.Diagnostics.Stopwatch.GetTimestamp() - started);
+        EngineProfiler.Record(operation, System.Diagnostics.Stopwatch.GetTimestamp() - started);
 
     private IExec Run(Kind kind, ReadOnlySpan<float> input)
     {
         if (input.Length != _volume) throw new ArgumentException("Input buffer size mismatch.", nameof(input));
         IExec e = Exec(kind);
         input.CopyTo(e.Input);
-        long t0 = EngineProfile.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        long t0 = EngineProfiler.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         e.Run();
-        if (EngineProfile.Enabled) EngineProfile.AddOp(_metal ? "MetalRun" : "VulkanRun", System.Diagnostics.Stopwatch.GetTimestamp() - t0);
+        if (EngineProfiler.Enabled) EngineProfiler.Record(_metal ? "MetalRun" : "VulkanRun", System.Diagnostics.Stopwatch.GetTimestamp() - t0);
         return e;
     }
 
@@ -469,7 +465,7 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         IExec exec = _metal
             ? new MtlExec(MetalBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt))
             : new VkExec(VkBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt,
-                _vkBuffers ??= new VkSessionBuffers(VkBackend.Default.Dev)));
+                _vkBuffers ??= VkBackend.Default.CreateBufferPool()));
         _execs.Add((key, exec));
         if (_execs.Count > MaxExecs)
         {
