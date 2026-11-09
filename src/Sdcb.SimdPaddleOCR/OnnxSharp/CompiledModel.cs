@@ -20,11 +20,13 @@ internal sealed class CompiledModel : IDisposable
     private OcrHead? _head;
     private CpuModel? _ctc, _logits;
 
-    internal CompiledModel(Model model, int intraOpThreads)
+    /// <param name="releaseInput">the caller writes a fresh input before every run and reads only the
+    /// output (the detector): the CPU arena may reuse the input buffer after its last read.</param>
+    internal CompiledModel(Model model, int intraOpThreads, bool releaseInput = false)
     {
         Model = model ?? throw new ArgumentNullException(nameof(model));
         IntraOpThreads = MathCompat.Clamp(intraOpThreads, 1, 16);
-        Full = new CpuModel(model.Onnx, Options);
+        Full = new CpuModel(model.Onnx, releaseInput ? Options with { ReleaseInputs = true } : Options);
     }
 
     /// <summary>Compiles <paramref name="inputShape"/> up front (sessions start bound to it).</summary>
