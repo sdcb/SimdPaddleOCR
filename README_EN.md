@@ -184,6 +184,26 @@ foreach (PaddleOcrLine line in result.Lines)
 
 Character boxes are estimated from CTC alignment (gaps are split at the midpoint), good enough for per-character overlays and redaction. The default is `false`, so you pay nothing unless you ask for it.
 
+## Page orientation (0°/90°/180°/270°)
+
+When a scan or photo is turned by 90°/180°/270°, detect the orientation and turn the page upright before OCR. The orientation model (PP-LCNet_x1_0_doc_ori) lives in the separate [SimdPaddleOCR.Models](https://github.com/sdcb/SimdPaddleOCR.Models) repository and ships as the `Sdcb.SimdPaddleOCR.Models.DocumentOrientation` package, which only hands out the model `Stream`:
+
+```csharp
+using Sdcb.SimdPaddleOCR.Models.DocumentOrientation;
+
+using var orientation = new PaddleOcrDocumentOrientationClassifier(DocumentOrientationModel.OpenRead());
+PaddleOcrDocumentOrientationResult o = orientation.Classify(bgr, width, height);   // o.OrientationDegrees: how far the page is turned clockwise
+
+(int w, int h) = PaddleOcrDocumentRotation.RotatedSize(width, height, o.OrientationDegrees);
+byte[] upright = new byte[w * h * 3];
+PaddleOcrDocumentRotation.Rotate(bgr, width, height, 0, ImagePixelFormat.Bgr24, o.OrientationDegrees, upright);
+PaddleOcrResult result = ocr.Run(upright, w, h);
+
+// map back to source-image coordinates if needed (text, scores and CTC alignment are kept)
+PaddleOcrLine[] lines = [.. result.Lines.Select(l => PaddleOcrDocumentRotation.ToSource(l, width, height, o.OrientationDegrees))];
+```
+
+It is a separate step, not part of `PaddleOcrAll`; a 500×500 image takes about 3 ms on the CPU. Thanks to [@hnlyf168](https://github.com/hnlyf168) for the implementation in [#32](https://github.com/sdcb/SimdPaddleOCR/pull/32).
 ## Examples
 
 All four samples share `examples/sample.jpg`. Each sample decodes the image into interleaved pixels (BGR / RGB / BGRA / RGBA are all accepted):

@@ -184,6 +184,26 @@ foreach (PaddleOcrLine line in result.Lines)
 
 字符框由 CTC 对齐估算（字符间空白按中点切），适合做按字覆盖、打码。默认 `false`，不需要就不付这部分开销。
 
+## 整页方向校正（0°/90°/180°/270°）
+
+扫描件或照片整页转了 90°/180°/270° 时，可以在 OCR 之前先识别方向、把页面转正。方向模型（PP-LCNet_x1_0_doc_ori）在独立的 [SimdPaddleOCR.Models](https://github.com/sdcb/SimdPaddleOCR.Models) 仓库，以 `Sdcb.SimdPaddleOCR.Models.DocumentOrientation` 包发布，只提供模型的 `Stream`：
+
+```csharp
+using Sdcb.SimdPaddleOCR.Models.DocumentOrientation;
+
+using var orientation = new PaddleOcrDocumentOrientationClassifier(DocumentOrientationModel.OpenRead());
+PaddleOcrDocumentOrientationResult o = orientation.Classify(bgr, width, height);   // o.OrientationDegrees：页面顺时针转了多少度
+
+(int w, int h) = PaddleOcrDocumentRotation.RotatedSize(width, height, o.OrientationDegrees);
+byte[] upright = new byte[w * h * 3];
+PaddleOcrDocumentRotation.Rotate(bgr, width, height, 0, ImagePixelFormat.Bgr24, o.OrientationDegrees, upright);
+PaddleOcrResult result = ocr.Run(upright, w, h);
+
+// 需要原图坐标时再映射回去（文本、分数、CTC 对齐不变）
+PaddleOcrLine[] lines = [.. result.Lines.Select(l => PaddleOcrDocumentRotation.ToSource(l, width, height, o.OrientationDegrees))];
+```
+
+它是独立的一步，不在 `PaddleOcrAll` 里；500×500 的图在 CPU 上约 3 ms。感谢 [@hnlyf168](https://github.com/hnlyf168) 在 [#32](https://github.com/sdcb/SimdPaddleOCR/pull/32) 中的实现。
 ## 示例
 
 四个示例共用 `examples/sample.jpg`，图片由示例负责解码为交错像素（BGR / RGB / BGRA / RGBA 均可）：

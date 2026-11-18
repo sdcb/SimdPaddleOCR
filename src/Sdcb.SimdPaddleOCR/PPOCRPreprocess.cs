@@ -13,6 +13,33 @@ internal static class PPOCRPreprocess
         PixelNormalization.MeanStd([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]);
     private static readonly PixelNormalization RecNormalization =
         PixelNormalization.FromFunction((_, value) => value * (2.0f / 255.0f) - 1.0f);
+    // Document orientation (PaddleX NormalizeImage on RGB): v * alpha + beta with alpha = 1 / 255 / std
+    // and beta = -mean / std each rounded to float first, as PaddleX evaluates it in float32.
+    private static readonly double[] DocumentMean = [0.485, 0.456, 0.406], DocumentStd = [0.229, 0.224, 0.225];
+    private static readonly PixelNormalization DocumentNormalization = PixelNormalization.FromFunction(
+        (c, value) => value * (float)(1.0 / 255 / DocumentStd[c]) + (float)(-DocumentMean[c] / DocumentStd[c]),
+        ChannelOrder.Rgb);
+
+    internal const int DocumentOrientationSize = 224;
+
+    /// <summary>
+    /// PaddleX preprocessing of PP-LCNet_x1_0_doc_ori: resize the short side to 256 (sizes rounded
+    /// half-to-even like Python's <c>round</c>), center-crop 224 x 224, ImageNet mean / std on RGB.
+    /// Only the crop window is resized, so very wide or tall pages cost no extra memory.
+    /// </summary>
+    internal static void DocumentOrientation(ReadOnlySpan<byte> source, int width, int height, int stride,
+        Span<float> output, bool nhwc, ImagePixelFormat format = ImagePixelFormat.Bgr24)
+    {
+        ValidateSource(source, width, height, stride, format);
+        const int size = DocumentOrientationSize;
+        if (output.Length != 3 * size * size) throw new ArgumentException("Invalid document orientation input size.");
+        double scale = 256.0 / Math.Min(width, height);
+        int resizedWidth = checked((int)Math.Round(width * scale, MidpointRounding.ToEven));
+        int resizedHeight = checked((int)Math.Round(height * scale, MidpointRounding.ToEven));
+        ImageTensor.ResizeLinearCrop(source, width, height, stride, (PixelFormat)format, resizedWidth, resizedHeight,
+            (resizedWidth - size) / 2, (resizedHeight - size) / 2, size, size, output,
+            nhwc ? TensorLayout.Nhwc : TensorLayout.Nchw, DocumentNormalization);
+    }
 
     /// <summary>
     /// Runs <paramref name="body"/> for every line index on up to

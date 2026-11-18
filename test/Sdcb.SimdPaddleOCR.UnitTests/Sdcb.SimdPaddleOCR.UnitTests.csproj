@@ -35,6 +35,8 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Fixtures/FusedCtcScore.onnx.gz" />
+    <EmbeddedResource Include="Fixtures/DocOrientationTiny*.onnx.gz" LogicalName="Fixtures.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Assets/Orientation/preprocess.json" LogicalName="Assets.Orientation.preprocess.json" />
     <Using Include="Xunit" />
   </ItemGroup>
 </Project>

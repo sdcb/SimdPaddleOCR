@@ -14,8 +14,8 @@ public sealed class PaddleOcrDetectorOptions
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool
     /// is full are disposed instead of pooled, capping memory at the cost of
     /// re-creating sessions when concurrency exceeds the cap. The default is
-    /// <see cref="Environment.ProcessorCount">, enough for one session per core;
-    /// set to <see cref="int.MaxValue"> for an unbounded pool.
+    /// <see cref="Environment.ProcessorCount"/>, enough for one session per core;
+    /// set to <see cref="int.MaxValue"/> for an unbounded pool.
     /// </summary>
     public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
     public int LimitSideLength { get; init; } = 960;
@@ -45,12 +45,39 @@ public sealed class PaddleOcrClassifierOptions
     /// <summary>
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool
     /// is full are disposed instead of pooled. The default is
-    /// <see cref="Environment.ProcessorCount">; set to <see cref="int.MaxValue">
+    /// <see cref="Environment.ProcessorCount"/>; set to <see cref="int.MaxValue"/>
     /// for an unbounded pool.
     /// </summary>
     public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
 }
 
+/// <summary>Options for <see cref="PaddleOcrDocumentOrientationClassifier"/>.</summary>
+public sealed class PaddleOcrDocumentOrientationOptions
+{
+    /// <summary>Compute backend for the orientation graph. Default <see cref="OcrBackend.Auto"/>.</summary>
+    public OcrBackend Backend { get; init; } = OcrBackend.Auto;
+    /// <summary>CPU operator threads; 0 (default) uses up to 4 logical processors, otherwise 1 to 16.</summary>
+    public int IntraOpThreads { get; init; }
+    public long MaxImagePixels { get; init; } = 40_000_000;
+    /// <summary>
+    /// Upper bound on pooled reusable sessions. Sessions returned while the pool
+    /// is full are disposed instead of pooled. The default is
+    /// <see cref="Environment.ProcessorCount"/>; 0 disposes every session after use.
+    /// </summary>
+    public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
+}
+
+/// <summary>Clockwise orientation of a whole page, as predicted by the four-class document model.</summary>
+/// <param name="Label">Highest-scoring class: 0, 1, 2, 3 for 0, 90, 180, 270 degrees clockwise.</param>
+/// <param name="Score">The model's score for <paramref name="Label"/> (a softmax probability for the official model).</param>
+public readonly record struct PaddleOcrDocumentOrientationResult(uint Label, float Score)
+{
+    /// <summary>
+    /// Clockwise page orientation: 0, 90, 180 or 270. Rotating the image counterclockwise by this
+    /// angle (<see cref="PaddleOcrDocumentRotation.Rotate"/>) makes it upright.
+    /// </summary>
+    public int OrientationDegrees => checked((int)Label * 90);
+}
 /// <summary>Options for the CTC recognizer.</summary>
 public sealed class PaddleOcrRecognizerOptions
 {
@@ -58,8 +85,8 @@ public sealed class PaddleOcrRecognizerOptions
     /// Upper bound on pooled reusable sessions. Sessions returned while the pool
     /// is full are disposed instead of pooled, capping memory at the cost of
     /// re-creating sessions when concurrency exceeds the cap. The default is
-    /// <see cref="Environment.ProcessorCount">, enough for one session per core;
-    /// set to <see cref="int.MaxValue"> for an unbounded pool.
+    /// <see cref="Environment.ProcessorCount"/>, enough for one session per core;
+    /// set to <see cref="int.MaxValue"/> for an unbounded pool.
     /// </summary>
     public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
     public int TargetWidth { get; init; } = 320;
