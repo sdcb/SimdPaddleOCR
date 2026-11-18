@@ -589,9 +589,11 @@ public sealed class PaddleOcrRecognizer : IDisposable
                         textLength += label.Length;
                     }
                     // Softmax is monotonic, so class selection used logits.
-                    // Compute only the probability that contributes to the
-                    // result score; blank and CTC-repeat rows need no exp at
-                    // all.
+                    // Compact rows already carry the winner's softmax
+                    // probability (the fused projection accumulates the
+                    // denominator online). Dense logit rows compute only the
+                    // probability that contributes to the result score; blank
+                    // and CTC-repeat rows need no exp at all.
                     float probability = compact
                         ? bestValue
                         : denseIsLogits
@@ -692,7 +694,8 @@ public sealed class PaddleOcrRecognizer : IDisposable
 
     /// <summary>
     /// CTC decode view: either session dense logits/probs or compact ArgMax
-    /// buffers rented for this call. Dispose returns rented arrays.
+    /// buffers (class index + its softmax probability per step) rented for
+    /// this call. Dispose returns rented arrays.
     /// </summary>
     private ref struct CtcDecodeInput
     {
