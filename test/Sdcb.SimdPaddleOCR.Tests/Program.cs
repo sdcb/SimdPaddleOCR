@@ -3,8 +3,6 @@ using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using System.Runtime.Intrinsics.Arm;
-using System.Runtime.Intrinsics.X86;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -214,10 +212,10 @@ SetEnv(meta, "arm64Sve", "DOTNET_EnableArm64Sve");
 SetEnv(meta, "arm64Sve2", "DOTNET_EnableArm64Sve2");
 meta["vectorCount"] = Vector<float>.Count;
 meta["vectorHardwareAccelerated"] = Vector.IsHardwareAccelerated;
-meta["avxSupported"] = Avx.IsSupported;
-meta["avx2Supported"] = Avx2.IsSupported;
-meta["avx512Supported"] = Avx512F.IsSupported;
-meta["advSimdSupported"] = AdvSimd.IsSupported;
+meta["avxSupported"] = IsaSupported("X86.Avx");
+meta["avx2Supported"] = IsaSupported("X86.Avx2");
+meta["avx512Supported"] = IsaSupported("X86.Avx512F");
+meta["advSimdSupported"] = IsaSupported("Arm.AdvSimd");
 meta["effectiveIsa"] = EffectiveIsa();
 meta["sampleCount"] = decoded.Length;
 meta["framework"] = RuntimeInformation.FrameworkDescription;
@@ -241,12 +239,19 @@ Console.WriteLine($"saved: {outPath}");
 BenchSummary.Print(BenchSummary.Parse(outPath, null, hasMetadata ? metadataPath : null));
 return 0;
 
+// The runtime's own ISA classes, read by name: in ns2.0 mode the library under test carries the
+// engine's internal IsSupported = false stubs in the same namespaces, and this assembly sees them
+// through InternalsVisibleTo, so the type names alone would be ambiguous (CS0433).
+static bool IsaSupported(string name) =>
+    typeof(object).Assembly.GetType("System.Runtime.Intrinsics." + name)
+        ?.GetProperty("IsSupported")?.GetValue(null) is true;
+
 static string EffectiveIsa()
 {
-    if (Avx512F.IsSupported) return "avx512";
-    if (Avx2.IsSupported) return "avx2";
-    if (Avx.IsSupported) return "avx";
-    if (AdvSimd.IsSupported) return "advsimd";
+    if (IsaSupported("X86.Avx512F")) return "avx512";
+    if (IsaSupported("X86.Avx2")) return "avx2";
+    if (IsaSupported("X86.Avx")) return "avx";
+    if (IsaSupported("Arm.AdvSimd")) return "advsimd";
     if (Vector.IsHardwareAccelerated) return "vector";
     return "scalar";
 }
