@@ -18,21 +18,11 @@
     <None Include="..\..\README.md" Pack="true" PackagePath="README.md" />
     <None Include="linqpad-samples\*.linq" Pack="true" PackagePath="linqpad-samples" />
   </ItemGroup>
-  <ItemGroup Condition="'$(UseLocalSimdOnnx)' == 'true'">
-    <ProjectReference Include="$(SimdOnnxProject)" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(UseLocalSimdOnnx)' != 'true'">
-    <PackageReference Include="Sdcb.SimdOnnx" Version="[$(SdcbSimdOnnxVersion)]" />
-  </ItemGroup>
+  <!-- the engine, compiled in as internal types (adds its ns2.0 polyfill packages too) -->
+  <Import Project="$(SimdOnnxRoot)src\Sdcb.SimdOnnx\Sdcb.SimdOnnx.Sources.props" />
   <!-- ns2.0: CPU only (the engine's Vector<T> / scalar tiers). -->
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
     <Compile Remove="Backends/**/*.cs" />
-    <PackageReference Include="Microsoft.Bcl.Numerics" Version="10.0.11" />
-    <PackageReference Include="System.Memory" Version="4.6.3" />
-    <PackageReference Include="System.Numerics.Vectors" Version="4.6.1" />
-    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
-    <PackageReference Include="System.Threading.Tasks.Extensions" Version="4.6.3" />
-    <PackageReference Include="PolySharp" Version="1.15.0" PrivateAssets="all" />
     <Compile Remove="**/*Avx*.cs" />
     <Compile Remove="**/*Avx512*.cs" />
     <Compile Remove="**/*AdvSimd.cs" />

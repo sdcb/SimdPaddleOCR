@@ -3,7 +3,7 @@
 **中文** | [English](README_EN.md)
 
 纯 C# PP-OCRv6 推理库：多平台手写 Kernel / GEMM 等算子、超高性能、低内存需求、超高准确率。
-推理引擎为纯 C# 的 [Sdcb.SimdOnnx](https://github.com/sdcb/SimdOnnx)（与 SimdGcdrNet 共用），不依赖 Paddle Inference、ONNX Runtime 或 OpenCV 原生库。
+推理引擎为纯 C# 的 [SimdOnnx](https://github.com/sdcb/SimdOnnx)（与 SimdGcdrNet 共用），以源码形式（git submodule）编译进本库，类型全部 internal，不额外引入引擎包；不依赖 Paddle Inference、ONNX Runtime 或 OpenCV 原生库。
 GPU 支持 Vulkan 与 Metal（macOS），仅 .NET 10；同样纯 C#、不内嵌任何原生二进制。
 
 核心 API 接收交错像素内存（默认 BGR24，也可直接传 RGB24 / BGRA32 / RGBA32），不负责图片解码，因此不会强制引入 SimdCodecs、SkiaSharp 或 OpenCvSharp。

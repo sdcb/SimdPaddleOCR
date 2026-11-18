@@ -1,0 +1,3 @@
+[submodule "external/SimdOnnx"]
+	path = external/SimdOnnx
+	url = https://github.com/sdcb/SimdOnnx.git

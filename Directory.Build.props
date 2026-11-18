@@ -13,16 +13,12 @@
   </PropertyGroup>
 
   <!--
-    Inference engine. Default: the Sdcb.SimdOnnx package at an exact version (the library uses the engine's public
-    API only; its test / bench assemblies still use internals). UseLocalSimdOnnx=true builds
-    against a sibling checkout instead (../Sdcb.SimdOnnx).
+    Inference engine: the SimdOnnx source, a git submodule at external/SimdOnnx, compiled into
+    Sdcb.SimdPaddleOCR with every engine type internal (no engine package to pin; see SimdOnnx
+    docs/decisions.md, 2026-11-18). Override SimdOnnxRoot to build against another checkout.
   -->
   <PropertyGroup>
-    <SdcbSimdOnnxVersion Condition="'$(SdcbSimdOnnxVersion)' == ''">0.1.0-preview.8</SdcbSimdOnnxVersion>
-    <SimdOnnxProject Condition="'$(SimdOnnxProject)' == ''">$(MSBuildThisFileDirectory)..\Sdcb.SimdOnnx\src\Sdcb.SimdOnnx\Sdcb.SimdOnnx.csproj</SimdOnnxProject>
-    <!-- a stable package pinned to an engine preview (NU5104): accepted while the engine is a preview on
-         the ProGet test feed; a nuget.org release of this package needs the engine released first -->
-    <NoWarn Condition="$(SdcbSimdOnnxVersion.Contains('-'))">$(NoWarn);NU5104</NoWarn>
+    <SimdOnnxRoot Condition="'$(SimdOnnxRoot)' == ''">$(MSBuildThisFileDirectory)external\SimdOnnx\</SimdOnnxRoot>
   </PropertyGroup>
 
   <PropertyGroup>

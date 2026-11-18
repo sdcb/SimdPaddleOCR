@@ -3,7 +3,7 @@
 [中文](README.md) | **English**
 
 Pure C# PP-OCRv6 inference library: cross-platform hand-written kernels and GEMM, very high performance, low memory requirements, and very high accuracy.
-Inference runs on [Sdcb.SimdOnnx](https://github.com/sdcb/SimdOnnx), a pure C# engine shared with SimdGcdrNet; there is no dependency on Paddle Inference, ONNX Runtime, or OpenCV native libraries.
+Inference runs on [SimdOnnx](https://github.com/sdcb/SimdOnnx), a pure C# engine shared with SimdGcdrNet. Its source (a git submodule) compiles into this library with every engine type internal, so there is no separate engine package; there is no dependency on Paddle Inference, ONNX Runtime, or OpenCV native libraries.
 GPU support: Vulkan and Metal (macOS), .NET 10 only — still pure C#, with no bundled native binaries.
 
 The core API accepts interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 are also first-class). It does not decode images, so SimdCodecs, SkiaSharp, or OpenCvSharp are not required.
