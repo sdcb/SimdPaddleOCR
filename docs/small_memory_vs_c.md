@@ -2,7 +2,7 @@
 
 给后续实现用的交接文档。约束：**不要牺牲本库（sharp）的墙钟和正确率**，只评估/借鉴 C 侧为什么 100 张之后的 Working Set 涨得少。
 
-相关正式读数规则见 [`perf.md`](perf.md)。本文数字是本机 Ryzen 7 5800X，不要和 CI replica 毫秒硬接。
+本文数字是本机 Ryzen 7 5800X，不要和 CI replica 毫秒硬接。
 
 ---
 
@@ -155,7 +155,7 @@ sharp 4w 阶段（mean ms，c 无 profiler）：
 
 ### 4.2 1.3.0 本机 small 4w（`37fe1fd`，2026-09-14）
 
-见 [`perf.md`](perf.md) 本机表。JSON：`bench-out/csharp-small-4w.json`、`c-small-4w.json`。
+JSON：`bench-out/csharp-small-4w.json`、`c-small-4w.json`。
 
 | 引擎 | mean (median / p95) | exact_lines | CER | WS peak |
 | --- | ---: | ---: | ---: | ---: |

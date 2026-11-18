@@ -1,6 +1,6 @@
 # SimdPaddleOCR 性能基准 — Apple M4 (osx-arm64)
 
-> 口径与 CI 守门见 `perf.md`。本文是**单台 Apple Silicon 的实测基线**，主要用途：
+> 本文是**单台 Apple Silicon 的实测基线**，主要用途：
 > 给将来的 Metal GPU 后端提供同机 CPU 对照（det/rec 图级耗时、算子分布、带宽与内存水位）。
 
 ## 环境

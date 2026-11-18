@@ -285,7 +285,7 @@ Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `Pac
 
 > After moving to the shared Sdcb.SimdOnnx engine (0.1.0-preview.7), an interleaved A/B against the 2.0 in-tree engine on a Ryzen 7 5800X + RTX 3080 Ti: CPU is at parity or faster everywhere (small 15–24% faster, medium 1–14%, tiny 4%); Vulkan is at parity or faster everywhere (tiny 12–17% faster, small 3–9%, medium at parity); accuracy is at parity. Peak memory: lower on Vulkan (medium 1009 → 925 MB), 2–7% higher on CPU. Details: [SimdOnnx docs/perf.md](https://github.com/sdcb/SimdOnnx/blob/main/docs/perf.md).
 
-Full benchmarks, accuracy tables, and reproduction commands per device: [`docs/perf.md`](docs/perf.md) and the per-machine reports under `docs/` (`vulkan-*.md`, `metal-m4.md`, `wasm.md`).
+Benchmarks, accuracy tables, and reproduction commands per device: the per-machine reports under `docs/` (`vulkan-*.md`, `metal-m4.md`, `wasm.md`). [`docs/perf.md`](docs/perf.md) has the same-machine A/B after the engine moved to embedded source.
 
 ## Reproducing performance
 

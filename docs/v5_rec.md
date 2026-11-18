@@ -1,6 +1,6 @@
 # 官方 PP-OCRv5 识别图：水有多深
 
-Simd 对外承诺的是 **PP-OCRv6**。识别热路径、模型包、CI、合成数据集和 `docs/perf.md` 基线都钉在 `ChineseV6Tiny / Small / Medium` 上。
+Simd 对外承诺的是 **PP-OCRv6**。识别热路径、模型包、CI 和合成数据集都钉在 `ChineseV6Tiny / Small / Medium` 上。
 
 「顺手支持 V5 rec」看起来便宜：官方中英 mobile 包能下载，图上没有未知算子，CTC 字典编号也对得上。实测结论是另一回事——**能加载，不能推理**；而且就算把形状推断补上，**现有 harness 也接不住这张图**。没有回归网，这条支持会变成每次改 `ReshapeShape` 都要人肉赌 V6 没被带崩。
 
@@ -169,7 +169,7 @@ mobile 中英同构，修一次两个都能加载。`PP-OCRv5_server_rec` 没拆
 | ------------------- | -------------------------------------------------------------------------- |
 | `test.yml` unittest | 内核、NHWC、像素格式、契约。**没有 `ReshapeShape` 用例**，也没有官方 V5 图 |
 | smoke / bench       | `--model tiny\|small\|medium`，全部是 `ChineseV6*` 整管线                  |
-| 合成 `dataset/`     | 为 V6 DET+REC 生成，基线写在 `docs/perf.md`                                |
+| 合成 `dataset/`     | 为 V6 DET+REC 生成                                                         |
 | C 引擎对照          | 同一套 V6 资源                                                             |
 | 模型 NuGet          | 只有中文 V6 + 方向 CLS                                                     |
 
