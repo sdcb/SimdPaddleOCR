@@ -220,7 +220,17 @@ dotnet run --project examples/SkiaSharp.Avalonia -- path/to/image.jpg
 dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
 ```
 
-Web 示例打开站点即可上传；API 为 `POST /api/ocr`（`multipart/form-data` 字段 `file`、`model`），文档在 `/scalar`。
+Web 示例打开站点即可上传；API 为 `POST /api/ocr`（`multipart/form-data` 字段 `file`、`model`、`characters`），文档在 `/scalar`。
+
+### Docker 部署
+
+提供 `linux/amd64` 与 `linux/arm64` 多架构镜像（直接由 .NET 10 SDK `PublishContainer` 构建，无需原生依赖）：
+
+```bash
+docker run --rm -p 8080:8080 sdcb/simdpaddleocr:latest
+```
+
+访问 `http://localhost:8080` 使用 Web 界面，`/scalar` 查看交互式 API 文档，`/health` 检查健康状态。完整环境变量（模型预热、API Key 鉴权、大小限制等）与调用示例见 [`docs/docker.md`](docs/docker.md)。
 
 `Sdcb.SimdPaddleOCR` 还带 4 个 LINQPad 脚本（`simdcodecs` / `skiasharp` / `opencvsharp5` / `bitmap`）：下载示例图，tiny 模型识别，控制台输出文字。`bitmap` 同时能在 LINQPad 5 / .NET Framework 4.8 和 .NET 10 上跑。包打了 `linqpad-samples` 标签，免费版也能用。
 

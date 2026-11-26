@@ -1,0 +1,64 @@
+name: docker
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      push_latest:
+        description: "Also push the 'latest' tag"
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Compute container tags
+        id: tags
+        shell: bash
+        run: |
+          tags=("r-${GITHUB_RUN_NUMBER}")
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" == v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            tags+=("${version}")
+            if [[ "${version}" != *-* ]]; then
+              if [[ "${version}" =~ ^([0-9]+\.[0-9]+)\.[0-9]+$ ]]; then
+                tags+=("${BASH_REMATCH[1]}")
+              fi
+              tags+=("latest")
+            fi
+          elif [[ "${{ inputs.push_latest }}" == "true" ]]; then
+            tags+=("latest")
+          fi
+
+          # Join with %3B so MSBuild parses multiple tags as one property value.
+          joined=$(printf '%s%%3B' "${tags[@]}")
+          joined="${joined%\%3B}"
+          display=$(IFS=,; echo "${tags[*]}")
+
+          echo "tags_msbuild=${joined}" >> "${GITHUB_OUTPUT}"
+          echo "tags_display=${display}" >> "${GITHUB_OUTPUT}"
+          echo "Publishing sdcb/simdpaddleocr with tags: ${display}"
+
+      - name: Build and push multi-arch container image
+        env:
+          SDK_CONTAINER_REGISTRY_UNAME: sdcb
+          SDK_CONTAINER_REGISTRY_PWORD: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          dotnet publish examples/SimdCodecs.AspNetCore/SimdCodecs.AspNetCore.csproj \
+            -c Release \
+            /t:PublishContainer \
+            -p:RuntimeIdentifiers=linux-x64%3Blinux-arm64 \
+            -p:ContainerRegistry=docker.io \
+            -p:ContainerRepository=sdcb/simdpaddleocr \
+            -p:ContainerImageTags="${{ steps.tags.outputs.tags_msbuild }}"

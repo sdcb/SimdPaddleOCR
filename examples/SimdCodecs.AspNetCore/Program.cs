@@ -1,20 +1,51 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.OpenApi;
 using Scalar.AspNetCore;
 using Sdcb.SimdCodecs;
 using Sdcb.SimdCodecs.Abstractions;
 using Sdcb.SimdPaddleOCR;
 using SimdCodecs.AspNetCore;
 
-const long maxUploadBytes = 20 * 1024 * 1024;
-
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
-builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = maxUploadBytes);
-builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = maxUploadBytes);
+
+OcrServerOptions serverOptions = builder.Configuration
+    .GetSection(OcrServerOptions.SectionName)
+    .Get<OcrServerOptions>() ?? new OcrServerOptions();
+
+if (serverOptions.MaxUploadBytes <= 0)
+    throw new InvalidOperationException("OCR:MaxUploadBytes must be greater than 0.");
+if (serverOptions.MaxImagePixels <= 0)
+    throw new InvalidOperationException("OCR:MaxImagePixels must be greater than 0.");
+_ = serverOptions.GetNormalizedDefaultModel();
+_ = serverOptions.ResolvePreloadModels();
+
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = serverOptions.MaxUploadBytes);
+builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = serverOptions.MaxUploadBytes);
+builder.Services.AddSingleton(serverOptions);
 builder.Services.AddSingleton<OcrEngine>();
-builder.Services.AddOpenApi();
+builder.Services.AddHostedService<OcrPreloadHostedService>();
+builder.Services.AddOpenApi(options =>
+{
+    options.AddDocumentTransformer((document, _, _) =>
+    {
+        document.Info = new OpenApiInfo
+        {
+            Title = "Sdcb.SimdPaddleOCR API",
+            Version = typeof(PaddleOcrAll).Assembly.GetName().Version?.ToString(3) ?? "3.0.0",
+            Description = "纯 C# PP-OCRv6 HTTP 识别服务（基于 Sdcb.SimdPaddleOCR + Sdcb.SimdCodecs）。" +
+                "内置 tiny / small / medium 三个中文模型，支持整行文本、检测框、方向分类与可选逐字坐标框。" +
+                (string.IsNullOrWhiteSpace(serverOptions.ApiKey)
+                    ? string.Empty
+                    : " 当前服务已启用 API Key 鉴权，请在请求头传入 X-API-Key 或 Authorization: Bearer <key>。")
+        };
+        return Task.CompletedTask;
+    });
+});
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy => policy.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
@@ -22,21 +53,53 @@ WebApplication app = builder.Build();
 app.UseCors();
 app.UseDefaultFiles();
 app.UseStaticFiles();
-app.MapOpenApi();
-app.MapScalarApiReference();
 
-app.MapGet("/api/ocr/models", (OcrEngine _) =>
-    Results.Ok(new OcrModelList(OcrEngine.Models, OcrEngine.DefaultModel)))
+if (!string.IsNullOrWhiteSpace(serverOptions.ApiKey))
+{
+    byte[] expectedKeyBytes = Encoding.UTF8.GetBytes(serverOptions.ApiKey);
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
+        {
+            string? provided = ExtractApiKey(context.Request);
+            if (provided is null || !FixedTimeEquals(provided, expectedKeyBytes))
+            {
+                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+                await context.Response.WriteAsJsonAsync(new OcrError("无效或缺少 API Key（请传入 X-API-Key 或 Authorization: Bearer <key>）。"));
+                return;
+            }
+        }
+        await next();
+    });
+}
+
+app.MapOpenApi();
+app.MapScalarApiReference(options =>
+{
+    options.Title = "Sdcb.SimdPaddleOCR API";
+});
+
+app.MapGet("/health", (OcrEngine engine) =>
+    Results.Ok(new HealthResponse("ok", engine.DefaultModel, engine.GetLoadedModels(), GetBuildConfiguration())))
+    .WithName("HealthCheck")
+    .WithTags("System")
+    .WithSummary("健康检查")
+    .WithDescription("返回服务状态、默认模型与当前已加载到内存的模型列表。")
+    .Produces<HealthResponse>();
+
+app.MapGet("/api/ocr/models", (OcrEngine engine) =>
+    Results.Ok(new OcrModelList(OcrEngine.Models, engine.DefaultModel)))
     .WithName("ListOcrModels")
     .WithTags("OCR")
     .WithSummary("列出可用 OCR 模型")
-    .Produces<OcrModelList>();
+    .Produces<OcrModelList>()
+    .Produces<OcrError>(StatusCodes.Status401Unauthorized);
 
 app.MapGet("/sample.jpg", (IWebHostEnvironment env) =>
 {
     string? path = ResolveSampleImage(env);
     return path is null ? Results.NotFound() : Results.File(path, "image/jpeg");
-});
+}).ExcludeFromDescription();
 
 app.MapPost("/api/ocr", RecognizeAsync)
     .DisableAntiforgery()
@@ -46,6 +109,7 @@ app.MapPost("/api/ocr", RecognizeAsync)
     .WithDescription("上传图片并选择 tiny、small 或 medium 模型，返回识别文本、检测框和耗时。表单字段 characters=true 时，每一行额外返回单字框（text、score、四个点）；不传该字段则响应中不含 characters。")
     .Produces<OcrResponse>()
     .Produces<OcrError>(StatusCodes.Status400BadRequest)
+    .Produces<OcrError>(StatusCodes.Status401Unauthorized)
     .Produces<OcrError>(StatusCodes.Status500InternalServerError)
     .Accepts<OcrUpload>("multipart/form-data");
 
@@ -54,29 +118,30 @@ app.Run();
 static async Task<IResult> RecognizeAsync(
     [FromForm] OcrUpload upload,
     OcrEngine engine,
+    OcrServerOptions options,
     CancellationToken cancellationToken)
 {
     IFormFile? file = upload.File;
     if (file is null || file.Length == 0)
         return Results.BadRequest(new OcrError("请上传图片文件（表单字段 file）。"));
-    if (file.Length > maxUploadBytes)
-        return Results.BadRequest(new OcrError("图片超过 20 MB 上限。"));
-    if (!OcrEngine.TryNormalizeModel(upload.Model, out string model))
+    if (file.Length > options.MaxUploadBytes)
+        return Results.BadRequest(new OcrError($"图片超过 {options.MaxUploadBytes / (1024 * 1024)} MB 上限。"));
+    if (!engine.TryNormalizeModel(upload.Model, out string model))
         return Results.BadRequest(new OcrError("模型必须是 tiny、small 或 medium。"));
 
     Stopwatch total = Stopwatch.StartNew();
     Stopwatch stage = Stopwatch.StartNew();
     try
     {
-        // The facade decodes from memory: read the upload (at most 20 MB) into one array.
+        // The facade decodes from memory: read the upload into one array.
         byte[] data = new byte[file.Length];
         await using (Stream stream = file.OpenReadStream())
             await stream.ReadExactlyAsync(data, cancellationToken);
 
         // The header gives the size, so an oversized image is refused before any pixel is allocated.
         // A header that cannot be read is left to Decode below, which says why.
-        if (ImageCodecs.TryReadInfo(data, out ImageInfo info) && (long)info.Width * info.Height > OcrEngine.MaxImagePixels)
-            return Results.BadRequest(new OcrError("图片像素超过上限（4000 万）。"));
+        if (ImageCodecs.TryReadInfo(data, out ImageInfo info) && (long)info.Width * info.Height > engine.MaxImagePixels)
+            return Results.BadRequest(new OcrError($"图片像素超过上限（{engine.MaxImagePixels:N0}）。"));
 
         // One call: packed BGR (the OCR default), EXIF orientation applied so phone photos arrive upright.
         using PixelBuffer image = ImageCodecs.Decode(data, PixelFormat.Bgr24,
@@ -112,6 +177,28 @@ static async Task<IResult> RecognizeAsync(
     {
         return Results.Json(new OcrError(ex.Message), statusCode: StatusCodes.Status500InternalServerError);
     }
+}
+
+static string? ExtractApiKey(HttpRequest request)
+{
+    if (request.Headers.TryGetValue("X-API-Key", out var apiKeyHeader) && !string.IsNullOrWhiteSpace(apiKeyHeader))
+        return apiKeyHeader.ToString().Trim();
+
+    if (request.Headers.TryGetValue("Authorization", out var authHeader))
+    {
+        string value = authHeader.ToString().Trim();
+        if (value.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            return value["Bearer ".Length..].Trim();
+    }
+
+    return null;
+}
+
+static bool FixedTimeEquals(string provided, byte[] expectedBytes)
+{
+    byte[] providedBytes = Encoding.UTF8.GetBytes(provided);
+    return providedBytes.Length == expectedBytes.Length &&
+        CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes);
 }
 
 static OcrLineDto ToLineDto(PaddleOcrLine line, bool characters)
@@ -166,7 +253,10 @@ static string GetBuildConfiguration()
 
 internal sealed class OcrUpload
 {
+    [Description("待识别的图片文件（支持 JPEG / PNG / WebP / BMP / GIF / TIFF 等）。")]
     public IFormFile? File { get; init; }
+
+    [Description("模型名称：tiny（默认）、small 或 medium。不传则使用服务端配置的默认模型。")]
     public string? Model { get; init; }
 
     [Description("为 true 时每一行返回单字框。不传则响应中不含 characters。")]

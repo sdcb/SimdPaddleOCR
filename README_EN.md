@@ -220,7 +220,17 @@ dotnet run --project examples/SkiaSharp.Avalonia -- path/to/image.jpg
 dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
 ```
 
-Open the web sample in a browser to upload; the API is `POST /api/ocr` (`multipart/form-data` fields `file`, `model`), docs at `/scalar`.
+Open the web sample in a browser to upload; the API is `POST /api/ocr` (`multipart/form-data` fields `file`, `model`, `characters`), docs at `/scalar`.
+
+### Docker
+
+Multi-arch (`linux/amd64` and `linux/arm64`) images are published via .NET 10 SDK `PublishContainer` with zero native dependencies:
+
+```bash
+docker run --rm -p 8080:8080 sdcb/simdpaddleocr:latest
+```
+
+Open `http://localhost:8080` for the web UI, `/scalar` for interactive OpenAPI docs, and `/health` for health checks. See [`docs/docker.md`](docs/docker.md) for environment variables (model preloading, API key auth, upload/pixel limits) and API examples.
 
 `Sdcb.SimdPaddleOCR` also ships 4 LINQPad scripts (`simdcodecs` / `skiasharp` / `opencvsharp5` / `bitmap`): download a sample image, run the tiny model, print text. `bitmap` runs on both LINQPad 5 / .NET Framework 4.8 and .NET 10. The package is tagged `linqpad-samples`, so the free edition can use them.
 
