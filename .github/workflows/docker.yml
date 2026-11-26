@@ -41,10 +41,9 @@ jobs:
             tags+=("latest")
           fi
 
-          # Join with %3B so MSBuild parses multiple tags as one property value.
-          joined=$(printf '%s%%3B' "${tags[@]}")
-          joined="${joined%\%3B}"
-          display=$(IFS=,; echo "${tags[*]}")
+          # Join with semicolons; pass quoted to MSBuild so it splits ContainerImageTags as a list.
+          joined=$(IFS=';'; echo "${tags[*]}")
+          display=$(IFS=','; echo "${tags[*]}")
 
           echo "tags_msbuild=${joined}" >> "${GITHUB_OUTPUT}"
           echo "tags_display=${display}" >> "${GITHUB_OUTPUT}"
@@ -58,7 +57,7 @@ jobs:
           dotnet publish examples/SimdCodecs.AspNetCore/SimdCodecs.AspNetCore.csproj \
             -c Release \
             /t:PublishContainer \
-            -p:RuntimeIdentifiers=linux-x64%3Blinux-arm64 \
+            -p:PublishMultiArchContainer=true \
             -p:ContainerRegistry=docker.io \
             -p:ContainerRepository=sdcb/simdpaddleocr \
-            -p:ContainerImageTags="${{ steps.tags.outputs.tags_msbuild }}"
+            -p:ContainerImageTags="\"${{ steps.tags.outputs.tags_msbuild }}\""

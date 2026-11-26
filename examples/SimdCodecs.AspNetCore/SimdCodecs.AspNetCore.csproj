@@ -6,6 +6,7 @@
     <EnableSdkContainerSupport>true</EnableSdkContainerSupport>
     <ContainerRepository>sdcb/simdpaddleocr</ContainerRepository>
     <ContainerFamily>noble-chiseled</ContainerFamily>
+    <RuntimeIdentifiers Condition="'$(PublishMultiArchContainer)' == 'true'">linux-x64;linux-arm64</RuntimeIdentifiers>
   </PropertyGroup>
   <ItemGroup>
     <ContainerLabel Include="org.opencontainers.image.title" Value="Sdcb.SimdPaddleOCR" />
