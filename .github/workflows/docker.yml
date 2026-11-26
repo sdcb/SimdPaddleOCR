@@ -6,6 +6,16 @@ on:
       - main
     tags:
       - 'v*'
+    paths:
+      - src/**
+      - models/**
+      - external/**
+      - examples/SimdCodecs.AspNetCore/**
+      - examples/sample.jpg
+      - Directory.Build.props
+      - Directory.Build.targets
+      - nuget.config
+      - .github/workflows/docker.yml
   workflow_dispatch:
     inputs:
       push_latest:
