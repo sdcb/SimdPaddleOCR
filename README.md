@@ -109,7 +109,7 @@ finally
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Medium`     | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium)         | PP-OCRv6 medium；`ChineseV6MediumModels.Default`                               |
 | `Sdcb.SimdPaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.TextLineOrientation) | PP-LCNet 文本行方向 CLS，被三个中文模型包传递引用                              |
 
-每个 `IPaddleOcrModelProvider` 提供 `Name`、`Kind`、`Format`、语言和版本元数据以及 `OpenRead()` / `OpenReadAsync()`。完整 OCR 组合由 `PaddleOcrModelBundle` 表达（DET、REC、字典和可选 CLS）。当前语言代码为 `zh`。单个模型也可被其他推理实现消费，例如 `ChineseV6TinyModel.Detection.OpenReadAsync()`。`Model`、`PaddleOcrDetector`、`PaddleOcrClassifier`、`PaddleOcrRecognizer` 和 `PaddleOcrAll` 均提供 Stream 加载入口；解析完成后不会继续保留完整的 ONNX 原始字节。
+每个 `IPaddleOcrModelProvider` 提供 `Name`、`Kind`、`Format`、语言和版本元数据以及 `OpenRead()` / `OpenReadAsync()`。完整 OCR 组合由 `PaddleOcrModelBundle` 表达（DET、REC、字典和可选 CLS）。当前语言代码为 `zh`。单个模型也可被其他推理实现消费，例如 `ChineseV6TinyModel.Detection.OpenReadAsync()`。`PaddleOcrDetector`、`PaddleOcrClassifier`、`PaddleOcrRecognizer`、`PaddleOcrDocumentOrientationClassifier` 和 `PaddleOcrAll` 均提供 Stream 加载入口；解析完成后不会继续保留完整的 ONNX 原始字节。
 
 ## 使用本地模型
 
@@ -204,6 +204,7 @@ PaddleOcrLine[] lines = [.. result.Lines.Select(l => PaddleOcrDocumentRotation.T
 ```
 
 它是独立的一步，不在 `PaddleOcrAll` 里；500×500 的图在 CPU 上约 3 ms。感谢 [@hnlyf168](https://github.com/hnlyf168) 在 [#32](https://github.com/sdcb/SimdPaddleOCR/pull/32) 中的实现。
+
 ## 示例
 
 四个示例共用 `examples/sample.jpg`，图片由示例负责解码为交错像素（BGR / RGB / BGRA / RGBA 均可）：
@@ -275,7 +276,7 @@ x64 发布 Native AOT 时，可执行项目里**必须**设置：
 | 推荐运行时 | .NET 10：完整 x86 SIMD 与 NativeAOT（`IsAotCompatible`）                                                                    |
 | 兼容运行时 | `netstandard2.0` 可在 .NET Framework 4.8 等环境使用；编译时去掉 AVX / AVX-512 / VNNI 源，走 `System.Numerics.Vector` / 标量 |
 | CI 架构    | Windows x64 / x86 / ARM64，Linux x64 / ARM64，macOS x64 / ARM64                                                             |
-| SIMD       | .NET 10 运行时探测 AVX → AVX2 → AVX-512 / VNNI；无对应指令集或 ARM 时用 Vector/标量                                         |
+| SIMD       | .NET 10 运行时按 AVX-512 / VNNI → AVX2 → AdvSimd (ARM64 NEON) → PackedSimd (WASM SIMD128) → `Vector<float>` → 标量派发       |
 | 输入       | 交错像素内存（默认 BGR24，也可 RGB24 / BGRA32 / RGBA32）；无图片路径、文件或图片库 API                                      |
 | 设备       | 默认 CPU；`net10.0` 另有可选 GPU 后端（`OcrBackend`）：Vulkan 直连系统加载器（Windows `vulkan-1.dll`、Linux `libvulkan.so.1`、Android `libvulkan.so`），Metal 走 macOS 系统框架；`netstandard2.0` 只有 CPU |
 | 安卓       | 目前通过开发用宿主 `test/Sdcb.SimdPaddleOCR.AndroidBench`（`net10.0-android`，引用 `net10.0` 库，adb 驱动）在骁龙 8 Gen 3 上跑 CPU 与 Vulkan，见 [`docs/perf/8gen3-adreno750.md`](docs/perf/8gen3-adreno750.md)；桌面的 Vulkan 路由和 shader 没有变 |
@@ -299,21 +300,19 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 
 ## 性能
 
-**2.0** 新增纯 C# GPU 后端（Vulkan / Metal），medium 端到端相对同机 CPU：
+纯 C# GPU 后端（Vulkan / Metal）与多平台 CPU 实测（`dataset/` 100 张，`medium` 端到端相对同机 CPU）：
 
-| 设备                      | 后端                 | 相对同机 CPU（medium）    |
-| ------------------------- | -------------------- | ------------------------: |
-| RTX 3080 Ti               | Vulkan（协作矩阵）   |                  **14.4×** |
-| Intel Arc B580            | Vulkan（协作矩阵）   |                   **9.6×** |
-| Apple M4（虚拟机）        | Metal                |                   **6.47×** |
-| AMD Radeon 880M 核显      | Vulkan（协作矩阵）   |                   **4.3×** |
-| 骁龙 8 Gen 3 / Adreno 750 | Vulkan（无协作矩阵） |                 **约 2.2×** |
-| Intel UHD 770 核显        | Vulkan（无协作矩阵） | 慢于 CPU，`Auto` 默认走 CPU |
+| 设备                      | 后端                 | `medium` 中位 | 相对同机 CPU |
+| ------------------------- | -------------------- | ------------: | -----------: |
+| RTX 3080 Ti (5800X)       | Vulkan（协作矩阵）   |    **49.0 ms** |    **11.1×** |
+| Intel Arc B580 (5950X)    | Vulkan（协作矩阵）   |    **53.3 ms** |     **9.8×** |
+| AMD Radeon 880M (AI9 H365)| Vulkan（协作矩阵）   |   **121.3 ms** |     **6.2×** |
+| 骁龙 8 Gen 3 / Adreno 750 | Vulkan（无协作矩阵） |   **652.2 ms** |     **4.1×** |
+| Intel UHD 770 核显        | Vulkan（无协作矩阵） | 慢于 CPU，`Auto` 默认走 CPU | — |
 
-CPU 路径在 2.0 也普遍再快 **4–15%**（CTC ArgMax 并行化、动态 intra-op 线程预算、DET 后处理重写；ARM64 另有手写 AdvSIMD MatMul）。
-WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 tiny 中位 **95.2 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 1.9 倍。
+WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 `tiny` 中位 **95.2 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 1.9 倍。
 
-> 切换到共享引擎 Sdcb.SimdOnnx（0.1.0-preview.7）后，在 Ryzen 7 5800X + RTX 3080 Ti 上与 2.0 原引擎同机交错 A/B：CPU 全部持平或更快（small 快 15–24%，medium 快 1–14%，tiny 快 4%）；Vulkan 也全部持平或更快（tiny 快 12–17%，small 快 3–9%，medium 持平）；精度持平。峰值内存：Vulkan 更低（medium 1009 → 925 MB），CPU 高 2–7%。详见 [SimdOnnx docs/perf.md](https://github.com/sdcb/SimdOnnx/blob/main/docs/perf.md)。
+> 相比 `v2.0.0`，切换到内嵌 `SimdOnnx` 引擎后全平台实测无退化且普遍提速：CPU `small` 快 **20–47%**、WebAssembly 快 **18–34%**（`tiny` 127.2 → 95.2 ms）、安卓骁龙 8 Gen 3 Vulkan `medium` 快 **30%**、桌面 Vulkan 峰值内存进一步下降（RTX 3080 Ti `medium` 994 → 912 MB），同像素输入下 100/100 逐张一致。
 
 各机型的完整跑分、精度表与复现命令见总目录 [`docs/perf.md`](docs/perf.md)（分机型报告均位于 `docs/perf/`）。
 

@@ -109,7 +109,7 @@ finally
 | `Sdcb.SimdPaddleOCR.Models.ChineseV6Medium`     | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.ChineseV6Medium)         | PP-OCRv6 medium; `ChineseV6MediumModels.Default`                                                      |
 | `Sdcb.SimdPaddleOCR.Models.TextLineOrientation` | [![NuGet](https://img.shields.io/nuget/v/Sdcb.SimdPaddleOCR.Models.TextLineOrientation.svg)](https://www.nuget.org/packages/Sdcb.SimdPaddleOCR.Models.TextLineOrientation) | PP-LCNet text-line orientation CLS, transitively referenced by the three Chinese model packages       |
 
-Each `IPaddleOcrModelProvider` exposes `Name`, `Kind`, `Format`, language and version metadata, plus `OpenRead()` / `OpenReadAsync()`. A full OCR set is a `PaddleOcrModelBundle` (DET, REC, dictionary, and optional CLS). The current language code is `zh`. Individual models can also be consumed by other inference implementations, for example `ChineseV6TinyModel.Detection.OpenReadAsync()`. `Model`, `PaddleOcrDetector`, `PaddleOcrClassifier`, `PaddleOcrRecognizer`, and `PaddleOcrAll` all accept Stream load entry points; after parsing they do not keep the full raw ONNX bytes.
+Each `IPaddleOcrModelProvider` exposes `Name`, `Kind`, `Format`, language and version metadata, plus `OpenRead()` / `OpenReadAsync()`. A full OCR set is a `PaddleOcrModelBundle` (DET, REC, dictionary, and optional CLS). The current language code is `zh`. Individual models can also be consumed by other inference implementations, for example `ChineseV6TinyModel.Detection.OpenReadAsync()`. `PaddleOcrDetector`, `PaddleOcrClassifier`, `PaddleOcrRecognizer`, `PaddleOcrDocumentOrientationClassifier`, and `PaddleOcrAll` all accept Stream load entry points; after parsing they do not keep the full raw ONNX bytes.
 
 ## Local models
 
@@ -275,7 +275,7 @@ Check if you are loading an unoptimized third-party ONNX model (such as a raw pa
 | Recommended runtime | .NET 10: full x86 SIMD and NativeAOT (`IsAotCompatible`)                                                                                                                 |
 | Compatible runtime  | `netstandard2.0` can run on .NET Framework 4.8 and similar; AVX / AVX-512 / VNNI sources are excluded at compile time, falling back to `System.Numerics.Vector` / scalar |
 | CI architectures    | Windows x64 / x86 / ARM64, Linux x64 / ARM64, macOS x64 / ARM64                                                                                                          |
-| SIMD                | .NET 10 probes AVX → AVX2 → AVX-512 / VNNI at runtime; Vector/scalar when those ISAs are missing or on ARM                                                               |
+| SIMD                | .NET 10 dispatches AVX-512 / VNNI → AVX2 → AdvSimd (ARM64 NEON) → PackedSimd (WASM SIMD128) → `Vector<float>` → scalar at runtime                                       |
 | Input               | Interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 also accepted); no image path, file, or image-library API                                                  |
 | Device              | CPU by default; `net10.0` also has optional GPU backends (`OcrBackend`): Vulkan loading the system loader directly (`vulkan-1.dll` on Windows, `libvulkan.so.1` on Linux, `libvulkan.so` on Android), Metal via the macOS system framework; `netstandard2.0` is CPU only |
 | Android             | Currently run through the dev host `test/Sdcb.SimdPaddleOCR.AndroidBench` (`net10.0-android`, references the `net10.0` library, driven over adb) on a Snapdragon 8 Gen 3, CPU and Vulkan; see [`docs/perf/8gen3-adreno750.md`](docs/perf/8gen3-adreno750.md). Desktop Vulkan routing and shaders are unchanged |
@@ -299,21 +299,19 @@ respective owners. This project is not official and does not imply endorsement.
 
 ## Performance
 
-**2.0** adds pure C# GPU backends (Vulkan / Metal). Medium model end-to-end versus the same machine's CPU:
+Pure C# GPU backends (Vulkan / Metal) and cross-platform CPU benchmarks (`dataset/` 100 images, `medium` end-to-end vs same-machine CPU):
 
-| Device                            | Backend                     | vs same-machine CPU (medium)          |
-| --------------------------------- | --------------------------- | ------------------------------------: |
-| RTX 3080 Ti                       | Vulkan (cooperative matrix) |                             **14.4×** |
-| Intel Arc B580                    | Vulkan (cooperative matrix) |                              **9.6×** |
-| Apple M4 (VM)                     | Metal                       |                             **6.47×** |
-| AMD Radeon 880M iGPU              | Vulkan (cooperative matrix) |                              **4.3×** |
-| Snapdragon 8 Gen 3 / Adreno 750   | Vulkan (no coop matrix)     |                             **~2.2×** |
-| Intel UHD 770 iGPU                | Vulkan (no coop matrix)     | Slower than CPU; `Auto` stays on CPU  |
+| Device                            | Backend                     | `medium` median | vs same-machine CPU |
+| --------------------------------- | --------------------------- | --------------: | ------------------: |
+| RTX 3080 Ti (5800X)               | Vulkan (cooperative matrix) |      **49.0 ms** |           **11.1×** |
+| Intel Arc B580 (5950X)            | Vulkan (cooperative matrix) |      **53.3 ms** |            **9.8×** |
+| AMD Radeon 880M (AI9 H365)        | Vulkan (cooperative matrix) |     **121.3 ms** |            **6.2×** |
+| Snapdragon 8 Gen 3 / Adreno 750   | Vulkan (no coop matrix)     |     **652.2 ms** |            **4.1×** |
+| Intel UHD 770 iGPU                | Vulkan (no coop matrix)     | Slower than CPU; `Auto` stays on CPU | — |
 
-The CPU path is another **4–15%** faster across the board in 2.0 (parallel CTC ArgMax, dynamic intra-op thread budget, rewritten DET postprocess; plus a hand-written AdvSIMD MatMul on ARM64).
-Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), tiny runs at a **95.2 ms/image** median on a Ryzen 7 5800X — about 1.9× the same machine's desktop native.
+Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), `tiny` runs at a **95.2 ms/image** median on a Ryzen 7 5800X — about 1.9× the same machine's desktop native.
 
-> After moving to the shared Sdcb.SimdOnnx engine (0.1.0-preview.7), an interleaved A/B against the 2.0 in-tree engine on a Ryzen 7 5800X + RTX 3080 Ti: CPU is at parity or faster everywhere (small 15–24% faster, medium 1–14%, tiny 4%); Vulkan is at parity or faster everywhere (tiny 12–17% faster, small 3–9%, medium at parity); accuracy is at parity. Peak memory: lower on Vulkan (medium 1009 → 925 MB), 2–7% higher on CPU. Details: [SimdOnnx docs/perf.md](https://github.com/sdcb/SimdOnnx/blob/main/docs/perf.md).
+> Compared to `v2.0.0`, moving to the embedded `SimdOnnx` engine delivers broad gains with zero accuracy regression (100/100 bit-identical on lossless inputs): CPU `small` is **20–47% faster**, WebAssembly is **18–34% faster** (`tiny` 127.2 → 95.2 ms), Android Snapdragon 8 Gen 3 Vulkan `medium` is **30% faster**, and desktop Vulkan peak working set is lower (RTX 3080 Ti `medium` 994 → 912 MB).
 
 Full per-device benchmarks, accuracy tables, and reproduction commands are indexed in [`docs/perf.md`](docs/perf.md) (all per-machine reports live under `docs/perf/`).
 
