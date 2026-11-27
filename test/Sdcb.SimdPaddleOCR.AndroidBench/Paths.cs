@@ -25,8 +25,13 @@ static class Paths
     /// <summary>Decodes like the desktop Tests harness (SimdCodecs, packed BGR24).</summary>
     internal static (byte[] Bgr, int W, int H) LoadBgr(string path)
     {
-        using var image = Sdcb.SimdCodecs.ImageCodecs.Decode(File.ReadAllBytes(path), Sdcb.SimdCodecs.Abstractions.PixelFormat.Bgr24);
-        return (image.Pixels[..(image.Stride * image.Height)].ToArray(), image.Width, image.Height);
+        using var reader = Sdcb.SimdCodecs.ImageCodecs.OpenRowReader(File.OpenRead(path), Sdcb.SimdCodecs.Abstractions.PixelFormat.Bgr24);
+        int stride = checked(reader.Width * 3);
+        byte[] pixels = new byte[checked(stride * reader.Height)];
+        int y = 0;
+        while (y < reader.Height)
+            y += reader.ReadRows(pixels.AsSpan(y * stride), reader.Height - y, stride);
+        return (pixels, reader.Width, reader.Height);
     }
 
     internal static string[] DatasetFiles() => Directory.GetFiles(Dataset, "img-*.jpg")

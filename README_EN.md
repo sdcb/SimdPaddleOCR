@@ -15,14 +15,14 @@ Install the core package and the tiny models (tiny transitively references CLS a
 ```powershell
 dotnet add package Sdcb.SimdPaddleOCR
 dotnet add package Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny
-dotnet add package Sdcb.SimdCodecs --prerelease
+dotnet add package Sdcb.SimdCodecs
 ```
 
 Models load from embedded assembly resources. They are not extracted or written to temp files. `stride = 0` means tightly packed (`width *` bytes-per-pixel). The default is `ImagePixelFormat.Bgr24`; other layouts are swizzled in-place during resize / crop and are not converted into an intermediate BGR image.
 
 ### SimdCodecs (recommended)
 
-Pure managed image decoding (JPEG / PNG / WebP / BMP / GIF / TIFF and more), no native dependencies. Needs `Sdcb.SimdCodecs` 2.0 or later (currently a preview).
+Pure managed image decoding (JPEG / PNG / WebP / BMP / GIF / TIFF and more), no native dependencies. Needs `Sdcb.SimdCodecs` 2.0 or later.
 
 ```csharp
 using Sdcb.SimdCodecs;

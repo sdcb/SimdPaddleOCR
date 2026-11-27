@@ -15,14 +15,14 @@ GPU 支持 Vulkan 与 Metal（macOS），仅 .NET 10；同样纯 C#、不内嵌�
 ```powershell
 dotnet add package Sdcb.SimdPaddleOCR
 dotnet add package Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny
-dotnet add package Sdcb.SimdCodecs --prerelease
+dotnet add package Sdcb.SimdCodecs
 ```
 
 模型从程序集嵌入资源直接加载，不会解压或写入临时文件。`stride = 0` 表示紧密排列（`width *` 每像素字节数）。默认 `ImagePixelFormat.Bgr24`；其它布局在 resize / crop 里就地 swizzle，不会先转成一张中间 BGR 图。
 
 ### SimdCodecs（推荐）
 
-纯托管图片解码（JPEG / PNG / WebP / BMP / GIF / TIFF 等），无原生依赖。需要 `Sdcb.SimdCodecs` 2.0 及以上（目前为预览版）。
+纯托管图片解码（JPEG / PNG / WebP / BMP / GIF / TIFF 等），无原生依赖。需要 `Sdcb.SimdCodecs` 2.0 及以上。
 
 ```csharp
 using Sdcb.SimdCodecs;
