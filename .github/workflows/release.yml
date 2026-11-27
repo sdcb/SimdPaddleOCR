@@ -1,0 +1,110 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  DOTNET_NOLOGO: 1
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-([0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*))?$ ]]; then
+            echo "::error::Tag must be a SemVer tag such as v2.1.0 or v2.1.0-rc.1 (got '$GITHUB_REF_NAME')"
+            exit 1
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          PRERELEASE="${BASH_REMATCH[5]}"
+          if [[ -n "$PRERELEASE" ]]; then
+            IFS='.' read -r -a identifiers <<< "$PRERELEASE"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^0[0-9]+$ ]]; then
+                echo "::error::Numeric prerelease identifiers must not have leading zeroes"
+                exit 1
+              fi
+            done
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved package version: $VERSION"
+
+      - name: Unit tests (net10.0)
+        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo
+
+      - name: Unit tests (netstandard2.0)
+        run: dotnet test test/Sdcb.SimdPaddleOCR.UnitTests -c Release --nologo -p:UseNs20Library=true
+
+      - name: Pack Sdcb.SimdPaddleOCR
+        run: |
+          dotnet pack src/Sdcb.SimdPaddleOCR/Sdcb.SimdPaddleOCR.csproj \
+            -c Release \
+            -o nupkgs \
+            -p:SdcbSimdPaddleOCRVersion="${{ steps.version.outputs.version }}" \
+            -p:ContinuousIntegrationBuild=true
+
+      - name: Upload NuGet artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-packages-${{ steps.version.outputs.version }}
+          path: |
+            nupkgs/*.nupkg
+            nupkgs/*.snupkg
+          retention-days: 14
+
+      - name: NuGet login (Trusted Publishing)
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          pkgs=(nupkgs/*.nupkg)
+          if [ ${#pkgs[@]} -eq 0 ]; then
+            echo "::error::No .nupkg files found in nupkgs/"
+            exit 1
+          fi
+          for pkg in "${pkgs[@]}"; do
+            dotnet nuget push "$pkg" \
+              -s https://api.nuget.org/v3/index.json \
+              -k "$NUGET_API_KEY" \
+              --skip-duplicate
+          done
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          extra_args=()
+          if [[ "${{ steps.version.outputs.is_prerelease }}" == "true" ]]; then
+            extra_args+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            nupkgs/*.nupkg nupkgs/*.snupkg \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "${extra_args[@]}"
