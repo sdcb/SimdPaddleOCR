@@ -1,3 +1,5 @@
+> **历史归档（v2.0 实测）**：本报告测于 v2.0 时期，因当前暂不方便复测该 UHD 770 机器，作为无协作矩阵 Intel 核显的历史参考保留。
+
 # SimdPaddleOCR — Intel UHD Graphics 770（无协作矩阵）Vulkan
 
 实测机：Intel UHD Graphics 770（Xe-LP，32 EU，核显最大动态频率 1.55 GHz），与 CPU 共享内存。驱动 101.7079（Vulkan API 1.4.323）。Windows 11 26200，电源计划「高性能」。.NET SDK 11.0.100-rc.1 编译 `net10.0`。`test/Sdcb.SimdPaddleOCR.Tests`，`--workers 4 --benchmark-kind simd --warmup 1`，同一 `dataset/` 100 张，墙钟 n=99。本表 `2ee12a1`。

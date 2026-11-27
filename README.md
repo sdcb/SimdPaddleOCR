@@ -278,8 +278,8 @@ x64 发布 Native AOT 时，可执行项目里**必须**设置：
 | SIMD       | .NET 10 运行时探测 AVX → AVX2 → AVX-512 / VNNI；无对应指令集或 ARM 时用 Vector/标量                                         |
 | 输入       | 交错像素内存（默认 BGR24，也可 RGB24 / BGRA32 / RGBA32）；无图片路径、文件或图片库 API                                      |
 | 设备       | 默认 CPU；`net10.0` 另有可选 GPU 后端（`OcrBackend`）：Vulkan 直连系统加载器（Windows `vulkan-1.dll`、Linux `libvulkan.so.1`、Android `libvulkan.so`），Metal 走 macOS 系统框架；`netstandard2.0` 只有 CPU |
-| 安卓       | 目前通过开发用宿主 `test/Sdcb.SimdPaddleOCR.AndroidBench`（`net10.0-android`，引用 `net10.0` 库，adb 驱动）在骁龙 8 Gen 3 上跑 CPU 与 Vulkan，见 [`docs/vulkan-8gen3.md`](docs/vulkan-8gen3.md)；桌面的 Vulkan 路由和 shader 没有变 |
-| WebAssembly | 通过开发用宿主 `test/Sdcb.SimdPaddleOCR.WasmBench`（`net10.0` `browser-wasm` 多线程 Web Workers + SharedArrayBuffer）跑 CPU 推理，支持 tiny / small / medium，详见 [`docs/wasm.md`](docs/wasm.md) |
+| 安卓       | 目前通过开发用宿主 `test/Sdcb.SimdPaddleOCR.AndroidBench`（`net10.0-android`，引用 `net10.0` 库，adb 驱动）在骁龙 8 Gen 3 上跑 CPU 与 Vulkan，见 [`docs/perf/8gen3-adreno750.md`](docs/perf/8gen3-adreno750.md)；桌面的 Vulkan 路由和 shader 没有变 |
+| WebAssembly | 通过开发用宿主 `test/Sdcb.SimdPaddleOCR.WasmBench`（`net10.0` `browser-wasm` 多线程 Web Workers + SharedArrayBuffer）跑 CPU 推理，支持 tiny / small / medium，详见 [`docs/perf/wasm-5800x.md`](docs/perf/wasm-5800x.md) |
 | NativeAOT  | 裁剪发布时请保留核心程序集和所用模型程序集                                                                                  |
 
 ## 许可证与第三方组件
@@ -311,11 +311,11 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 | Intel UHD 770 核显        | Vulkan（无协作矩阵） | 慢于 CPU，`Auto` 默认走 CPU |
 
 CPU 路径在 2.0 也普遍再快 **4–15%**（CTC ArgMax 并行化、动态 intra-op 线程预算、DET 后处理重写；ARM64 另有手写 AdvSIMD MatMul）。
-WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 tiny 中位 **113 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 2.5 倍。
+WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 tiny 中位 **95.2 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 1.9 倍。
 
 > 切换到共享引擎 Sdcb.SimdOnnx（0.1.0-preview.7）后，在 Ryzen 7 5800X + RTX 3080 Ti 上与 2.0 原引擎同机交错 A/B：CPU 全部持平或更快（small 快 15–24%，medium 快 1–14%，tiny 快 4%）；Vulkan 也全部持平或更快（tiny 快 12–17%，small 快 3–9%，medium 持平）；精度持平。峰值内存：Vulkan 更低（medium 1009 → 925 MB），CPU 高 2–7%。详见 [SimdOnnx docs/perf.md](https://github.com/sdcb/SimdOnnx/blob/main/docs/perf.md)。
 
-各机型的跑分、精度表和复现命令见 `docs/` 下的报告（`vulkan-*.md`、`metal-m4.md`、`wasm.md`）；[`docs/perf.md`](docs/perf.md) 记录引擎改为源码内嵌后的同机 A/B。
+各机型的完整跑分、精度表与复现命令见总目录 [`docs/perf.md`](docs/perf.md)（分机型报告均位于 `docs/perf/`）。
 
 ## 性能复现
 

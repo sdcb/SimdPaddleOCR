@@ -278,8 +278,8 @@ Check if you are loading an unoptimized third-party ONNX model (such as a raw pa
 | SIMD                | .NET 10 probes AVX → AVX2 → AVX-512 / VNNI at runtime; Vector/scalar when those ISAs are missing or on ARM                                                               |
 | Input               | Interleaved pixels (BGR24 by default; RGB24 / BGRA32 / RGBA32 also accepted); no image path, file, or image-library API                                                  |
 | Device              | CPU by default; `net10.0` also has optional GPU backends (`OcrBackend`): Vulkan loading the system loader directly (`vulkan-1.dll` on Windows, `libvulkan.so.1` on Linux, `libvulkan.so` on Android), Metal via the macOS system framework; `netstandard2.0` is CPU only |
-| Android             | Currently run through the dev host `test/Sdcb.SimdPaddleOCR.AndroidBench` (`net10.0-android`, references the `net10.0` library, driven over adb) on a Snapdragon 8 Gen 3, CPU and Vulkan; see [`docs/vulkan-8gen3.md`](docs/vulkan-8gen3.md). Desktop Vulkan routing and shaders are unchanged |
-| WebAssembly         | Benchmarked via dev host `test/Sdcb.SimdPaddleOCR.WasmBench` (`net10.0` `browser-wasm` multi-threaded Web Workers + SharedArrayBuffer) running pure CPU inference across tiny / small / medium models; see [`docs/wasm.md`](docs/wasm.md) |
+| Android             | Currently run through the dev host `test/Sdcb.SimdPaddleOCR.AndroidBench` (`net10.0-android`, references the `net10.0` library, driven over adb) on a Snapdragon 8 Gen 3, CPU and Vulkan; see [`docs/perf/8gen3-adreno750.md`](docs/perf/8gen3-adreno750.md). Desktop Vulkan routing and shaders are unchanged |
+| WebAssembly         | Benchmarked via dev host `test/Sdcb.SimdPaddleOCR.WasmBench` (`net10.0` `browser-wasm` multi-threaded Web Workers + SharedArrayBuffer) running pure CPU inference across tiny / small / medium models; see [`docs/perf/wasm-5800x.md`](docs/perf/wasm-5800x.md) |
 | NativeAOT           | Keep the core assembly and the model assemblies you use when publishing trimmed                                                                                          |
 
 ## License and third-party components
@@ -311,11 +311,11 @@ respective owners. This project is not official and does not imply endorsement.
 | Intel UHD 770 iGPU                | Vulkan (no coop matrix)     | Slower than CPU; `Auto` stays on CPU  |
 
 The CPU path is another **4–15%** faster across the board in 2.0 (parallel CTC ArgMax, dynamic intra-op thread budget, rewritten DET postprocess; plus a hand-written AdvSIMD MatMul on ARM64).
-Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), tiny runs at a **113 ms/image** median on a Ryzen 7 5800X — about 2.5× the same machine's desktop native.
+Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), tiny runs at a **95.2 ms/image** median on a Ryzen 7 5800X — about 1.9× the same machine's desktop native.
 
 > After moving to the shared Sdcb.SimdOnnx engine (0.1.0-preview.7), an interleaved A/B against the 2.0 in-tree engine on a Ryzen 7 5800X + RTX 3080 Ti: CPU is at parity or faster everywhere (small 15–24% faster, medium 1–14%, tiny 4%); Vulkan is at parity or faster everywhere (tiny 12–17% faster, small 3–9%, medium at parity); accuracy is at parity. Peak memory: lower on Vulkan (medium 1009 → 925 MB), 2–7% higher on CPU. Details: [SimdOnnx docs/perf.md](https://github.com/sdcb/SimdOnnx/blob/main/docs/perf.md).
 
-Benchmarks, accuracy tables, and reproduction commands per device: the per-machine reports under `docs/` (`vulkan-*.md`, `metal-m4.md`, `wasm.md`). [`docs/perf.md`](docs/perf.md) has the same-machine A/B after the engine moved to embedded source.
+Full per-device benchmarks, accuracy tables, and reproduction commands are indexed in [`docs/perf.md`](docs/perf.md) (all per-machine reports live under `docs/perf/`).
 
 ## Reproducing performance
 
