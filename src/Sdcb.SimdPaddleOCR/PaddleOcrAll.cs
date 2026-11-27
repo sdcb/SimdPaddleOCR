@@ -154,6 +154,26 @@ public sealed class PaddleOcrAll : IDisposable
         return buffer.ToArray();
     }
 
+    /// <summary>
+    /// Underlying text detector owned by this pipeline. Thread-safe for standalone
+    /// <see cref="PaddleOcrDetector.Detect"/> calls; do not dispose separately.
+    /// </summary>
+    public PaddleOcrDetector Detector => _disposed ? throw new ObjectDisposedException(nameof(PaddleOcrAll)) : _detector;
+
+    /// <summary>
+    /// Underlying text-line orientation classifier owned by this pipeline, or <see langword="null"/>
+    /// when <see cref="PaddleOcrOptions.UseDirectionClassification"/> is disabled. Thread-safe for
+    /// standalone <see cref="PaddleOcrClassifier.Classify"/> calls; do not dispose separately.
+    /// </summary>
+    public PaddleOcrClassifier? Classifier => _disposed ? throw new ObjectDisposedException(nameof(PaddleOcrAll)) : _classifier;
+
+    /// <summary>
+    /// Underlying text recognizer owned by this pipeline. Thread-safe for standalone
+    /// <see cref="PaddleOcrRecognizer.Recognize(ReadOnlySpan{byte}, int, int, int, ImagePixelFormat)"/>
+    /// calls; do not dispose separately.
+    /// </summary>
+    public PaddleOcrRecognizer Recognizer => _disposed ? throw new ObjectDisposedException(nameof(PaddleOcrAll)) : _recognizer;
+
     /// <summary>Runs DET, perspective crop, optional CLS and CTC REC.</summary>
     public PaddleOcrResult Run(ReadOnlySpan<byte> source, int sourceWidth, int sourceHeight,
         int sourceStride = 0, ImagePixelFormat format = ImagePixelFormat.Bgr24)

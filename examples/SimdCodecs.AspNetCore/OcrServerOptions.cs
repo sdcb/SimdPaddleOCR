@@ -15,6 +15,8 @@ public sealed class OcrServerOptions
     public int LineWorkerCount { get; set; }
     public int DetIntraOpThreads { get; set; }
     public bool UseDirectionClassification { get; set; } = true;
+    public bool DefaultDocumentOrientation { get; set; }
+    public bool PreloadDocumentOrientation { get; set; }
 
     public string GetNormalizedDefaultModel() =>
         OcrEngine.TryNormalizeModel(DefaultModel, OcrEngine.DefaultModelName, out string normalized)
@@ -65,5 +67,17 @@ public sealed class OcrServerOptions
             Backend = Backend,
             MaxImagePixels = MaxImagePixels,
         },
+    };
+
+    public PaddleOcrDocumentOrientationOptions ToDocumentOrientationOptions() => new()
+    {
+        Backend = Backend,
+        MaxImagePixels = MaxImagePixels,
+    };
+
+    public PaddleOcrClassifierOptions ToClassifierOptions() => new()
+    {
+        Backend = Backend,
+        MaxImagePixels = MaxImagePixels,
     };
 }

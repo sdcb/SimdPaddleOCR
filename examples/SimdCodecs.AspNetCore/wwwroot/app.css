@@ -59,7 +59,7 @@ body {
 
 .toolbar {
   display: grid;
-  grid-template-columns: auto auto 1fr auto;
+  grid-template-columns: auto auto auto 1fr auto;
   gap: 8px;
   align-items: center;
 }

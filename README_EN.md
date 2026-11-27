@@ -208,7 +208,7 @@ It is a separate step, not part of `PaddleOcrAll`; a 500×500 image takes about 
 
 All four samples share `examples/sample.jpg`. Each sample decodes the image into interleaved pixels (BGR / RGB / BGRA / RGBA are all accepted):
 
-- `examples/SimdCodecs.AspNetCore`: ASP.NET Core + SimdCodecs (pure managed decode to BGR24 in one call, EXIF orientation applied), upload UI and `POST /api/ocr` JSON API.
+- `examples/SimdCodecs.AspNetCore`: ASP.NET Core + SimdCodecs (pure managed decode to BGR24 in one call, EXIF orientation applied), upload UI (with rotation testing and automatic upright preview) and `POST /api/ocr` (plus standalone `orientation` / `detect` / `classify` / `recognize`) JSON APIs.
 - `examples/SkiaSharp.Avalonia`: Avalonia desktop sample, SkiaSharp decode.
 - `examples/OpenCvSharp5.Wpf`: WPF sample, OpenCvSharp5 decode.
 - `examples/SystemDrawing.WinForms`: dual-target WinForms sample for .NET 10 Windows / .NET Framework 4.8, using `Bitmap`/`LockBits`; install the .NET Framework 4.8 Developer Pack before running `net48`, and set the project platform to x64.
@@ -220,7 +220,7 @@ dotnet run --project examples/SkiaSharp.Avalonia -- path/to/image.jpg
 dotnet run --project examples/SystemDrawing.WinForms --framework net10.0-windows
 ```
 
-Open the web sample in a browser to upload; the API is `POST /api/ocr` (`multipart/form-data` fields `file`, `model`, `characters`), docs at `/scalar`.
+Open the web sample in a browser to upload; the full OCR API is `POST /api/ocr` (`multipart/form-data` fields `file`, `model`, `characters`, `documentOrientation`), alongside standalone stage endpoints `POST /api/ocr/orientation`, `/api/ocr/detect`, `/api/ocr/classify`, and `/api/ocr/recognize`, docs at `/scalar`.
 
 ### Docker
 
@@ -232,7 +232,7 @@ docker run --rm -p 8080:8080 sdcb/simdpaddleocr:latest
 
 Open `http://localhost:8080` for the web UI, `/scalar` for interactive OpenAPI docs, and `/health` for health checks. See [`docs/docker.md`](docs/docker.md) for environment variables (model preloading, API key auth, upload/pixel limits) and API examples.
 
-`Sdcb.SimdPaddleOCR` also ships 4 LINQPad scripts (`simdcodecs` / `skiasharp` / `opencvsharp5` / `bitmap`): download a sample image, run the tiny model, print text. `bitmap` runs on both LINQPad 5 / .NET Framework 4.8 and .NET 10. The package is tagged `linqpad-samples`, so the free edition can use them.
+`Sdcb.SimdPaddleOCR` also ships 5 LINQPad scripts (`simdcodecs` / `document-orientation` / `skiasharp` / `opencvsharp5` / `bitmap`): download a sample image, run the tiny model (including a whole-page 0°/90°/180°/270° document orientation sample), print text. `bitmap` runs on both LINQPad 5 / .NET Framework 4.8 and .NET 10. The package is tagged `linqpad-samples`, so the free edition can use them.
 
 ## FAQ
 

@@ -303,19 +303,75 @@
     }
   }
 
+  function rotatePoint(pt, srcW, srcH, degrees) {
+    const x = pt[0];
+    const y = pt[1];
+    if (degrees === 90) return [y, srcW - 1 - x];
+    if (degrees === 180) return [srcW - 1 - x, srcH - 1 - y];
+    if (degrees === 270) return [srcH - 1 - y, x];
+    return [x, y];
+  }
+
+  function rotateBox(box, srcW, srcH, degrees) {
+    if (!box || box.length !== 4 || !degrees) return box;
+    return box.map((p) => rotatePoint([Number(p[0]), Number(p[1])], srcW, srcH, degrees));
+  }
+
+  function rotateLines(lines, srcW, srcH, degrees) {
+    if (!degrees || !lines?.length) return lines;
+    return lines.map((line) => ({
+      ...line,
+      box: rotateBox(line.box, srcW, srcH, degrees),
+      characters: line.characters?.map((ch) => ({
+        ...ch,
+        box: rotateBox(ch.box, srcW, srcH, degrees),
+      })),
+    }));
+  }
+
+  function drawRotatedImage(ctx, image, degrees) {
+    const srcW = image.naturalWidth || image.width;
+    const srcH = image.naturalHeight || image.height;
+    if (degrees === 90 || degrees === 270) {
+      ctx.canvas.width = srcH;
+      ctx.canvas.height = srcW;
+    } else {
+      ctx.canvas.width = srcW;
+      ctx.canvas.height = srcH;
+    }
+    ctx.save();
+    if (degrees === 90) {
+      ctx.translate(0, srcW);
+      ctx.rotate(-Math.PI / 2);
+    } else if (degrees === 180) {
+      ctx.translate(srcW, srcH);
+      ctx.rotate(Math.PI);
+    } else if (degrees === 270) {
+      ctx.translate(srcH, 0);
+      ctx.rotate(Math.PI / 2);
+    }
+    ctx.drawImage(image, 0, 0);
+    ctx.restore();
+  }
+
   function draw(ctx, image, lines, options) {
     if (!ctx || !image) return;
     const showOriginal = options?.showOriginal === true;
     const showCharacters = options?.showCharacters === true;
-    ctx.canvas.width = image.naturalWidth || image.width;
-    ctx.canvas.height = image.naturalHeight || image.height;
-    ctx.drawImage(image, 0, 0);
+    const rawRotation = options?.rotationDegrees ?? 0;
+    const degrees = !showOriginal && (rawRotation === 90 || rawRotation === 180 || rawRotation === 270)
+      ? rawRotation
+      : 0;
+    const srcW = image.naturalWidth || image.width;
+    const srcH = image.naturalHeight || image.height;
+    drawRotatedImage(ctx, image, degrees);
     if (showOriginal || !lines?.length) return;
+    const activeLines = degrees ? rotateLines(lines, srcW, srcH, degrees) : lines;
     if (showCharacters) {
-      drawCharacters(ctx, lines);
+      drawCharacters(ctx, activeLines);
       return;
     }
-    for (const line of lines) drawLine(ctx, line);
+    for (const line of activeLines) drawLine(ctx, line);
   }
 
   global.OcrOverlay = { draw };
