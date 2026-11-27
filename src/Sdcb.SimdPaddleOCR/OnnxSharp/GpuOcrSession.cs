@@ -54,8 +54,11 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     }
 
     // recent shape × variant sessions (REC widths cycle within an image); on Vulkan they share one
-    // grow-only arena / staging set, so each costs only a command buffer
+    // grow-only arena / staging set, so each costs only a command buffer. On Metal each session
+    // currently owns its own private MtlBuffer arena (~15–25 MB for det), so cap Metal tightly.
     private const int MaxExecs = 96;
+    private const int MaxMetalExecs = 2;
+    private const int MaxMetalCtcExecs = 12;
     private VkBufferPool? _vkBuffers;
     private const int MaxDeviceLosses = 3;
     private int _deviceLosses;
@@ -467,7 +470,10 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             : new VkExec(VkBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt,
                 _vkBuffers ??= VkBackend.Default.CreateBufferPool()));
         _execs.Add((key, exec));
-        if (_execs.Count > MaxExecs)
+        int maxExecs = _metal
+            ? (kind == Kind.Ctc ? Math.Max(MaxMetalCtcExecs, _units.Length) : MaxMetalExecs)
+            : MaxExecs;
+        while (_execs.Count > maxExecs)
         {
             _execs[0].exec.Dispose();
             _execs.RemoveAt(0);

@@ -93,9 +93,13 @@ var decoded = new (string Name, byte[] Pixels, int W, int H)[files.Length];
 for (int i = 0; i < files.Length; i++)
 {
     // Packed BGR24 (Stride = Width * 3); EXIF orientation is left as stored.
-    using PixelBuffer image = ImageCodecs.Decode(File.ReadAllBytes(files[i]), PixelFormat.Bgr24);
-    byte[] pixels = image.Pixels[..(image.Stride * image.Height)].ToArray();
-    decoded[i] = (Path.GetFileName(files[i]), pixels, image.Width, image.Height);
+    using IImageRowReader reader = ImageCodecs.OpenRowReader(File.OpenRead(files[i]), PixelFormat.Bgr24);
+    int stride = checked(reader.Width * 3);
+    byte[] pixels = new byte[checked(stride * reader.Height)];
+    int y = 0;
+    while (y < reader.Height)
+        y += reader.ReadRows(pixels.AsSpan(y * stride), reader.Height - y, stride);
+    decoded[i] = (Path.GetFileName(files[i]), pixels, reader.Width, reader.Height);
 }
 
 using IBenchEngine engine = BenchEngines.Create(engineName, modelType, workers, cAssetsDir);
