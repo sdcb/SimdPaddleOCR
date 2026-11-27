@@ -9,6 +9,7 @@
 | Windows x64（独显） | Ryzen 7 5800X + RTX 3080 Ti | CPU (AVX2) / Vulkan | 49.4 / **17.7 ms** | 121.0 / **29.9 ms** | 541.7 / **49.0 ms** | [`docs/perf/5800x-rtx3080ti.md`](perf/5800x-rtx3080ti.md) |
 | Windows x64（独显） | Ryzen 9 5950X + Intel Arc B580 | CPU (AVX2) / Vulkan | 59.4 / **21.7 ms** | 136.6 / **32.3 ms** | 520.1 / **53.3 ms** | [`docs/perf/5950x-b580.md`](perf/5950x-b580.md) |
 | Windows x64（笔记本核显） | Ryzen AI 9 H 365 (Zen 5) + Radeon 880M | CPU (AVX-512) / Vulkan | 58.0 / **32.2 ms** | 169.9 / **54.9 ms** | 752.6 / **121.3 ms** | [`docs/perf/ai9-h365-880m.md`](perf/ai9-h365-880m.md) |
+| Windows x64（无 AVX / 入门独显） | Pentium Gold G5500 (SSE4.2) + GeForce MX150 | CPU (SSE4.2) / Vulkan | 511.2 / **309.0 ms** | 2130.8 / **994.5 ms** | 9657.5 / **2906.6 ms** | [`docs/perf/g5500-mx150.md`](perf/g5500-mx150.md) |
 | Android 16 ARM64（手机） | Snapdragon 8 Gen 3 + Adreno 750 | CPU (NEON) / Vulkan | 150.9 / **117.4 ms** | 511.2 / **205.0 ms** | 2686.5 / **652.2 ms** | [`docs/perf/8gen3-adreno750.md`](perf/8gen3-adreno750.md) |
 | Linux ARM64（开发板） | Rockchip RK3399（Orange Pi 4 LTS） | CPU (NEON, 4w) | **1040.3 ms** | **3970.9 ms** | **15769.1 ms** | [`docs/perf/rk3399-arm64.md`](perf/rk3399-arm64.md) |
 | macOS 15 ARM64（CI VM） | Apple M1（Paravirt Metal） | CPU (NEON) / Metal | 162.4 / **128.2 ms** | — | — | [`docs/perf/apple-m1-metal.md`](perf/apple-m1-metal.md) |
