@@ -1,0 +1,81 @@
+name: bench-macos-ab
+
+# Same-VM A/B on the GitHub macOS ARM64 runner: a baseline ref vs the current ref,
+# CPU (NEON) and Metal, every model, ABBA order. Feeds docs/perf/apple-m1-metal.md.
+on:
+  workflow_dispatch:
+    inputs:
+      baseline: { description: 'Baseline ref', default: 'v2.0.0' }
+      count: { description: 'Images per run', default: '100' }
+      models: { description: 'Models', default: 'tiny,small,medium' }
+      engines: { description: 'Engines', default: 'sharp,metal' }
+
+jobs:
+  generate:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with: { submodules: true }
+      - uses: actions/cache@v6
+        id: dataset
+        with:
+          path: dataset
+          key: ocr-dataset-${{ hashFiles('test/Sdcb.SimdPaddleOCR.TestData/**/*.cs', 'test/Sdcb.SimdPaddleOCR.TestData/**/*.csproj') }}
+      - name: Generate dataset
+        if: steps.dataset.outputs.cache-hit != 'true'
+        run: dotnet run --project test/Sdcb.SimdPaddleOCR.TestData -c Release -- --out dataset
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ocr-dataset
+          path: dataset
+          if-no-files-found: error
+
+  ab:
+    needs: generate
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with: { submodules: true, path: main }
+      - uses: actions/checkout@v7
+        with: { submodules: true, path: base, ref: '${{ inputs.baseline }}' }
+      - uses: actions/download-artifact@v8
+        with: { name: ocr-dataset, path: dataset }
+      - name: Build both runners
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($side in 'base', 'main') {
+            dotnet build "$side/test/Sdcb.SimdPaddleOCR.Tests" -c Release -r osx-arm64 --no-self-contained -o "bin/$side" --nologo
+            if ($LASTEXITCODE -ne 0) { throw "build $side failed: $LASTEXITCODE" }
+            chmod +x "bin/$side/Sdcb.SimdPaddleOCR.Tests"
+          }
+          $cpu = (& sysctl -n machdep.cpu.brand_string); $mem = [math]::Round([double](& sysctl -n hw.memsize) / 1GB, 1)
+          Write-Output "::notice title=Benchmark host::cpu=$cpu logicalCpu=$([Environment]::ProcessorCount) memory=$mem GB os=$([Environment]::OSVersion.VersionString)"
+      - name: ABBA runs
+        shell: pwsh
+        run: |
+          $env:DOTNET_ROOT = Join-Path $HOME '.dotnet'
+          New-Item -ItemType Directory -Force results | Out-Null
+          foreach ($model in '${{ inputs.models }}'.Split(',')) {
+            foreach ($engine in '${{ inputs.engines }}'.Split(',')) {
+              foreach ($r in 1, 2) {
+                $order = if ($r -eq 1) { 'base', 'main' } else { 'main', 'base' }
+                foreach ($side in $order) {
+                  $out = "results/$side-$model-$engine-r$r.json"
+                  $t0 = Get-Date
+                  & "bin/$side/Sdcb.SimdPaddleOCR.Tests" --benchmark --benchmark-kind simd --engine $engine --workers 4 --model $model `
+                    --input dataset --count '${{ inputs.count }}' --warmup 1 --case-id "$side-$model-$engine" --replica $r --out $out 2> "results/$side-$model-$engine-r$r.stderr.txt"
+                  $code = $LASTEXITCODE
+                  $med = if (Test-Path $out) { (Get-Content $out -Raw | ConvertFrom-Json).summary.total_ms.median } else { '' }
+                  Write-Output ("{0} {1} {2} r{3} exit={4} median={5} ({6:F0}s)" -f $side, $model, $engine, $r, $code, $med, ((Get-Date) - $t0).TotalSeconds)
+                }
+              }
+            }
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench-macos-ab
+          path: results
