@@ -306,7 +306,7 @@ Pure C# GPU backends (Vulkan / Metal) and cross-platform CPU benchmarks (`datase
 | RTX 3080 Ti (5800X)               | Vulkan (cooperative matrix) |      **42.0 ms** |           **11.9×** |
 | Intel Arc B580 (5950X)            | Vulkan (cooperative matrix) |      **51.3 ms** |            **9.4×** |
 | AMD Radeon 880M (AI9 H365)        | Vulkan (cooperative matrix) |     **117.9 ms** |            **6.5×** |
-| Snapdragon 8 Gen 3 / Adreno 750   | Vulkan (no coop matrix)     |     **652.2 ms** |            **4.1×** |
+| Snapdragon 8 Gen 3 / Adreno 750   | Vulkan (no coop matrix)     |     **812.0 ms** |            **3.5×** |
 | Intel UHD 770 iGPU                | Vulkan (no coop matrix)     | Slower than CPU; `Auto` stays on CPU | — |
 
 Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), `tiny` runs at a **92.9 ms/image** median on a Ryzen 7 5800X — about 2.1× the same machine's desktop native.

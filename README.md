@@ -307,7 +307,7 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 | RTX 3080 Ti (5800X)       | Vulkan（协作矩阵）   |    **42.0 ms** |    **11.9×** |
 | Intel Arc B580 (5950X)    | Vulkan（协作矩阵）   |    **51.3 ms** |     **9.4×** |
 | AMD Radeon 880M (AI9 H365)| Vulkan（协作矩阵）   |   **117.9 ms** |     **6.5×** |
-| 骁龙 8 Gen 3 / Adreno 750 | Vulkan（无协作矩阵） |   **652.2 ms** |     **4.1×** |
+| 骁龙 8 Gen 3 / Adreno 750 | Vulkan（无协作矩阵） |   **812.0 ms** |     **3.5×** |
 | Intel UHD 770 核显        | Vulkan（无协作矩阵） | 慢于 CPU，`Auto` 默认走 CPU | — |
 
 WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 `tiny` 中位 **92.9 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 2.1 倍。
