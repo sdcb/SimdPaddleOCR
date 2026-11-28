@@ -63,7 +63,7 @@ internal static class PPOCRPreprocess
     }
 
     public static (int Width, int Height, float WidthRatio, float HeightRatio) ComputeDetSize(
-        int sourceWidth, int sourceHeight, int limitSideLength)
+        int sourceWidth, int sourceHeight, int limitSideLength, int minSideLength = 0)
     {
         if (sourceWidth <= 0) throw new ArgumentOutOfRangeException(nameof(sourceWidth));
         if (sourceHeight <= 0) throw new ArgumentOutOfRangeException(nameof(sourceHeight));
@@ -81,6 +81,11 @@ internal static class PPOCRPreprocess
         }
         int maximumSide = Math.Max(effectiveWidth, effectiveHeight);
         double ratio = maximumSide > limitSideLength ? (double)limitSideLength / maximumSide : 1.0;
+        // Opt-in short-side upscale (PaddleOCR limit_type "min"), never past
+        // the long-side cap: small images are enlarged for the detector.
+        int minimumSide = Math.Min(effectiveWidth, effectiveHeight);
+        if (minSideLength > 0 && minimumSide < minSideLength)
+            ratio = Math.Min((double)minSideLength / minimumSide, (double)limitSideLength / maximumSide);
         // Match PaddleOCR's DetResizeForTest.resize_image_type0 exactly:
         // first truncate h*ratio/w*ratio, then round those integer sizes to
         // the nearest multiple of 32 (with a minimum of 32).

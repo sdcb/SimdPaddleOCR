@@ -109,6 +109,8 @@ public sealed class PaddleOcrAll : IDisposable
         ReadOnlySpan<byte> dictionaryUtf8, PaddleOcrOptions? options = null)
     {
         _options = options ?? new PaddleOcrOptions();
+        if (!(_options.SpaceGapRatio >= 0 && _options.SpaceGapRatio <= 10))
+            throw new ArgumentOutOfRangeException(nameof(options), "SpaceGapRatio must be in [0, 10].");
         if (_options.LineWorkerCount is < 0 or > Parallelism.MaxLineWorkers)
             throw new ArgumentOutOfRangeException(nameof(options));
         if (_options.GpuCtcIntraOpThreads is < 0 or > 16)
@@ -191,6 +193,8 @@ public sealed class PaddleOcrAll : IDisposable
     {
         if (_disposed) throw new ObjectDisposedException(nameof(PaddleOcrAll));
         sourceStride = ImagePixels.ResolveStride(sourceWidth, sourceStride, format);
+        bool spaceGap = _options.SpaceGapRatio > 0;
+        bool captureCtc = returnCtcAlignment || spaceGap;
         long stageStart = s_profileEnabled ? Stopwatch.GetTimestamp() : 0;
         PaddleOcrDetectionResult detection = _detector.Detect(source, sourceWidth, sourceHeight, sourceStride, format);
         if (s_profileEnabled) AddProfile(0, stageStart);
@@ -316,12 +320,12 @@ public sealed class PaddleOcrAll : IDisposable
             if (maxBatch > 1)
             {
                 ProcessLinesBatched(count, workerCount, maxBatch, cropBuffer, cropOffsets,
-                    cropBytes, cropWidths, cropHeights, detection.Boxes, lines, returnCtcAlignment);
+                    cropBytes, cropWidths, cropHeights, detection.Boxes, lines, captureCtc);
             }
             else if (workerCount <= 1)
             {
                 ProcessRange(0, count, 1, 0, recIntraOp, cropBuffer, cropOffsets, cropBytes,
-                    cropWidths, cropHeights, detection.Boxes, lines, returnCtcAlignment);
+                    cropWidths, cropHeights, detection.Boxes, lines, captureCtc);
             }
             else
             {
@@ -350,7 +354,7 @@ public sealed class PaddleOcrAll : IDisposable
                         while ((next = Interlocked.Increment(ref cursor)) < count)
                             ProcessOne(order[next], classifier, recognizer, recIntraOp,
                                 cropBuffer, cropOffsets, cropBytes,
-                                cropWidths, cropHeights, detection.Boxes, lines, returnCtcAlignment);
+                                cropWidths, cropHeights, detection.Boxes, lines, captureCtc);
                     });
                 }
                 finally
@@ -360,6 +364,31 @@ public sealed class PaddleOcrAll : IDisposable
             }
             if (pipelineProfile) PipelineProfiler.Add(PipelineProfiler.LinesWall, pipelineStarted);
             if (s_profileEnabled) AddProfile(2, stageStart);
+            if (spaceGap)
+            {
+                // Crops are still live and already in recognized orientation
+                // (180° flips were applied in place before REC). Each line reads
+                // only its own crop, so lines run in parallel on the crop budget.
+                byte[] crops = cropBuffer;
+                int[] offs = cropOffsets, lens = cropBytes, cw = cropWidths, ch = cropHeights;
+                float ratio = _options.SpaceGapRatio;
+                void Gap(int i)
+                {
+                    PaddleOcrLine line = lines[i];
+                    string text = line.CtcSpans is { } spans
+                        ? PPOCRSpaceGap.Apply(line.Text, spans, line.RecognitionTimeSteps,
+                            line.RecognitionContentWidth, line.RecognitionTensorWidth,
+                            crops.AsSpan(offs[i], lens[i]), cw[i], ch[i], ratio)
+                        : line.Text;
+                    if (!returnCtcAlignment || !ReferenceEquals(text, line.Text))
+                        lines[i] = WithText(line, text, returnCtcAlignment ? line.CtcSpans : null);
+                }
+                int gapWorkers = Math.Min(_cropWorkers, count);
+                if (gapWorkers <= 1)
+                    for (int i = 0; i < count; i++) Gap(i);
+                else
+                    Parallel.For(0, count, new ParallelOptions { MaxDegreeOfParallelism = gapWorkers }, Gap);
+            }
             return new PaddleOcrResult
             {
                 Lines = lines,
@@ -652,6 +681,21 @@ public sealed class PaddleOcrAll : IDisposable
         if (s_profileEnabled) AddProfile(4, recStart);
         lines[i] = MakeLine(boxes[i], recognition, clsScore, label, rotation);
     }
+
+    private static PaddleOcrLine WithText(PaddleOcrLine line, string text, PaddleOcrCtcSpan[]? spans) => new PaddleOcrLine
+    {
+        Box = line.Box,
+        Text = text,
+        RecognitionScore = line.RecognitionScore,
+        ClassificationScore = line.ClassificationScore,
+        ClassificationLabel = line.ClassificationLabel,
+        AppliedRotationDegrees = line.AppliedRotationDegrees,
+        EmittedCount = line.EmittedCount,
+        CtcSpans = spans,
+        RecognitionContentWidth = line.RecognitionContentWidth,
+        RecognitionTensorWidth = line.RecognitionTensorWidth,
+        RecognitionTimeSteps = line.RecognitionTimeSteps
+    };
 
     private static PaddleOcrLine MakeLine(in PaddleOcrDetectionBox box, in PaddleOcrRecognitionResult recognition,
         float classificationScore, uint classificationLabel, int rotation) => new PaddleOcrLine

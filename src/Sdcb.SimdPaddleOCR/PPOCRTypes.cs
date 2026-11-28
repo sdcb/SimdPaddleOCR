@@ -19,6 +19,13 @@ public sealed class PaddleOcrDetectorOptions
     /// </summary>
     public int MaxPooledSessions { get; init; } = Environment.ProcessorCount;
     public int LimitSideLength { get; init; } = 960;
+    /// <summary>
+    /// Opt-in detector upscale: when the image's short side is below this value
+    /// it is enlarged toward it, never past <see cref="LimitSideLength"/> on the
+    /// long side. <c>0</c> (default) only downscales, as PaddleOCR's
+    /// <c>limit_type: max</c> does.
+    /// </summary>
+    public int MinSideLength { get; init; }
     public int MaxCandidates { get; init; } = 3000;
     public bool UseDilation { get; init; }
     // PP-OCRv6 official DBPostProcess configuration uses bitmap threshold
@@ -158,6 +165,17 @@ public sealed class PaddleOcrOptions
     private bool _recBatchLinesSet;
     internal bool HasExplicitRecBatchLines => _recBatchLinesSet;
     public long MaxCropPixels { get; init; } = 16_000_000;
+    /// <summary>
+    /// Pixel word-gap spaces. When positive, a space is inserted between two
+    /// recognized tokens if the crop has a run of empty columns between them
+    /// at least this many line heights wide (e.g. <c>0.3</c>). The recognizer
+    /// often drops spaces between CJK text and Latin / digits; this recovers
+    /// them from the pixels. Spaces next to an existing space or full-width
+    /// CJK punctuation are never inserted. Inserted spaces are not CTC tokens,
+    /// so <see cref="PaddleOcrLine.CtcSpans"/> does not contain them.
+    /// <c>0</c> (default) leaves the recognizer text unchanged.
+    /// </summary>
+    public float SpaceGapRatio { get; init; }
     public PaddleOcrDetectorOptions Detector { get; init; } = new();
     public PaddleOcrClassifierOptions Classifier { get; init; } = new();
     public PaddleOcrRecognizerOptions Recognizer { get; init; } = new();

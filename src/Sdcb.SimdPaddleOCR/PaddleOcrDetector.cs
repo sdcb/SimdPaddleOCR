@@ -45,6 +45,7 @@ public sealed class PaddleOcrDetector : IDisposable
             // One shape-agnostic compiled model; pooled sessions are reshaped per image.
             _compiled = new CompiledModel(_model, _intraOpThreads, releaseInput: true);
             if (_options.LimitSideLength is < 32 or > 4096) throw new ArgumentOutOfRangeException(nameof(options));
+            if (_options.MinSideLength is < 0 or > 4096) throw new ArgumentOutOfRangeException(nameof(options));
             _postprocessPixels = checked(_options.LimitSideLength * _options.LimitSideLength);
             if (_options.MaxCandidates is <= 0 or > 10_000) throw new ArgumentOutOfRangeException(nameof(options));
             if (_options.BitmapThreshold is < 0 or > 1 || _options.BoxThreshold is < 0 or > 1 ||
@@ -79,6 +80,7 @@ public sealed class PaddleOcrDetector : IDisposable
             LimitSideLength = source.LimitSideLength,
             MaxCandidates = source.MaxCandidates,
             UseDilation = source.UseDilation,
+            MinSideLength = source.MinSideLength,
             BitmapThreshold = source.BitmapThreshold,
             BoxThreshold = boxThreshold,
             UnclipRatio = source.UnclipRatio,
@@ -131,7 +133,7 @@ public sealed class PaddleOcrDetector : IDisposable
 
         try
         {
-            (int Width, int Height, float WidthRatio, float HeightRatio) size = PPOCRPreprocess.ComputeDetSize(sourceWidth, sourceHeight, _options.LimitSideLength);
+            (int Width, int Height, float WidthRatio, float HeightRatio) size = PPOCRPreprocess.ComputeDetSize(sourceWidth, sourceHeight, _options.LimitSideLength, _options.MinSideLength);
             IOcrSession session = RentSession();
             DbPostprocess.Workspace postprocess = RentPostprocess();
             session.Reshape([1, 3, size.Height, size.Width]);
