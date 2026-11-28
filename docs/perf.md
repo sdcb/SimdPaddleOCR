@@ -18,13 +18,13 @@
 | Windows x64（无 AVX / 入门独显） | Pentium Gold G5500 (SSE4.2) + GeForce MX150 | CPU (SSE4.2) / Vulkan | 384.9 / **273.3 ms**（1.18× / 2.61×） | 1388.2 / **747.4 ms**（1.27× / 4.21×）¹ | 6421.3 / **2757.0 ms**（1.09× / 2.76×）¹ | 492 / 616 MB | [`docs/perf/g5500-mx150.md`](perf/g5500-mx150.md) |
 | Android 16 ARM64（手机） | Snapdragon 8 Gen 3 + Adreno 750 | CPU (NEON) / Vulkan | 160.6 / **105.3 ms**（1.20× / 1.15×） | 525.4 / **189.8 ms**（1.22× / 1.19×） | 2839.6 / **812.0 ms**（1.04× / 1.35×²） | 919 / 814 MB | [`docs/perf/8gen3-adreno750.md`](perf/8gen3-adreno750.md) |
 | Linux ARM64（开发板） | Rockchip RK3399（Orange Pi 4 LTS） | CPU (NEON, 4w) | **1039.2 ms**（1.11×） | **3720.5 ms**（1.38×）¹ | **15243.6 ms**（1.00×）¹ | 524 MB | [`docs/perf/rk3399-arm64.md`](perf/rk3399-arm64.md) |
-| macOS ARM64（CI VM） | Apple M1（Paravirt Metal） | CPU (NEON) / Metal | 171.0 / 163.2 ms（1.26× / **0.50×**） | 496.5 / 246.3 ms（1.22× / **0.60×**） | 1960.9 / 600.2 ms（1.06× / **0.72×**） | 711 / 1329 MB | [`docs/perf/apple-m1-metal.md`](perf/apple-m1-metal.md) |
+| macOS ARM64（CI VM） | Apple M1（Paravirt Metal） | CPU (NEON) / Metal | 171.0 / **100.3 ms**（1.26× / 0.95×） | 496.5 / **179.8 ms**（1.22× / 0.80×） | 1960.9 / **470.2 ms**（1.06× / 0.93×） | 711 / 612 MB | [`docs/perf/apple-m1-metal.md`](perf/apple-m1-metal.md) |
 | WebAssembly（浏览器） | Ryzen 7 5800X（Edge） | WASM SIMD128 (`PackedSimd`) + AOT | **92.9 ms**（1.26×） | **274.8 ms**（1.61×） | **1323.7 ms**（1.31×） | 85 MB（托管堆） | [`docs/perf/wasm-5800x.md`](perf/wasm-5800x.md) |
 
 ¹ `small` 25 张、`medium` 6 张。 ² 手机 `medium` 处于 thermal=3 降频，轮间波动大。
 
 * **精度**（官方 `evaluate.py` 口径，本地 `dataset/` 100 张 / 1036 行，`main` CPU 输出在 AVX2 / AVX-512 / SSE4.2 / NEON / WASM 上逐字一致）：`tiny` 753（CER 2.62%）、`small` **954**（0.58%）、`medium` **1014**（0.31%）。`small` / `medium` 自本版起默认 `UnclipRatio` 1.6（`tiny` 保持 1.4），相对 1.4 多对 20 / 16 行，且延时下降 2–5%。
-* **Metal 回退**：macOS Metal 在 `main` 上明显慢于 `v2.0.0`，峰值内存约翻倍，详见 M1 报告。
+* **Metal**：共享引擎的 Metal 路径曾明显慢于 `v2.0.0`（0.50–0.72×，峰值内存约翻倍）。`f99df67` 修复后为 0.80–0.95×，内存与 `v2.0.0` 相当，详见 M1 报告。
 
 ## 历史归档（`perf/legacy/`）
 

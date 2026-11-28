@@ -312,7 +312,7 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 
 WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 `tiny` 中位 **92.9 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 2.1 倍。
 
-> 相比 `v2.0.0`（同机 ABBA 交替实测）：CPU `small` 全平台快 **22–42%**，`tiny` / `medium` 为 0.98–1.26×；WebAssembly 快 **26–61%**（`tiny` 116.7 → 92.9 ms）；MX150 Vulkan 快 **2.6–4.2×**；桌面 Vulkan `medium` 快 7–10%，峰值内存下降（RTX 3080 Ti `medium` 1000 → 915 MB）。Radeon 880M Vulkan 的 `tiny` / `small` 仍慢 3–6%；**macOS Metal 明显回退**（0.50–0.72×，峰值内存约翻倍），详见 [`apple-m1-metal.md`](docs/perf/apple-m1-metal.md)。
+> 相比 `v2.0.0`（同机 ABBA 交替实测）：CPU `small` 全平台快 **22–42%**，`tiny` / `medium` 为 0.98–1.26×；WebAssembly 快 **26–61%**（`tiny` 116.7 → 92.9 ms）；MX150 Vulkan 快 **2.6–4.2×**；桌面 Vulkan `medium` 快 7–10%，峰值内存下降（RTX 3080 Ti `medium` 1000 → 915 MB）。Radeon 880M Vulkan 的 `tiny` / `small` 仍慢 3–6%；macOS Metal 为 `v2.0.0` 的 0.80–0.95×（修复前 0.50–0.72×），内存相当，详见 [`apple-m1-metal.md`](docs/perf/apple-m1-metal.md)。
 >
 > 精度（官方 `evaluate.py` 口径，1036 行）：`tiny` 753、`small` **954**、`medium` **1014** 行精确匹配；`small` / `medium` 默认 `UnclipRatio` 1.6（`tiny` 保持上游 1.4），比 1.4 多对 20 / 16 行且更快。CPU 输出在 AVX2 / AVX-512 / SSE4.2 / NEON / WASM 上逐字一致。
 

@@ -311,7 +311,7 @@ Pure C# GPU backends (Vulkan / Metal) and cross-platform CPU benchmarks (`datase
 
 Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), `tiny` runs at a **92.9 ms/image** median on a Ryzen 7 5800X — about 2.1× the same machine's desktop native.
 
-> Compared to `v2.0.0` (same-machine ABBA runs): CPU `small` is **22–42% faster** on every platform, `tiny` / `medium` 0.98–1.26×; WebAssembly is **26–61% faster** (`tiny` 116.7 → 92.9 ms); MX150 Vulkan is **2.6–4.2× faster**; desktop Vulkan `medium` is 7–10% faster with a lower peak working set (RTX 3080 Ti `medium` 1000 → 915 MB). Radeon 880M Vulkan `tiny` / `small` are still 3–6% slower, and **macOS Metal regressed** (0.50–0.72×, about twice the peak memory); see [`apple-m1-metal.md`](docs/perf/apple-m1-metal.md).
+> Compared to `v2.0.0` (same-machine ABBA runs): CPU `small` is **22–42% faster** on every platform, `tiny` / `medium` 0.98–1.26×; WebAssembly is **26–61% faster** (`tiny` 116.7 → 92.9 ms); MX150 Vulkan is **2.6–4.2× faster**; desktop Vulkan `medium` is 7–10% faster with a lower peak working set (RTX 3080 Ti `medium` 1000 → 915 MB). Radeon 880M Vulkan `tiny` / `small` are still 3–6% slower, and macOS Metal is at 0.80–0.95× of `v2.0.0` (0.50–0.72× before the fix) with similar memory; see [`apple-m1-metal.md`](docs/perf/apple-m1-metal.md).
 >
 > Accuracy (the dataset's official `evaluate.py`, 1036 lines): `tiny` 753, `small` **954**, `medium` **1014** exact lines. `small` / `medium` now default to `UnclipRatio` 1.6 (`tiny` keeps the upstream 1.4): 20 / 16 more exact lines than 1.4, and faster. CPU output is identical across AVX2 / AVX-512 / SSE4.2 / NEON / WASM.
 
