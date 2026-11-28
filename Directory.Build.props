@@ -7,7 +7,7 @@
     <SdcbSimdPaddleOCRVersion Condition="'$(SdcbSimdPaddleOCRVersion)' == ''">3.0.0</SdcbSimdPaddleOCRVersion>
     <SdcbSimdPaddleOCRModelProviderVersion Condition="'$(SdcbSimdPaddleOCRModelProviderVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelProviderVersion>
     <SdcbSimdPaddleOCRModelsTextLineOrientationVersion Condition="'$(SdcbSimdPaddleOCRModelsTextLineOrientationVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsTextLineOrientationVersion>
-    <SdcbSimdPaddleOCRModelsChineseV6TinyVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6TinyVersion>
+    <SdcbSimdPaddleOCRModelsChineseV6TinyVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6TinyVersion)' == ''">1.0.1</SdcbSimdPaddleOCRModelsChineseV6TinyVersion>
     <SdcbSimdPaddleOCRModelsChineseV6SmallVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6SmallVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6SmallVersion>
     <SdcbSimdPaddleOCRModelsChineseV6MediumVersion Condition="'$(SdcbSimdPaddleOCRModelsChineseV6MediumVersion)' == ''">1.0.0</SdcbSimdPaddleOCRModelsChineseV6MediumVersion>
   </PropertyGroup>
