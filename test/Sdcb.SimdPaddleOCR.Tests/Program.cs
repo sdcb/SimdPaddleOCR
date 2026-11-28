@@ -15,11 +15,15 @@ if (args.Length == 0 || args[0] is "-h" or "--help")
 {
     Console.WriteLine("usage: --workers 1..16 --model tiny|small|medium --input <dataset> --out <json> [--engine sharp|vulkan|metal|auto|c] [--smoke|--benchmark] [--benchmark-kind simd|engine] [--count N] [--warmup N] [--case-id ID] [--replica N] [--c-assets <dir>]");
     Console.WriteLine("       --summarize <file...> [--input <dataset>] [--out-md <path>]");
+    Console.WriteLine("       --doc-ori <upright page image> [--engine sharp|metal|vulkan|auto] [--out <json>]");
     return args.Length == 0 ? 2 : 0;
 }
 
 if (args[0] == "--summarize")
     return BenchSummary.Compare(args.Skip(1).ToArray());
+
+if (args[0] == "--doc-ori")
+    return DocOrientationSmoke.Run(args.Skip(1).ToArray());
 
 int workers = 4;
 string modelType = "tiny";

@@ -21,6 +21,7 @@
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Small\Sdcb.SimdPaddleOCR.Models.ChineseV6Small.csproj" />
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Medium\Sdcb.SimdPaddleOCR.Models.ChineseV6Medium.csproj" />
     <PackageReference Include="Sdcb.SimdCodecs" Version="2.1.0" />
+    <PackageReference Include="Sdcb.SimdPaddleOCR.Models.DocumentOrientation" Version="1.0.0" />
   </ItemGroup>
   <ItemGroup Condition="'$(UseNs20Library)' == 'true'">
     <!-- SetTargetFramework does not flow ns2.0 PackageReferences into the net10 host deps.json. -->

@@ -92,6 +92,10 @@ jobs:
           if (-not $IsWindows) { chmod +x $exe }
           & $exe --smoke --count 20 --engine sharp --workers 4 --model tiny --input dataset --case-id '${{ matrix.name }}' --out '${{ matrix.name }}-smoke.json'
           if ($LASTEXITCODE -ne 0) { throw "smoke failed: $LASTEXITCODE" }
+
+          # real document-orientation model on an upright page turned 0/90/180/270 (correctness only)
+          & $exe --doc-ori examples/sample.jpg --engine sharp --out '${{ matrix.name }}-doc-ori.json'
+          if ($LASTEXITCODE -ne 0) { throw "doc-ori smoke failed: $LASTEXITCODE" }
       - name: Metal smoke (osx-arm64)
         if: matrix.name == 'osx-arm64'
         shell: pwsh
@@ -116,6 +120,25 @@ jobs:
             }
           }
           Write-Output "metal smoke OK: $($mtl.rows.Count) images, detected-line counts identical to CPU"
+
+          & $exe --doc-ori examples/sample.jpg --engine metal --out 'osx-arm64-metal-doc-ori.json' 2> metal-docori-stderr.txt
+          $code = $LASTEXITCODE
+          Get-Content metal-docori-stderr.txt
+          if ($code -ne 0) { throw "metal doc-ori smoke failed: $code" }
+          if (-not (Select-String -Path metal-docori-stderr.txt -Pattern '\[metal\] device:' -Quiet)) {
+            throw 'Metal device never engaged — the doc-ori smoke silently ran on CPU'
+          }
+          if (Select-String -Path metal-docori-stderr.txt -Pattern 'Metal failed|falling back' -Quiet) {
+            throw 'metal doc-ori session fell back to CPU'
+          }
+          $cpu = Get-Content 'osx-arm64-doc-ori.json' | ConvertFrom-Json
+          $mtl = Get-Content 'osx-arm64-metal-doc-ori.json' | ConvertFrom-Json
+          for ($i = 0; $i -lt $cpu.rows.Count; $i++) {
+            if ($cpu.rows[$i].predicted -ne $mtl.rows[$i].predicted -or [math]::Abs($cpu.rows[$i].score - $mtl.rows[$i].score) -ge 0.02) {
+              throw "metal doc-ori differs from CPU at $($cpu.rows[$i].expected): $($cpu.rows[$i].predicted)/$($cpu.rows[$i].score) vs $($mtl.rows[$i].predicted)/$($mtl.rows[$i].score)"
+            }
+          }
+          Write-Output "metal doc-ori OK: labels identical to CPU, scores within 0.02"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
@@ -123,6 +146,8 @@ jobs:
           path: |
             ${{ matrix.name }}-smoke.json
             ${{ matrix.name }}-metal-smoke.json
+            ${{ matrix.name }}-doc-ori.json
+            ${{ matrix.name }}-metal-doc-ori.json
           if-no-files-found: warn
 
   smoke-models:
