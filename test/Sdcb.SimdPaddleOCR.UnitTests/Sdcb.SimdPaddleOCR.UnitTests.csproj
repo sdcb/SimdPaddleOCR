@@ -32,6 +32,7 @@
     </ProjectReference>
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.TextLineOrientation\Sdcb.SimdPaddleOCR.Models.TextLineOrientation.csproj" />
     <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny\Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.csproj" />
+    <ProjectReference Include="..\..\src\models\Sdcb.SimdPaddleOCR.Models.ChineseV6Small\Sdcb.SimdPaddleOCR.Models.ChineseV6Small.csproj" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Fixtures/FusedCtcScore.onnx.gz" />

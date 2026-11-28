@@ -73,4 +73,20 @@ public class AccuracyOptionTests
         PaddleOcrCtcSpan[] spans = [new("中", 1, 0, 1), new("A", 1, 20, 21)];
         Assert.Equal("中 A", Apply("中A", spans, crop, 40, 12, 0.5f));
     }
+
+    [Fact]
+    public void UnclipRatioDefaultsAreModelAware()
+    {
+        using var tiny = new PaddleOcrDetector(Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModel.Detection.OpenRead());
+        using var small = new PaddleOcrDetector(Sdcb.SimdPaddleOCR.Models.ChineseV6Small.ChineseV6SmallModel.Detection.OpenRead());
+        Assert.Equal((1.4f, 0.4f), (tiny.ResolvedOptions.UnclipRatio, tiny.ResolvedOptions.BoxThreshold));
+        Assert.Equal((1.6f, 0.45f), (small.ResolvedOptions.UnclipRatio, small.ResolvedOptions.BoxThreshold));
+        // An explicit value always wins, and setting one does not disturb the other default.
+        using var smallExplicit = new PaddleOcrDetector(Sdcb.SimdPaddleOCR.Models.ChineseV6Small.ChineseV6SmallModel.Detection.OpenRead(),
+            new PaddleOcrDetectorOptions { UnclipRatio = 1.4f });
+        Assert.Equal((1.4f, 0.45f), (smallExplicit.ResolvedOptions.UnclipRatio, smallExplicit.ResolvedOptions.BoxThreshold));
+        using var tinyExplicit = new PaddleOcrDetector(Sdcb.SimdPaddleOCR.Models.ChineseV6Tiny.ChineseV6TinyModel.Detection.OpenRead(),
+            new PaddleOcrDetectorOptions { UnclipRatio = 1.6f });
+        Assert.Equal((1.6f, 0.4f), (tinyExplicit.ResolvedOptions.UnclipRatio, tinyExplicit.ResolvedOptions.BoxThreshold));
+    }
 }

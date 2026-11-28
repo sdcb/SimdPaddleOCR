@@ -29,15 +29,24 @@ public sealed class PaddleOcrDetectorOptions
     public int MaxCandidates { get; init; } = 3000;
     public bool UseDilation { get; init; }
     // PP-OCRv6 official DBPostProcess configuration uses bitmap threshold
-    // 0.2 and unclip ratio 1.4. Tiny uses box_thresh=0.4 while small/medium
-    // use 0.45; Detector applies that model-aware default when this property
-    // is not explicitly set.
+    // 0.2. Tiny uses box_thresh=0.4 while small/medium use 0.45; Detector
+    // applies that model-aware default when BoxThreshold is not explicitly set.
     public float BitmapThreshold { get; init; } = 0.2f;
     private float _boxThreshold = 0.45f;
     private bool _boxThresholdSet;
     public float BoxThreshold { get => _boxThreshold; init { _boxThreshold = value; _boxThresholdSet = true; } }
     internal bool HasExplicitBoxThreshold => _boxThresholdSet;
-    public float UnclipRatio { get; init; } = 1.4f;
+    private float _unclipRatio = 1.6f;
+    private bool _unclipRatioSet;
+    /// <summary>
+    /// Outward offset of each detected box, as a multiple of area / perimeter.
+    /// When not set, the detector uses 1.4 for the tiny detector (the upstream
+    /// PP-OCRv6 value) and 1.6 for every other detector: the upstream 1.4 leaves
+    /// small/medium boxes almost touching the glyphs, and 1.6 measurably improves
+    /// recognition (mostly word spacing) while narrowing the recognizer input.
+    /// </summary>
+    public float UnclipRatio { get => _unclipRatio; init { _unclipRatio = value; _unclipRatioSet = true; } }
+    internal bool HasExplicitUnclipRatio => _unclipRatioSet;
     public long MaxImagePixels { get; init; } = 40_000_000;
     /// <summary>Compute backend for the detection graph. Default <see cref="OcrBackend.Auto"/>.</summary>
     public OcrBackend Backend { get; init; } = OcrBackend.Auto;

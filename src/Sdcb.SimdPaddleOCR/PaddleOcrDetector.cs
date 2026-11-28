@@ -12,6 +12,7 @@ public sealed class PaddleOcrDetector : IDisposable
     private static readonly long[] s_profileTicks = new long[3];
     private readonly Model _model;
     private readonly PaddleOcrDetectorOptions _options;
+    internal PaddleOcrDetectorOptions ResolvedOptions => _options;
     private readonly int _intraOpThreads;
     private readonly CompiledModel _compiled;
     private readonly ConcurrentBag<IOcrSession> _sessions = [];
@@ -68,10 +69,16 @@ public sealed class PaddleOcrDetector : IDisposable
         // filename, so use the first convolution's output width as a stable
         // architecture hint (tiny=16, small=24, medium=64).  An explicitly
         // supplied BoxThreshold always wins, including for non-v6 models.
+        // UnclipRatio follows the same rule: tiny keeps the upstream 1.4,
+        // every other detector defaults to 1.6 (see the property's remarks).
+        bool tiny = !(source.HasExplicitBoxThreshold && source.HasExplicitUnclipRatio) && IsTinyDetector(model);
         float boxThreshold = source.HasExplicitBoxThreshold
             ? source.BoxThreshold
-            : IsTinyDetector(model) ? 0.4f : source.BoxThreshold;
-        if (source.HasExplicitBoxThreshold && ReferenceEquals(source, supplied))
+            : tiny ? 0.4f : source.BoxThreshold;
+        float unclipRatio = source.HasExplicitUnclipRatio
+            ? source.UnclipRatio
+            : tiny ? 1.4f : source.UnclipRatio;
+        if (source.HasExplicitBoxThreshold && source.HasExplicitUnclipRatio && ReferenceEquals(source, supplied))
             return source;
         return new PaddleOcrDetectorOptions
         {
@@ -83,7 +90,7 @@ public sealed class PaddleOcrDetector : IDisposable
             MinSideLength = source.MinSideLength,
             BitmapThreshold = source.BitmapThreshold,
             BoxThreshold = boxThreshold,
-            UnclipRatio = source.UnclipRatio,
+            UnclipRatio = unclipRatio,
             MaxImagePixels = source.MaxImagePixels,
             Backend = source.Backend
         };
