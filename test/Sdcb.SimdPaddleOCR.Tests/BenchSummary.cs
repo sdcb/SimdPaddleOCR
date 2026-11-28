@@ -282,7 +282,7 @@ static class BenchSummary
             foreach (GtLine expected in gtLines)
             {
                 totalLines++;
-                totalChars += expected.Text.Length;
+                totalChars += CodePointLength(expected.Text);
                 if (remainingText.Remove(expected.Text))
                 {
                     exactLines++;
@@ -290,9 +290,11 @@ static class BenchSummary
                 }
 
                 imageExact = false;
-                int best = expected.Text.Length;
-                foreach (PredLine actual in predicted)
-                    best = Math.Min(best, Levenshtein(expected.Text, actual.Text));
+                int best = CodePointLength(expected.Text);
+                // Like evaluate.py: only predictions not already consumed by an
+                // exact match, so one predicted line cannot satisfy two GT lines.
+                foreach (string actual in remainingText)
+                    best = Math.Min(best, Levenshtein(expected.Text, actual));
                 errors += best;
             }
             if (imageExact) exactImages++;
@@ -668,9 +670,36 @@ static class BenchSummary
         throw new FileNotFoundException($"result file not found: {path}");
     }
 
-    private static int Levenshtein(string a, string b)
+    // Matches the dataset's scripts/evaluate.py: distances and lengths count
+    // Unicode code points, not UTF-16 units (the small/medium dictionaries
+    // contain supplementary-plane characters).
+    private static int CodePointLength(string s)
     {
-        if (a == b) return 0;
+        int n = 0;
+        for (int i = 0; i < s.Length; i++, n++)
+            if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1])) i++;
+        return n;
+    }
+
+    private static int[] CodePoints(string s)
+    {
+        int[] cps = new int[CodePointLength(s)];
+        for (int i = 0, k = 0; i < s.Length; i++, k++)
+        {
+            if (char.IsHighSurrogate(s[i]) && i + 1 < s.Length && char.IsLowSurrogate(s[i + 1]))
+            {
+                cps[k] = char.ConvertToUtf32(s[i], s[i + 1]);
+                i++;
+            }
+            else cps[k] = s[i];
+        }
+        return cps;
+    }
+
+    private static int Levenshtein(string left, string right)
+    {
+        if (left == right) return 0;
+        int[] a = CodePoints(left), b = CodePoints(right);
         if (a.Length == 0) return b.Length;
         if (b.Length == 0) return a.Length;
         int[] previous = new int[b.Length + 1];
