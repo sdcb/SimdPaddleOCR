@@ -304,15 +304,17 @@ Apache-2.0 提供明确的专利授权条款，更适合公开发布的库和 Nu
 
 | 设备                      | 后端                 | `medium` 中位 | 相对同机 CPU |
 | ------------------------- | -------------------- | ------------: | -----------: |
-| RTX 3080 Ti (5800X)       | Vulkan（协作矩阵）   |    **49.0 ms** |    **11.1×** |
-| Intel Arc B580 (5950X)    | Vulkan（协作矩阵）   |    **53.3 ms** |     **9.8×** |
-| AMD Radeon 880M (AI9 H365)| Vulkan（协作矩阵）   |   **121.3 ms** |     **6.2×** |
+| RTX 3080 Ti (5800X)       | Vulkan（协作矩阵）   |    **42.0 ms** |    **11.9×** |
+| Intel Arc B580 (5950X)    | Vulkan（协作矩阵）   |    **51.3 ms** |     **9.4×** |
+| AMD Radeon 880M (AI9 H365)| Vulkan（协作矩阵）   |   **117.9 ms** |     **6.5×** |
 | 骁龙 8 Gen 3 / Adreno 750 | Vulkan（无协作矩阵） |   **652.2 ms** |     **4.1×** |
 | Intel UHD 770 核显        | Vulkan（无协作矩阵） | 慢于 CPU，`Auto` 默认走 CPU | — |
 
-WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 `tiny` 中位 **95.2 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 1.9 倍。
+WebAssembly（`browser-wasm` 多线程 + LLVM AOT + WASM SIMD128 `PackedSimd` 内核）下 `tiny` 中位 **92.9 ms/张**（Ryzen 7 5800X），约为同机桌面原生的 2.1 倍。
 
-> 相比 `v2.0.0`，切换到内嵌 `SimdOnnx` 引擎后全平台实测无退化且普遍提速：CPU `small` 快 **20–47%**、WebAssembly 快 **18–34%**（`tiny` 127.2 → 95.2 ms）、安卓骁龙 8 Gen 3 Vulkan `medium` 快 **30%**、桌面 Vulkan 峰值内存进一步下降（RTX 3080 Ti `medium` 994 → 912 MB），同像素输入下 100/100 逐张一致。
+> 相比 `v2.0.0`（同机 ABBA 交替实测）：CPU `small` 全平台快 **22–42%**，`tiny` / `medium` 为 0.98–1.26×；WebAssembly 快 **26–61%**（`tiny` 116.7 → 92.9 ms）；MX150 Vulkan 快 **2.6–4.2×**；桌面 Vulkan `medium` 快 7–10%，峰值内存下降（RTX 3080 Ti `medium` 1000 → 915 MB）。Radeon 880M Vulkan 的 `tiny` / `small` 仍慢 3–6%；**macOS Metal 明显回退**（0.50–0.72×，峰值内存约翻倍），详见 [`apple-m1-metal.md`](docs/perf/apple-m1-metal.md)。
+>
+> 精度（官方 `evaluate.py` 口径，1036 行）：`tiny` 753、`small` **954**、`medium` **1014** 行精确匹配；`small` / `medium` 默认 `UnclipRatio` 1.6（`tiny` 保持上游 1.4），比 1.4 多对 20 / 16 行且更快。CPU 输出在 AVX2 / AVX-512 / SSE4.2 / NEON / WASM 上逐字一致。
 
 各机型的完整跑分、精度表与复现命令见总目录 [`docs/perf.md`](docs/perf.md)（分机型报告均位于 `docs/perf/`）。
 

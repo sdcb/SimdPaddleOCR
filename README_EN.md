@@ -303,15 +303,17 @@ Pure C# GPU backends (Vulkan / Metal) and cross-platform CPU benchmarks (`datase
 
 | Device                            | Backend                     | `medium` median | vs same-machine CPU |
 | --------------------------------- | --------------------------- | --------------: | ------------------: |
-| RTX 3080 Ti (5800X)               | Vulkan (cooperative matrix) |      **49.0 ms** |           **11.1×** |
-| Intel Arc B580 (5950X)            | Vulkan (cooperative matrix) |      **53.3 ms** |            **9.8×** |
-| AMD Radeon 880M (AI9 H365)        | Vulkan (cooperative matrix) |     **121.3 ms** |            **6.2×** |
+| RTX 3080 Ti (5800X)               | Vulkan (cooperative matrix) |      **42.0 ms** |           **11.9×** |
+| Intel Arc B580 (5950X)            | Vulkan (cooperative matrix) |      **51.3 ms** |            **9.4×** |
+| AMD Radeon 880M (AI9 H365)        | Vulkan (cooperative matrix) |     **117.9 ms** |            **6.5×** |
 | Snapdragon 8 Gen 3 / Adreno 750   | Vulkan (no coop matrix)     |     **652.2 ms** |            **4.1×** |
 | Intel UHD 770 iGPU                | Vulkan (no coop matrix)     | Slower than CPU; `Auto` stays on CPU | — |
 
-Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), `tiny` runs at a **95.2 ms/image** median on a Ryzen 7 5800X — about 1.9× the same machine's desktop native.
+Under WebAssembly (`browser-wasm`, multi-threaded + LLVM AOT + WASM SIMD128 `PackedSimd` kernels), `tiny` runs at a **92.9 ms/image** median on a Ryzen 7 5800X — about 2.1× the same machine's desktop native.
 
-> Compared to `v2.0.0`, moving to the embedded `SimdOnnx` engine delivers broad gains with zero accuracy regression (100/100 bit-identical on lossless inputs): CPU `small` is **20–47% faster**, WebAssembly is **18–34% faster** (`tiny` 127.2 → 95.2 ms), Android Snapdragon 8 Gen 3 Vulkan `medium` is **30% faster**, and desktop Vulkan peak working set is lower (RTX 3080 Ti `medium` 994 → 912 MB).
+> Compared to `v2.0.0` (same-machine ABBA runs): CPU `small` is **22–42% faster** on every platform, `tiny` / `medium` 0.98–1.26×; WebAssembly is **26–61% faster** (`tiny` 116.7 → 92.9 ms); MX150 Vulkan is **2.6–4.2× faster**; desktop Vulkan `medium` is 7–10% faster with a lower peak working set (RTX 3080 Ti `medium` 1000 → 915 MB). Radeon 880M Vulkan `tiny` / `small` are still 3–6% slower, and **macOS Metal regressed** (0.50–0.72×, about twice the peak memory); see [`apple-m1-metal.md`](docs/perf/apple-m1-metal.md).
+>
+> Accuracy (the dataset's official `evaluate.py`, 1036 lines): `tiny` 753, `small` **954**, `medium` **1014** exact lines. `small` / `medium` now default to `UnclipRatio` 1.6 (`tiny` keeps the upstream 1.4): 20 / 16 more exact lines than 1.4, and faster. CPU output is identical across AVX2 / AVX-512 / SSE4.2 / NEON / WASM.
 
 Full per-device benchmarks, accuracy tables, and reproduction commands are indexed in [`docs/perf.md`](docs/perf.md) (all per-machine reports live under `docs/perf/`).
 
