@@ -1,0 +1,47 @@
+name: metal-prof
+
+# Per-graph and per-kernel Metal profile, v2.0.0 vs this ref, same VM (perf branches only).
+on:
+  push:
+    branches: ['perf/**']
+    paths: ['external/**', 'src/**', 'test/Sdcb.SimdPaddleOCR.Benchmarks/**', '.github/workflows/metal-prof.yml']
+  workflow_dispatch:
+
+jobs:
+  prof:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with: { submodules: true, path: main }
+      - uses: actions/checkout@v7
+        with: { path: base, ref: v2.0.0 }
+      - name: Build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Copy-Item -Recurse main/test/Sdcb.SimdPaddleOCR.Benchmarks base/test/
+          dotnet build main/test/Sdcb.SimdPaddleOCR.Benchmarks -c Release -o bin/main --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'main build failed' }
+          dotnet build base/test/Sdcb.SimdPaddleOCR.Benchmarks -c Release -o bin/base --nologo -p:V200=true
+          if ($LASTEXITCODE -ne 0) { throw 'base build failed' }
+      - name: Profile
+        shell: pwsh
+        run: |
+          $env:DOTNET_ROOT = Join-Path $HOME '.dotnet'
+          $cases = @(
+            @('det.onnx', 1, 736, 736), @('det.onnx', 1, 960, 544),
+            @('cls.onnx', 1, 80, 160), @('cls.onnx', 8, 80, 160),
+            @('rec.onnx', 1, 48, 320), @('rec.onnx', 1, 48, 960), @('rec.onnx', 8, 48, 320),
+            @('small_det.onnx', 1, 736, 736), @('small_rec.onnx', 1, 48, 320),
+            @('medium_det.onnx', 1, 736, 736), @('medium_rec.onnx', 1, 48, 320))
+          foreach ($prof in '0', '1') {
+            $env:SIMD_OCR_GPU_PROF = $prof
+            foreach ($c in $cases) {
+              foreach ($side in 'base', 'main') {
+                Write-Output "::group::$side $($c -join ' ') prof=$prof"
+                & "bin/$side/Sdcb.SimdPaddleOCR.Benchmarks" "main/models/$($c[0])" $c[1] $c[2] $c[3] 30
+                Write-Output '::endgroup::'
+              }
+            }
+          }

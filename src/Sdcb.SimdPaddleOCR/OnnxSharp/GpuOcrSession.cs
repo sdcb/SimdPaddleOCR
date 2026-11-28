@@ -41,6 +41,19 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         public void Dispose() => s.Dispose();
     }
 
+    /// <summary>A Metal batch run image by image (see <see cref="RunMetalSplit"/>): outputs concatenated.</summary>
+    private sealed class SplitExec(float[] output, int length, int[] shape) : IExec
+    {
+        public Span<float> Input => throw new NotSupportedException();
+        public ReadOnlySpan<float> Output => output.AsSpan(0, length);
+        public int[] OutputShape => shape;
+        public bool Current => true;
+        public void Run() { }
+        public void Submit() { }
+        public void Wait() { }
+        public void Dispose() { }
+    }
+
     private sealed class MtlExec(MtlInferenceSession s) : IExec
     {
         public Span<float> Input => s.Input;
@@ -53,13 +66,13 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         public void Dispose() => s.Dispose();
     }
 
-    // recent shape × variant sessions (REC widths cycle within an image); on Vulkan they share one
-    // grow-only arena / staging set, so each costs only a command buffer. On Metal each session
-    // currently owns its own private MtlBuffer arena (~15–25 MB for det), so cap Metal tightly.
+    // recent shape × variant sessions (REC widths cycle within an image); they share one grow-only
+    // arena (Vulkan: plus staging), so each costs only its dispatch list and host I/O windows. Metal
+    // sessions keep host-side input copies (several MB for det), so cap them tighter.
     private const int MaxExecs = 96;
-    private const int MaxMetalExecs = 2;
-    private const int MaxMetalCtcExecs = 12;
+    private const int MaxMetalExecs = 16;
     private VkBufferPool? _vkBuffers;
+    private MtlArena? _mtlArena;
     private const int MaxDeviceLosses = 3;
     private int _deviceLosses;
     private CpuOcrSession? _lostCpu;   // finished the call that hit the last device loss
@@ -100,6 +113,13 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
                         int[] a = e.OutputShape;
                         return new([.. a.AsSpan()[..^1], head.Columns]);
                     }
+            if (_metal && _shape.Length == 4 && _shape[0] > 1)
+                try
+                {
+                    int[] o = MetalBackend.Default.OutputShape(_compiled.Model.Onnx, [1, .. _shape.AsSpan(1)], OptionsFor(Kind.Full, _shape));
+                    return new([_shape[0], .. o.AsSpan(1)]);
+                }
+                catch (Exception ex) { return Fallback(ex).OutputShape; }
             try { return new(Exec(Kind.Full).OutputShape); }
             catch (Exception ex) { return Fallback(ex).OutputShape; }
         }
@@ -207,10 +227,10 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         {
             for (int u = 0; u < _units.Length; u++)
             {
-                // Vulkan: the compiled graph knows the shape (no session, and no Reshape: that would
+                // the compiled graph knows the shape (no session, and no Reshape: that would
                 // warm the full-output graph the batched path never runs)
-                if (_metal) Reshape(_units[u]);
-                int[] o = _metal ? Exec(Kind.Ctc).OutputShape : CtcOutputShape(_units[u]);
+                // Metal runs units image by image (RunManyMetal): resolve the single-image graph
+                int[] o = CtcOutputShape(_metal ? [1, .. _units[u].AsSpan(1)] : _units[u]);
                 if (o[^1] != h.Inner) return false;
                 rows[u] = o[^2];
             }
@@ -223,40 +243,72 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         return true;
     }
 
-    private int[] CtcOutputShape(int[] shape) =>
-        VkBackend.Default.OutputShape(_compiled.Model.Onnx, shape, OptionsFor(Kind.Ctc, shape));
+    private int[] CtcOutputShape(int[] shape) => _metal
+        ? MetalBackend.Default.OutputShape(_compiled.Model.Onnx, shape, OptionsFor(Kind.Ctc, shape))
+        : VkBackend.Default.OutputShape(_compiled.Model.Onnx, shape, OptionsFor(Kind.Ctc, shape));
 
     // every unit of an image in one re-recorded, level-interleaved submission (in waves)
     private VkBatch? _runner;
+    private MtlBatch? _mtlRunner;
 
     public bool TryRunManyUntilCtcProjection(CtcUnitsReady onReady)
     {
         if (_cpu is not null || _ctcHead is null) return false;
-        if (!_metal) return RunManyVulkan(onReady);
-        int n = _units.Length, inner = _ctcHead.Inner;
+        return _metal ? RunManyMetal(onReady) : RunManyVulkan(onReady);
+    }
+
+    /// <summary>Every unit of an image in a few command buffers over one arena (<see cref="MtlBatch"/>):
+    /// the CPU head consumes the first wave while the device runs the rest.</summary>
+    private bool RunManyMetal(CtcUnitsReady onReady)
+    {
+        int n = _units.Length, inner = _ctcHead!.Inner;
         if (n == 0) return true;
-        int[] offsets = new int[n];
+        int[] offsets = new int[n], actLen = new int[n], subFirst;
         long[] inOff = new long[n + 1];
         float[] acts;
+        MtlBatch runner;
         try
         {
-            // exact activation layout up front: finished units are consumed while later ones still run
+            runner = _mtlRunner ??= MetalBackend.Default.CreateBatch();
+            runner.Clear();
+            int cut1 = n >= 6 ? (n + 3) / 4 : n, cut2 = n >= 6 ? (n + 1) / 2 : n;
             int total = 0;
+            subFirst = new int[n + 1];
             for (int u = 0; u < n; u++)
             {
                 long v = 1;
                 foreach (int d in _units[u]) v *= d;
                 inOff[u + 1] = inOff[u] + v;
-                Reshape(_units[u]);
-                long o = 1;
-                foreach (int d in Exec(Kind.Ctc).OutputShape) o *= d;
+                // a unit of b lines runs as b single-image sub-units (outputs concatenate along the batch)
+                int b = _units[u][0];
+                int[] one = [1, .. _units[u].AsSpan(1)];
+                CompileOptions opt = OptionsFor(Kind.Ctc, one);
+                subFirst[u] = runner.Count;
+                long o = 0;
+                for (int i = 0; i < b; i++)
+                {
+                    int su = runner.Add(_compiled.Model.Onnx, one, opt);
+                    long os = 1;
+                    foreach (int d in runner.OutputShape(su)) os *= d;
+                    o += os;
+                }
                 if (o % inner != 0) return false;
+                actLen[u] = (int)o;
                 offsets[u] = total;
                 total = checked(total + (int)o);
+                if (u + 1 == cut1 || u + 1 == cut2) runner.EndWave();
             }
-            // reused across calls: the caller consumes the activations before this session runs again
+            subFirst[n] = runner.Count;
+            for (int u = 0; u < n; u++)
+            {
+                int b = subFirst[u + 1] - subFirst[u];
+                int per = (int)((inOff[u + 1] - inOff[u]) / b);
+                for (int i = 0; i < b; i++)
+                    _unitInput.AsSpan((int)inOff[u] + i * per, per).CopyTo(runner.Input(subFirst[u] + i));
+            }
             if (_unitActs.Length < total) _unitActs = new float[total];
             acts = _unitActs;
+            runner.Submit();
         }
         catch (Exception ex)
         {
@@ -264,9 +316,6 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             return false;
         }
 
-        // The caller's CPU head (MatMul + ArgMax) is slower per unit than the device: it runs on the
-        // thread pool and takes every unit finished so far in one call (larger calls parallelize
-        // better), while this thread keeps the device busy with the next units.
         int done = 0;
         bool stop = false;
         object gate = new();
@@ -289,17 +338,23 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         bool deviceOk = true;
         try
         {
-            for (int u = 0; u < n && !consumer.IsCompleted; u++)
+            int u = 0;
+            for (int w = 0; w < runner.Waves && !consumer.IsCompleted; w++)
             {
-                Reshape(_units[u]);
-                IExec e = Exec(Kind.Ctc);
-                _unitInput.AsSpan((int)inOff[u], (int)(inOff[u + 1] - inOff[u])).CopyTo(e.Input);
-                e.Submit();
-                e.Wait();
-                e.Output.CopyTo(acts.AsSpan(offsets[u]));
+                runner.Wait(w);
+                for (; u < n && runner.WaveOf(subFirst[u]) == w; u++)
+                {
+                    int at = offsets[u];
+                    for (int su = subFirst[u]; su < subFirst[u + 1]; su++)
+                    {
+                        ReadOnlySpan<float> o = runner.Output(su);
+                        o.CopyTo(acts.AsSpan(at));
+                        at += o.Length;
+                    }
+                }
                 lock (gate)
                 {
-                    done = u + 1;
+                    done = u;
                     Monitor.Pulse(gate);
                 }
             }
@@ -317,8 +372,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
                 Monitor.Pulse(gate);
             }
         }
-        // consumer exceptions propagate (not a device fault)
         bool ok = consumer.GetAwaiter().GetResult();
+        try { runner.WaitAll(); } catch { /* reported above */ }
         return deviceOk && ok;
     }
 
@@ -431,12 +486,41 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
     private IExec Run(Kind kind, ReadOnlySpan<float> input)
     {
         if (input.Length != _volume) throw new ArgumentException("Input buffer size mismatch.", nameof(input));
+        if (_metal && _shape.Length == 4 && _shape[0] > 1) return RunMetalSplit(kind, input);
         IExec e = Exec(kind);
         input.CopyTo(e.Input);
         long t0 = EngineProfiler.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         e.Run();
         if (EngineProfiler.Enabled) EngineProfiler.Record(_metal ? "MetalRun" : "VulkanRun", System.Diagnostics.Stopwatch.GetTimestamp() - t0);
         return e;
+    }
+
+    private float[] _splitOut = [];
+
+    /// <summary>
+    /// Metal runs a batch as single-image units of one interleaved submission: its batched graphs would
+    /// dispatch every spatial kernel once per image anyway, and the interleaved units overlap on the device.
+    /// The models are per-sample, so the outputs concatenate along the batch.
+    /// </summary>
+    private IExec RunMetalSplit(Kind kind, ReadOnlySpan<float> input)
+    {
+        int n = _shape[0];
+        int[] one = [1, .. _shape.AsSpan(1)];
+        int per = _volume / n;
+        MtlBatch runner = _mtlRunner ??= MetalBackend.Default.CreateBatch();
+        runner.Clear();
+        CompileOptions opt = OptionsFor(kind, one);
+        for (int i = 0; i < n; i++) runner.Add(_compiled.Model.Onnx, one, opt);
+        for (int i = 0; i < n; i++) input.Slice(i * per, per).CopyTo(runner.Input(i));
+        long t0 = EngineProfiler.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+        runner.Submit();
+        runner.Wait(0);
+        if (EngineProfiler.Enabled) EngineProfiler.Record("MetalRun", System.Diagnostics.Stopwatch.GetTimestamp() - t0);
+        int outPer = runner.Output(0).Length;
+        if (_splitOut.Length < n * outPer) _splitOut = new float[n * outPer];
+        for (int i = 0; i < n; i++) runner.Output(i).CopyTo(_splitOut.AsSpan(i * outPer));
+        int[] o1 = runner.OutputShape(0);
+        return new SplitExec(_splitOut, n * outPer, [n, .. o1.AsSpan(1)]);
     }
 
     /// <summary>The live exec of <paramref name="kind"/> at the current shape, without compiling one.</summary>
@@ -466,13 +550,12 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             }
         CompileOptions opt = OptionsFor(kind, _shape);
         IExec exec = _metal
-            ? new MtlExec(MetalBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt))
+            ? new MtlExec(MetalBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt,
+                _mtlArena ??= MetalBackend.Default.CreateArena()))
             : new VkExec(VkBackend.Default.NewSession(_compiled.Model.Onnx, _shape, opt,
                 _vkBuffers ??= VkBackend.Default.CreateBufferPool()));
         _execs.Add((key, exec));
-        int maxExecs = _metal
-            ? (kind == Kind.Ctc ? Math.Max(MaxMetalCtcExecs, _units.Length) : MaxMetalExecs)
-            : MaxExecs;
+        int maxExecs = _metal ? MaxMetalExecs : MaxExecs;
         while (_execs.Count > maxExecs)
         {
             _execs[0].exec.Dispose();
@@ -535,6 +618,10 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
             _execs.Clear();
             try { _runner?.Dispose(); } catch { /* lost device */ }
             _runner = null;
+            try { _mtlRunner?.Dispose(); } catch { /* lost device */ }
+            _mtlRunner = null;
+            try { _mtlArena?.Dispose(); } catch { /* lost device */ }
+            _mtlArena = null;
             if (ex is VkDeviceLostException && ++_deviceLosses <= MaxDeviceLosses)
             {
                 try { _vkBuffers?.Dispose(); } catch { /* lost device */ }
@@ -557,6 +644,8 @@ internal sealed class GpuOcrSession : IOcrSession, IBatchedCtcSession
         _execs.Clear();
         try { _vkBuffers?.Dispose(); } catch { /* device may be lost */ }
         try { _runner?.Dispose(); } catch { /* device may be lost */ }
+        try { _mtlRunner?.Dispose(); } catch { /* device may be lost */ }
+        try { _mtlArena?.Dispose(); } catch { /* device may be lost */ }
         _cpu?.Dispose();
         _lostCpu?.Dispose();
     }
